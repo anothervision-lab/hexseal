@@ -1,0 +1,43 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+
+# The AST is emitted into the artifacts (out/<File>.sol/<Contract>.json, key
+# "ast") because a build gate reads sources through solc's tree rather than
+# through regular expressions: a `msg.sender` inside a comment is then never
+# mistaken for a real one, and every real one is tied to the function holding
+# it.
+#
+# It lives here rather than behind an `--ast` flag on the gate itself, and
+# that is deliberate: the flag set feeds the compiler settings hash, so a run
+# without the AST and a later build with it would invalidate each other's
+# cache, and every switch would cost a full via-ir rebuild (~3 minutes). With
+# `ast = true` every build carries it and nothing is ever rebuilt. Bytecode is
+# unaffected.
+ast = true
+
+# test/DeployFullSelectors.t.sol reads compiled ABI artifacts (out/<Facet>.sol/<Facet>.json)
+# to derive ground-truth selectors for the DeployFull.s.sol drift gate — read-only,
+# scoped to the build output directory only.
+#
+# ./test/fixtures holds a census of the live chain. The artifact under ./out
+# answers what this code is able to do; the census answers which selectors are
+# mounted on the diamond today, and the second does not follow from the first.
+# Both paths are read-only and both stay inside the repository.
+#
+# ./test/legacy holds the frozen snapshot of the shipped arbiter facet. Its lock
+# (test/PresentationRecordUpgrade.t.sol, test_LegacyTwinSourceIsFrozen) hashes the
+# snapshot's SOURCE with comments stripped, which the compiler's own
+# metadata.sources[...] hash cannot answer: that one covers the whole text,
+# comments included. Read-only, inside the repository, like the two above.
+fs_permissions = [
+    { access = "read", path = "./out" },
+    { access = "read", path = "./test/fixtures" },
+    { access = "read", path = "./test/legacy" },
+]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
