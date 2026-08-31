@@ -40,6 +40,59 @@ contract MockUSDC {
     }
 }
 
+/// @dev A token that KNOCKS ON THE DOOR AGAIN from inside the refund transfer.
+///
+/// It exists to hold one ordering in place: resolveAppeal writes
+/// `appealResolved`/`frozen` BEFORE it moves the deposit. That order is the only
+/// thing standing between a reentrant token and a second settlement of the same
+/// appeal — this facet has no nonReentrant modifier anywhere in it. Flip the two
+/// writes below the transfer and the knock gets ANSWERED: the deposit is paid
+/// twice and the arbiter is punished twice for one verdict.
+///
+/// The first two slots deliberately mirror MockUSDC's, so vm.etch can swap the
+/// code under the balances the fixture has already written.
+contract ReentrantUSDC {
+    mapping(address => uint256) public balanceOf;                      // slot 0 — MockUSDC's
+    mapping(address => mapping(address => uint256)) public allowance;  // slot 1 — MockUSDC's
+    address public diamondAddr;     // slot 2 — MockUSDC leaves these free
+    address public agreementAddr;   // slot 3
+    bool public reentryServed;      // slot 4
+    bool public fired;              // slot 4
+
+    function arm(address d, address a) external { diamondAddr = d; agreementAddr = a; }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        if (diamondAddr != address(0) && !fired) {
+            fired = true; // once only — this is a lock, not a recursion test
+            (bool ok, ) = diamondAddr.call(
+                abi.encodeWithSignature("resolveAppeal(address)", agreementAddr)
+            );
+            // Recorded, not asserted here: a revert inside the token would be
+            // swallowed by _softTransfer and the test would read a soft refund
+            // where it should read a broken lock.
+            reentryServed = ok;
+        }
+        require(balanceOf[msg.sender] >= amount, "Insufficient balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        require(allowance[from][msg.sender] >= amount, "Allowance exceeded");
+        require(balanceOf[from] >= amount, "Insufficient balance");
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        allowance[from][msg.sender] -= amount;
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+}
+
 contract DiamondTest is Test {
     DiamondProxy diamond;
     MockUSDC usdc;
@@ -139,7 +192,7 @@ contract DiamondTest is Test {
         ownerSelectors[3] = OwnershipFacet.pendingOwner.selector;
 
         // ArbiterRegistryFacet selectors
-        bytes4[] memory arbiterSelectors = new bytes4[](40);
+        bytes4[] memory arbiterSelectors = new bytes4[](42);
         arbiterSelectors[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbiterSelectors[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbiterSelectors[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -181,6 +234,10 @@ contract DiamondTest is Test {
         // The second step of handing over the DAO address (26 August 2026).
         arbiterSelectors[38] = ArbiterRegistryFacet.acceptDAOAddress.selector;
         arbiterSelectors[39] = ArbiterRegistryFacet.getPendingDAOAddress.selector;
+        // The claimable pot and its button. Mounted here (31 August 2026) because
+        // a won appeal whose deposit cannot be pushed now lands in it.
+        arbiterSelectors[40] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
+        arbiterSelectors[41] = ArbiterRegistryFacet.getRefundableBounty.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -2770,6 +2827,226 @@ contract DiamondTest is Test {
         vm.warp(block.timestamp + 24 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(usdc.balanceOf(executor), executorBalBefore - 20 * 10**6 + 20 * 10**6 + AMOUNT);
+    }
+
+    // ============================================================
+    //  A DEPOSIT THAT CANNOT BE DELIVERED MUST NOT LOCK THE ESCROW (31 August 2026)
+    //
+    //  resolveAppeal used to end a WON appeal with a hard push:
+    //      bool refundOk = IUSDCFull(usdc).transfer(v.appellant, _depositOf(v));
+    //      require(refundOk, "ArbiterRegistry: deposit refund failed");
+    //  USDC can refuse — a blacklisted address is the ordinary way. The refund
+    //  stands AFTER `appealResolved = true; frozen = false;`, so its revert took
+    //  those two writes down with it, and every other door out is shut:
+    //  finalizeVerdict → VerdictFrozenError, unfreezeVerdict/overturnVerdict →
+    //  AppealInProgress, raiseAppeal → AlreadyAppealed, and the Agreement's own
+    //  last exit, triggerArbiterTimeout, → VerdictInFlight forever, because
+    //  hasSubmittedVerdict is `submittedAt != 0` and never goes back.
+    //
+    //  So a $20 deposit stranded the WHOLE escrow inside the clone, where no
+    //  rescue function exists — and it stranded it for the man who WON.
+    //
+    //  ⚠️ THE ORACLE IS THE TOKEN, NOT US. What "refuse" means is taken from how
+    //  USDC behaves — `false`, and separately a reply too short to decode — and
+    //  fed in with vm.mockCall, the same device SafeUSDC.trySafeTransfer is
+    //  tested with in DisputeSettlement.t.sol. Nothing here asks our own
+    //  function what failure looks like.
+    // ============================================================
+
+    /// The appellant won and cannot be paid. The escrow must still open.
+    function test_AWonAppealOpensTheEscrowEvenIfTheDepositCannotBeDelivered() public {
+        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
+        address agr = _disputeToVerdict(client, executor, true); // executor loses, appeals
+
+        usdc.mint(executor, 100 * 10**6);
+        vm.prank(executor);
+        usdc.approve(address(diamond), 20 * 10**6);
+        vm.prank(executor);
+        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        uint256 balAfterPaying = usdc.balanceOf(executor);
+
+        _voteOverturn(agr, a2, a3, a4);
+
+        // The token refuses this exact refund, and only it.
+        vm.mockCall(
+            address(usdc),
+            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+            abi.encode(false)
+        );
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        vm.clearMockedCalls();
+
+        // The deposit did NOT reach his wallet — that is the premise, not the bug.
+        assertEq(usdc.balanceOf(executor), balAfterPaying, "deposit should not have landed");
+
+        // The bug would be here: the verdict is unfrozen and the escrow pays out.
+        vm.warp(block.timestamp + 24 hours + 1);
+        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
+        assertEq(
+            usdc.balanceOf(executor),
+            balAfterPaying + AMOUNT,
+            "the escrow stayed locked for the man who won the appeal"
+        );
+    }
+
+    /// And the money that could not be pushed is not lost — it is claimable.
+    function test_TheUndeliveredAppealDepositIsClaimableNotLost() public {
+        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
+        address agr = _disputeToVerdict(client, executor, true);
+
+        usdc.mint(executor, 100 * 10**6);
+        vm.prank(executor);
+        usdc.approve(address(diamond), 20 * 10**6);
+        vm.prank(executor);
+        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        uint256 balAfterPaying = usdc.balanceOf(executor);
+
+        _voteOverturn(agr, a2, a3, a4);
+
+        vm.mockCall(
+            address(usdc),
+            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+            abi.encode(false)
+        );
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        vm.clearMockedCalls();
+
+        // It landed in the claimable, whole.
+        assertEq(
+            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor),
+            20 * 10**6,
+            "the undelivered deposit was written down nowhere"
+        );
+
+        // And the existing button really pays it out.
+        vm.prank(executor);
+        ArbiterRegistryFacet(address(diamond)).withdrawDisputeBounty();
+        assertEq(usdc.balanceOf(executor), balAfterPaying + 20 * 10**6, "claim did not pay");
+        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor), 0);
+    }
+
+    /// A reply of 1..31 bytes must stay soft. abi.decode panics on it by itself,
+    /// which would make the branch written to be soft exactly as hard as before.
+    function test_AShortTokenReplyKeepsTheAppealRefundSoft() public {
+        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
+        address agr = _disputeToVerdict(client, executor, true);
+
+        usdc.mint(executor, 100 * 10**6);
+        vm.prank(executor);
+        usdc.approve(address(diamond), 20 * 10**6);
+        vm.prank(executor);
+        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+
+        _voteOverturn(agr, a2, a3, a4);
+
+        // One byte back. Not `false`, not `true` — undecodable.
+        vm.mockCall(
+            address(usdc),
+            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+            hex"01"
+        );
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        vm.clearMockedCalls();
+
+        assertEq(
+            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor),
+            20 * 10**6,
+            "a short reply was not treated as undelivered"
+        );
+    }
+
+    /// The appeal is settled in storage BEFORE the deposit moves. Nothing in this
+    /// facet is nonReentrant, so that order is the whole guard.
+    function test_TheAppealIsSettledBeforeTheDepositMoves() public {
+        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
+        address agr = _disputeToVerdict(client, executor, true);
+
+        usdc.mint(executor, 100 * 10**6);
+        vm.prank(executor);
+        usdc.approve(address(diamond), 20 * 10**6);
+        vm.prank(executor);
+        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        uint256 balAfterPaying = usdc.balanceOf(executor);
+
+        _voteOverturn(agr, a2, a3, a4);
+
+        // A surplus in the diamond, deliberately. Without it the SECOND payment
+        // runs the diamond out of USDC, the outer transfer reverts, and the whole
+        // knock — including the flag recording it — rolls back with it: the
+        // reorder would then be caught only by accident, and only while the
+        // diamond happens to be exactly empty. In production it is not empty; it
+        // holds the vault, the arbiters' rewards and the treasury slice, and a
+        // double payment would come out of THAT. So the surplus is what makes
+        // this lock test the real hazard rather than a bookkeeping coincidence.
+        usdc.mint(address(diamond), 1_000 * 10**6);
+
+        // Swap the token's code, keeping its balances: slots 0 and 1 match.
+        vm.etch(address(usdc), address(new ReentrantUSDC()).code);
+        ReentrantUSDC(address(usdc)).arm(address(diamond), agr);
+
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+
+        // The knock must actually have happened, or this test locks nothing.
+        assertTrue(ReentrantUSDC(address(usdc)).fired(), "the reentrant knock never fired");
+        assertFalse(
+            ReentrantUSDC(address(usdc)).reentryServed(),
+            "a reentrant resolveAppeal was SERVED: state writes moved below the transfer"
+        );
+        // Paid once, not twice.
+        assertEq(usdc.balanceOf(executor), balAfterPaying + 20 * 10**6, "deposit paid twice");
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter),
+            1,
+            "the arbiter was punished twice for one verdict"
+        );
+    }
+
+    /// The pot is per-ADDRESS, not per-cause. A second undelivered refund for the
+    /// same man must ADD to what is already sitting there, never replace it.
+    function test_AnUndeliveredDepositAddsToThePotItDoesNotReplaceIt() public {
+        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
+        usdc.mint(executor, 200 * 10**6);
+
+        uint256 firstPot;
+        for (uint256 i = 0; i < 2; i++) {
+            address agr = _disputeToVerdict(client, executor, true);
+            vm.prank(executor);
+            usdc.approve(address(diamond), 20 * 10**6);
+            vm.prank(executor);
+            ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+
+            _voteOverturn(agr, a2, a3, a4);
+
+            vm.mockCall(
+                address(usdc),
+                abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+                abi.encode(false)
+            );
+            ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+            vm.clearMockedCalls();
+
+            if (i == 0) {
+                firstPot = ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor);
+                assertEq(firstPot, 20 * 10**6, "first deposit did not land in the pot");
+            }
+        }
+
+        // Both are there. `+=`, not `=`.
+        assertEq(
+            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor),
+            40 * 10**6,
+            "the second undelivered deposit overwrote the first"
+        );
+    }
+
+    /// Two overturn, one uphold — the standard winning shape.
+    function _voteOverturn(address agr, address a2, address a3, address a4) internal {
+        vm.prank(a2);
+        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        vm.prank(a3);
+        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        vm.prank(a4);
+        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
     }
 
     // ============================================================

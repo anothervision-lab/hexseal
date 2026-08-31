@@ -84,10 +84,23 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture {
     /// Checked by name below where the neighbours are.
     uint256 constant PENDING_DISCOUNT_ADDS = 3;
 
+    /// ⚠️ A FOURTH PENDING DELTA (31 August 2026), named the same way and for the same
+    /// reason. `Agreement.markDone()` used to touch the diamond not at all: it
+    /// stamped the clone and emitted `MarkedDone` THERE, while the one standing
+    /// observer is pinned to the diamond. So the transition that starts the
+    /// two-day auto-approve clock -- after which silence hands the executor the
+    /// whole pot -- was invisible from the only address anybody watches.
+    /// RegistryFacet gains `notifyWorkHandedIn()`, which writes nothing and
+    /// emits `WorkHandedIn`. It ships with
+    /// script/UpgradeRegistryHandInSignal.s.sol and is NOT cut into the chain
+    /// yet; this cut touches neither that facet nor that function.
+    uint256 constant PENDING_HAND_IN_ADDS = 1;
+
     /// Everything a fresh deploy carries that the live chain does not: this
     /// cut's own additions plus the pending pair above.
     uint256 constant EXTRA_BEYOND_CHAIN =
-        ADDED_SELECTORS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS;
+        ADDED_SELECTORS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS
+        + PENDING_HAND_IN_ADDS;
 
     function _upgrade() internal returns (UpgradeBoardFeeDelivery) {
         if (address(upgrade) == address(0)) upgrade = new UpgradeBoardFeeDelivery();

@@ -89,7 +89,7 @@ pragma solidity ^0.8.20;
 //
 // Usage (live):
 //   forge script script/UpgradeJobBoardApplicantGate.s.sol \
-//     --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY \
+//     --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER \
 //     --broadcast --verify -vvv
 // ============================================================
 
@@ -113,8 +113,11 @@ contract UpgradeJobBoardApplicantGate is Script {
 
     function run() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk      = vm.envUint("PRIVATE_KEY");
-        address broadcaster = vm.addr(pk);
+        // The signer comes from the command line (--account / --private-key), never
+        // from the environment. Foundry fills msg.sender from --sender and derives it
+        // from --private-key; with no wallet named at all it stays forge-std's
+        // DEFAULT_SENDER, which is how a dry run identifies itself below.
+        address broadcaster = msg.sender;
 
         // ── Pre-flight: everything checkable before a wei is spent ─────────
         require(diamond != address(0), "upgrade: DIAMOND_ADDRESS is zero");
@@ -124,10 +127,22 @@ contract UpgradeJobBoardApplicantGate is Script {
         // live in the same .env and all three have code, so a typo would sail
         // through the check above. Probe a selector only this diamond answers.
         address currentOwner = _readAddress(diamond, "owner()");
-        require(
-            currentOwner == broadcaster,
-            "upgrade: PRIVATE_KEY is not the diamond owner - diamondCut would revert after a paid deploy"
-        );
+        if (broadcaster == DEFAULT_SENDER) {
+            // A dry run with nobody named as the signer. Every chain read above still
+            // ran; the only thing not checkable is WHO signs, because nothing said.
+            // Foundry itself refuses to broadcast from DEFAULT_SENDER ("You seem to be
+            // using Foundry's default sender"), so no live run can reach the cut
+            // through this branch -- the check is skipped only when there is nothing
+            // left to protect.
+            console.log("NOTE: no signer named (--account/--sender absent).");
+            console.log("      Ownership is NOT checked in this run. The live run needs:");
+            console.log("      --account deployer --sender", currentOwner);
+        } else {
+            require(
+                currentOwner == broadcaster,
+                "upgrade: the signer is not the diamond owner - diamondCut would revert after a paid deploy"
+            );
+        }
 
         bytes4[] memory sels = replaceSelectors();
 
@@ -158,7 +173,7 @@ contract UpgradeJobBoardApplicantGate is Script {
         console.log("");
 
         // ── The cut ────────────────────────────────────────────────────────
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         JobBoardFacet jobBoardFacet = new JobBoardFacet();
         IDiamondCut(diamond).diamondCut(
             buildCuts(address(jobBoardFacet)),
@@ -210,7 +225,7 @@ contract UpgradeJobBoardApplicantGate is Script {
         console.log("which is still on chain and still works - it is the code running today):");
         console.log("  forge script script/UpgradeJobBoardApplicantGate.s.sol \\");
         console.log("    --sig \"rollback(address)\" <previous facet> \\");
-        console.log("    --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast");
+        console.log("    --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER --broadcast");
         console.log("  <previous facet> =", previousFacet);
         console.log("");
         console.log("WARNING: rolling back reopens the door AND leaves every job created in between on");
@@ -224,7 +239,6 @@ contract UpgradeJobBoardApplicantGate is Script {
     /// becomes two.
     function rollback(address previousFacet) external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk      = vm.envUint("PRIVATE_KEY");
         require(diamond != address(0), "rollback: DIAMOND_ADDRESS is zero");
         require(previousFacet != address(0), "rollback: previous facet is zero");
         require(previousFacet.code.length > 0, "rollback: previous facet has no code");
@@ -239,7 +253,7 @@ contract UpgradeJobBoardApplicantGate is Script {
         IDiamondCut.FacetCut[] memory cuts = new IDiamondCut.FacetCut[](1);
         cuts[0] = IDiamondCut.FacetCut(previousFacet, IDiamondCut.FacetCutAction.Replace, sels);
 
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         IDiamondCut(diamond).diamondCut(cuts, address(0), "");
         vm.stopBroadcast();
 

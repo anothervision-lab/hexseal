@@ -99,11 +99,17 @@ contract GovernanceHandoverUpgradeTest is Test {
     /// one to the accountability facet, none of them cut into the chain. Every
     /// one of the three is named BY SIGNATURE TEXT below, so this allowance
     /// cannot absorb a different drift of the same size.
+    ///
+    /// ⚠️ AND A THIRD PENDING CUT SINCE 31 AUGUST 2026, on a facet this one has
+    /// never touched: the DEAL registry (`src/RegistryFacet.sol`, not the
+    /// arbiter one that shares the word) gains `notifyWorkHandedIn()`. Named by
+    /// signature text below like the other three.
     uint256 constant EXTRA_BEYOND_CHAIN =
-        ADDED_SELECTORS + GROWN_REGISTRY + GROWN_ACCOUNTABILITY;
+        ADDED_SELECTORS + GROWN_REGISTRY + GROWN_ACCOUNTABILITY + GROWN_DEAL_REGISTRY;
 
     uint256 constant GROWN_REGISTRY       = 2;
     uint256 constant GROWN_ACCOUNTABILITY = 1;
+    uint256 constant GROWN_DEAL_REGISTRY  = 1;
 
     /// ⚠️ WHAT THE FACETS GREW **AFTER** THIS CUT WAS SIGNED — written by hand,
     /// by SIGNATURE TEXT, never taken from the script's own lists.
@@ -139,6 +145,17 @@ contract GovernanceHandoverUpgradeTest is Test {
     function _grownAccountabilityAfterThisCut() internal pure returns (bytes4[] memory sels) {
         sels = new bytes4[](GROWN_ACCOUNTABILITY);
         sels[0] = bytes4(keccak256("getDisputeSubsidy(address)"));
+    }
+
+    ///   • notifyWorkHandedIn() — 31 August 2026, and on the DEAL registry,
+    ///     which is a different facet from the arbiter registry above despite
+    ///     the shared word. `Agreement.markDone()` used to touch the diamond not
+    ///     at all, so the transition that starts the two-day auto-approve clock
+    ///     -- after which silence hands the executor the whole pot -- was
+    ///     invisible from the one address anything watches.
+    function _grownDealRegistryAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](GROWN_DEAL_REGISTRY);
+        sels[0] = bytes4(keccak256("notifyWorkHandedIn()"));
     }
 
     /// Two numbers from a recorded decision, copied here by a person.
@@ -265,6 +282,16 @@ contract GovernanceHandoverUpgradeTest is Test {
         for (uint256 i = 0; i < grownAcc.length; i++) {
             assertTrue(_contains(accAbi, grownAcc[i]), "the allowance is stale: no such function in the accountability ABI");
             assertFalse(_contains(upgrade.accountabilityReplaceSelectors(), grownAcc[i]), "the allowance covers a selector this cut REPLACED");
+        }
+
+        // The deal registry, which this cut does not mount a single selector of
+        // -- so the only condition that can be asked of its allowance is that it
+        // is not stale, and it is asked against the compiled ABI.
+        bytes4[] memory grownDeal = _grownDealRegistryAfterThisCut();
+        bytes4[] memory dealAbi =
+            upgrade.artifactSelectors("out/RegistryFacet.sol/RegistryFacet.json");
+        for (uint256 i = 0; i < grownDeal.length; i++) {
+            assertTrue(_contains(dealAbi, grownDeal[i]), "the allowance is stale: no such function in the deal registry ABI");
         }
     }
 

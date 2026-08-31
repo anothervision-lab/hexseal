@@ -2,38 +2,50 @@
 pragma solidity ^0.8.20;
 
 // ============================================================
-// UpgradeAgreementPacking.s.sol
+// UpgradeAgreementHandInSignal.s.sol
 //
-// THE WHOLE LIFE OF A DEAL IN ONE STORAGE SLOT. Five timestamps, five flags and
-// the deadline used to occupy SEVEN slots, five of them carrying a number below
-// 2^40 in a thirty-two byte word. They now occupy one word, thirty-two bytes
-// exactly, at slot 10.
+// THE SECOND HALF OF THE HAND-IN SIGNAL, and the half that cannot be taken
+// back. `script/UpgradeRegistryHandInSignal.s.sol` mounts the door on the
+// diamond; this one makes new deals walk through it.
 //
-// ⚠️ THIS IS NOT A diamondCut, AND IT IS THE ONE STEP THAT CANNOT BE TAKEN
-// BACK. Every deal is an EIP-1167 clone, and a clone is NAILED to the
-// implementation it was cloned from — there is no upgrade path inside a clone.
-// So:
+// WHAT CHANGES. `Agreement.markDone()` now calls
+// `RegistryFacet.notifyWorkHandedIn()` on the diamond, under a measured gas cap
+// (`HANDOFF_NOTIFY_GAS`, 100 000 against 11 446 measured) and inside a
+// try/catch. Before this, markDone touched the diamond not at all: it stamped
+// the clone and emitted `MarkedDone` THERE, while the one standing chain
+// observer is pinned to the diamond. So the transition that starts
+// AUTO_APPROVE_WINDOW -- after which `triggerAutoApprove()` hands the ENTIRE pot
+// to the executor through a door open to anyone -- was invisible from the only
+// address anybody watches, and a client on another page found out by opening
+// the deal, or did not find out.
+//
+// ⚠️ THIS IS NOT A diamondCut, AND IT IS THE STEP THAT CANNOT BE TAKEN BACK.
+// Every deal is an EIP-1167 clone, and a clone is NAILED to the implementation
+// it was cloned from -- there is no upgrade path inside a clone. So:
 //
 //   * deals already alive keep reading the OLD implementation and notice
-//     nothing whatsoever;
-//   * the new shape reaches only clones created AFTER this script runs;
-//   * a clone created after it can never be moved back, even though this
-//     script's own `rollback` can point the factory at the old deployer again.
-//     The pointer is reversible. The clones born while it pointed here are not.
+//     nothing whatsoever. Measured on 31 August 2026: the live registry holds
+//     EIGHT deals, all clones of 0x28bCCc48bd2Cb39f338d0bAB796Da23768C4e053,
+//     and none of them will ever announce a hand-in;
+//   * the signal reaches only clones created AFTER this script runs;
+//   * this script's own `rollback` can point the factory at the old deployer
+//     again. The POINTER is reversible. The clones born while it pointed here
+//     are not.
 //
-// That is why the Agreement layout gate refuses this
-// change by default and had to be told about it: changing the TYPE of an
-// existing storage field is forbidden everywhere else in this codebase, and it
-// is the bug that broke JobBoard in July 2026. It is safe here for one reason
-// and one only — clones do not share storage with each other or with anything
-// that already holds money. There is no live data underneath.
+// ⚠️ ORDER, AND IT IS ENFORCED HERE RATHER THAN REMEMBERED. The registry cut
+// goes FIRST. This script REFUSES to run against a diamond that does not route
+// `notifyWorkHandedIn()`, because the reverse order is a silent failure and not
+// a loud one: the clone's call is wrapped in try/catch, so new deals would hand
+// in exactly as before, announce nothing, and nothing anywhere would say so.
+// The pre-flight below turns that silence into a refusal.
 //
 // WHAT IT DOES, IN ORDER:
-//   1. deploy the new Agreement implementation;
-//   2. deploy AgreementDeployer(authorizedCaller = diamond, implementation =
-//      the new one) — its constructor refuses zero addresses and an
+//   1. refuse unless the diamond already routes notifyWorkHandedIn();
+//   2. deploy the new Agreement implementation;
+//   3. deploy AgreementDeployer(authorizedCaller = diamond, implementation =
+//      the new one) -- its constructor refuses zero addresses and an
 //      implementation without code;
-//   3. call setAgreementDeployer(new) on the diamond (onlyOwner).
+//   4. call setAgreementDeployer(new) on the diamond (onlyOwner).
 //
 // WHY A NEW DEPLOYER AND NOT JUST A NEW IMPLEMENTATION. `AgreementDeployer`
 // holds `implementation` as an `immutable`. There is no setter and there cannot
@@ -43,32 +55,14 @@ pragma solidity ^0.8.20;
 // ⚠️ WHERE THIS ONE CAN FAIL EXPENSIVELY. Two deploys stand in front of
 // `setAgreementDeployer`. Tripping in the pre-flight is free; tripping on the
 // third step means having paid for two contracts that nothing points at. So
-// everything checkable is checked before the first `new`, including the two
-// things that changed with the packing:
+// everything checkable is checked before the first `new`.
 //
-//   the ceiling  the implementation grew from 21 060 bytes to 23 314 against the
-//                EIP-170 limit of 24 576 — packing trades storage slots for
-//                shift-and-mask code. `new Agreement()` on a contract over the
-//                limit reverts with no reason at all, so the size is asserted
-//                here, where the failure has a sentence attached to it.
-//
-//   the identity the live implementation must NOT be byte-identical to what this
-//                checkout compiles. If it is, the run would spend real gas to
-//                change nothing — a stale checkout, or a second run by mistake.
-//                The expected side of that comparison is the compiler's output
-//                for the current source; the actual side is read off the live
-//                chain. Two independent sources on purpose.
-//
-// The diamond address comes from the environment and is never hardcoded: older
-// versions of this script are pinned to diamonds that no longer exist, and
-// running any of them today would "succeed" against a dead address.
-//
-// Usage (dry run — always this one first, it sends no transaction):
-//   forge script script/UpgradeAgreementPacking.s.sol \
+// Usage (dry run -- always this one first, it sends no transaction):
+//   forge script script/UpgradeAgreementHandInSignal.s.sol \
 //     --rpc-url $BASE_SEPOLIA_RPC_URL
 //
 // Usage (live):
-//   forge script script/UpgradeAgreementPacking.s.sol \
+//   forge script script/UpgradeAgreementHandInSignal.s.sol \
 //     --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER \
 //     --broadcast --verify -vvv
 // ============================================================
@@ -78,19 +72,19 @@ import "forge-std/console.sol";
 import {Agreement} from "../src/Agreement.sol";
 import {AgreementDeployer} from "../src/AgreementDeployer.sol";
 import {FactoryFacet} from "../src/FactoryFacet.sol";
+import {RegistryFacet} from "../src/RegistryFacet.sol";
+import {IDiamondLoupe} from "../src/DiamondProxy.sol";
 
-contract UpgradeAgreementPacking is Script {
+contract UpgradeAgreementHandInSignal is Script {
 
     /// EIP-170. Written here as a literal by a person rather than derived from
-    /// anything in the tree: it is the chain's rule and not this project's, and a constant
-    /// read out of the thing being measured would be the fourth way to be fooled
-    /// by a measurement.
+    /// anything in the tree: it is the chain's rule and not this project's, and
+    /// a constant read out of the thing being measured would be the fourth way
+    /// to be fooled by a measurement.
     uint256 public constant CONTRACT_SIZE_LIMIT = 24_576;
 
-    /// Named for the same reason as in the cut scripts: so an offline stand can
-    /// say which script it is standing for.
     function scriptPath() public pure returns (string memory) {
-        return "script/UpgradeAgreementPacking.s.sol";
+        return "script/UpgradeAgreementHandInSignal.s.sol";
     }
 
     function run() external {
@@ -132,6 +126,9 @@ contract UpgradeAgreementPacking is Script {
             "upgrade: factory has no deployer set - this is a fresh diamond, use DeployFull"
         );
 
+        // THE ORDER CHECK. See the header.
+        assertTheDiamondCanHearAHandIn(diamond);
+
         // The ceiling, before anything is paid for.
         assertTheImplementationFitsOnChain();
 
@@ -139,19 +136,22 @@ contract UpgradeAgreementPacking is Script {
         address oldImpl = _readAddressIfAnswered(oldDeployer, "implementation()");
         assertThereIsSomethingToShip(oldImpl);
 
-        console.log("--- Before ---");
-        console.log("Diamond:               ", diamond);
-        console.log("Owner:                 ", currentOwner);
-        console.log("Deployer in diamond:   ", oldDeployer);
-        console.log("  its implementation:  ", oldImpl);
-        console.log("  its code size:       ", oldImpl.code.length);
+        console.log("=== UpgradeAgreementHandInSignal: pre-flight ===");
+        console.log("Diamond:                ", diamond);
+        console.log("Owner:                  ", currentOwner);
+        console.log("Deployer in diamond:    ", oldDeployer);
+        console.log("  its implementation:   ", oldImpl);
+        console.log("  its code size:        ", oldImpl.code.length);
         console.log("New implementation size:", type(Agreement).runtimeCode.length);
-        console.log("EIP-170 ceiling:       ", CONTRACT_SIZE_LIMIT);
+        console.log("EIP-170 ceiling:        ", CONTRACT_SIZE_LIMIT);
+        console.log("Headroom left:          ", implementationHeadroom());
+        console.log("Deals on record today:  ", RegistryFacet(diamond).totalAgreements());
         console.log("");
         console.log("!! IRREVERSIBLE FOR EVERY DEAL CREATED AFTER THIS RUNS. A clone carries the");
-        console.log("   layout of the implementation it was cloned from and is nailed to it for");
-        console.log("   life. Pointing the factory back at the old deployer does NOT move a clone");
-        console.log("   that was already born. Deals alive today are untouched and stay on:");
+        console.log("   implementation it was cloned from and is nailed to it for life. Pointing");
+        console.log("   the factory back at the old deployer does NOT move a clone that was");
+        console.log("   already born. Every deal alive today is untouched, keeps working, and");
+        console.log("   will NEVER announce a hand-in. They stay on:");
         console.log("  ", oldImpl);
         console.log("");
 
@@ -182,20 +182,21 @@ contract UpgradeAgreementPacking is Script {
         assertImplementationIsLocked(address(agreementImpl), diamond);
 
         console.log("");
-        console.log("--- After ---");
+        console.log("=== After ===");
         console.log("Deployer in diamond:   ", FactoryFacet(diamond).getAgreementDeployer());
         console.log("  authorizedCaller:    ", newDeployer.authorizedCaller());
         console.log("  implementation:      ", newDeployer.implementation());
         console.log("  implementation size: ", address(agreementImpl).code.length);
         console.log("");
-        console.log("New deals put their whole life - five timestamps, five flags and the deadline -");
-        console.log("in one storage word. Existing clones are untouched and keep working.");
+        console.log("Deals created from now on announce their hand-in on the diamond, where the");
+        console.log("bell can see it. Deals created before this keep the behaviour they were born");
+        console.log("with, and nothing about them changed.");
         console.log("");
-        // ⚠️ Still open: on 21 August a cut shipped
-        // three contracts UNVERIFIED because the script fell over on a receipt
-        // before it reached `--verify`, and nobody noticed until the owner asked.
-        // Nothing here can see Basescan, so the least this script can do is say
-        // both addresses out loud at the end.
+        // ⚠️ Still open: on 21 August a cut shipped three contracts UNVERIFIED
+        // because the script fell over on a receipt before it reached
+        // `--verify`, and nobody noticed until the owner asked. Nothing here can
+        // see Basescan, so the least this script can do is say both addresses
+        // out loud at the end.
         console.log("VERIFY THESE TWO ON BASESCAN before calling this done - `--verify` is not");
         console.log("reached if the run trips on a receipt, and that is how three contracts shipped");
         console.log("unverified on 21 August:");
@@ -203,19 +204,14 @@ contract UpgradeAgreementPacking is Script {
         console.log("  AgreementDeployer:         ", address(newDeployer));
         console.log("");
         console.log("Rollback of the POINTER ONLY (one transaction):");
-        console.log("  forge script script/UpgradeAgreementPacking.s.sol \\");
+        console.log("  forge script script/UpgradeAgreementHandInSignal.s.sol \\");
         console.log("    --sig \"rollback(address)\" <old deployer> \\");
         console.log("    --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER --broadcast");
         console.log("  <old deployer> =", oldDeployer);
-        console.log("");
-        console.log("WARNING: that rollback moves the POINTER, not the clones. Every deal created");
-        console.log("while the new deployer was in place keeps the packed layout for ever, and its");
-        console.log("money keeps working - the two implementations are not compatible and are not");
-        console.log("meant to be. Roll back only to stop NEW deals from using the new shape.");
     }
 
     /// Points the factory back at a previous deployer, and refuses to do it
-    /// blind. It cannot undo the clones — see the warning it prints.
+    /// blind. It cannot undo the clones.
     function rollback(address previousDeployer) external {
         address diamond     = vm.envAddress("DIAMOND_ADDRESS");
 
@@ -253,20 +249,36 @@ contract UpgradeAgreementPacking is Script {
             "rollback: setAgreementDeployer did not take effect"
         );
         console.log("Rolled back: new deals are cloned from", impl);
-        console.log("Clones already created keep the layout they were born with. That cannot change.");
+        console.log("Clones already created keep what they were born with. That cannot change.");
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // CHECKS — public so test/AgreementPackingUpgrade.t.sol can call them
+    // CHECKS — public so test/AgreementHandInSignalUpgrade.t.sol can call them
     // against a locally built diamond, not only through run() on a live chain.
     // ════════════════════════════════════════════════════════════════════
 
+    /// THE ORDER CHECK, and the reason this script exists as its own file rather
+    /// than as a paragraph in a runbook.
+    ///
+    /// The clone's announcement is wrapped in try/catch, so shipping this
+    /// implementation onto a diamond that cannot hear it is not an error -- it
+    /// is SILENCE. New deals would behave exactly as old ones, the bell would
+    /// stay as blind as it is today, and the only way to find out would be to
+    /// notice that nothing improved.
+    ///
+    /// Asked of the LOUPE, over the whole diamond, so the answer comes from the
+    /// chain and not from this repository's opinion of what has been cut.
+    function assertTheDiamondCanHearAHandIn(address diamond) public view {
+        require(
+            IDiamondLoupe(diamond).facetAddress(RegistryFacet.notifyWorkHandedIn.selector) != address(0),
+            "pre-flight: the diamond does not route notifyWorkHandedIn() - run script/UpgradeRegistryHandInSignal.s.sol FIRST, or every new deal ships announcing nothing, in silence"
+        );
+    }
+
     /// EIP-170, asserted where the failure has a sentence attached to it.
     /// `new Agreement()` on a contract over the limit reverts with no reason at
-    /// all, and it would do so INSIDE the broadcast — after the gas is committed.
-    /// The packing traded seven storage slots for shift-and-mask code and moved
-    /// this contract materially closer to the ceiling, so the headroom is worth
-    /// a line rather than a hope.
+    /// all, and it would do so INSIDE the broadcast -- after the gas is
+    /// committed.
     function assertTheImplementationFitsOnChain() public pure {
         require(
             type(Agreement).runtimeCode.length <= CONTRACT_SIZE_LIMIT,
@@ -330,7 +342,7 @@ contract UpgradeAgreementPacking is Script {
     }
 
     /// The implementation is left standing on chain for ever, and clones only
-    /// delegatecall into it — its own storage is nobody's escrow. Still, an
+    /// delegatecall into it -- its own storage is nobody's escrow. Still, an
     /// unlocked implementation is a contract any stranger can name themselves
     /// the client of, under the project deployer address, verified on Basescan.
     ///
@@ -356,32 +368,22 @@ contract UpgradeAgreementPacking is Script {
         require(!ok, "post-flight: the implementation accepted initialize() - a stranger can claim it");
         require(
             ret.length >= 4 && bytes4(ret) == Agreement.AlreadyInitialized.selector,
-            "post-flight: the implementation did not refuse initialize() with AlreadyInitialized - the constructor lock is gone"
+            "post-flight: the implementation refused initialize() for some reason other than AlreadyInitialized"
         );
     }
 
-    // ════════════════════════════════════════════════════════════════════
-
-    /// Reads one address-returning selector and insists on a real answer.
-    /// A diamond without the facet reverts through its fallback; an unrelated
-    /// contract either reverts or answers with nothing. Both land here.
-    function _readAddress(address target, string memory signature) internal view returns (address) {
-        (bool ok, bytes memory data) = target.staticcall(abi.encodeWithSignature(signature));
-        require(
-            ok && data.length >= 32,
-            string.concat(
-                "upgrade: ", signature, " is not answered by DIAMOND_ADDRESS -- wrong address? ",
-                "(TRUSTED_FORWARDER, USDC_ADDRESS and FEE_RECIPIENT sit in the same .env and also have code)"
-            )
-        );
-        return abi.decode(data, (address));
+    function _readAddress(address target, string memory sig) internal view returns (address out) {
+        (bool ok, bytes memory ret) = target.staticcall(abi.encodeWithSignature(sig));
+        require(ok && ret.length == 32, string.concat("upgrade: the diamond did not answer ", sig));
+        out = abi.decode(ret, (address));
     }
 
-    /// Same read, but a silent target is an answer too: deployers older than the
-    /// EIP-1167 switch have no `implementation()` at all.
-    function _readAddressIfAnswered(address target, string memory signature) internal view returns (address) {
-        (bool ok, bytes memory data) = target.staticcall(abi.encodeWithSignature(signature));
-        if (!ok || data.length < 32) return address(0);
-        return abi.decode(data, (address));
+    /// The same, but a contract that does not implement the selector answers
+    /// `address(0)` instead of stopping the run. Deployers older than the
+    /// EIP-1167 switch have no `implementation()`.
+    function _readAddressIfAnswered(address target, string memory sig) internal view returns (address out) {
+        (bool ok, bytes memory ret) = target.staticcall(abi.encodeWithSignature(sig));
+        if (!ok || ret.length != 32) return address(0);
+        out = abi.decode(ret, (address));
     }
 }

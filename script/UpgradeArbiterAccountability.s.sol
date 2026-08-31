@@ -227,7 +227,6 @@ contract UpgradeArbiterAccountability is Script {
 
     function run() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk = vm.envUint("PRIVATE_KEY");
         require(diamond != address(0), "DIAMOND_ADDRESS not set");
 
         bytes4[] memory replaceSels = replaceSelectors();
@@ -265,7 +264,7 @@ contract UpgradeArbiterAccountability is Script {
         console.log("");
 
         // ── The upgrade ───────────────────────────────────────────────────
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         ArbiterRegistryFacet registryFacet = new ArbiterRegistryFacet();
         ArbiterAccountabilityFacet accountabilityFacet = new ArbiterAccountabilityFacet();
         IDiamondCut(diamond).diamondCut(
@@ -311,7 +310,7 @@ contract UpgradeArbiterAccountability is Script {
         console.log("");
 
         // ── Provenance migration — a SECOND transaction ───────────────────
-        migrateProvenance(diamond, pk);
+        migrateProvenance(diamond);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -329,9 +328,8 @@ contract UpgradeArbiterAccountability is Script {
     /// to migrate" and sends not one transaction.
     function migrateProvenanceOnly() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk = vm.envUint("PRIVATE_KEY");
         require(diamond != address(0), "DIAMOND_ADDRESS not set");
-        migrateProvenance(diamond, pk);
+        migrateProvenance(diamond);
     }
 
     /// Fills in "who seated them" for the arbiters whose field is empty because the
@@ -346,10 +344,10 @@ contract UpgradeArbiterAccountability is Script {
     ///
     /// Whoever signs the backfill is who it is recorded as: the diamond's owner is
     /// the very hand that did the seating. The address is read from the chain
-    /// (OwnershipFacet.owner()) rather than from the environment: PRIVATE_KEY may
-    /// turn out to be the wrong key, in which case diamondCut would refuse anyway —
+    /// (OwnershipFacet.owner()) rather than from whoever signs: the signer may turn
+    /// out to be the wrong account, in which case diamondCut would refuse anyway —
     /// but somebody else's name must not be written on chain even in the attempt.
-    function migrateProvenance(address diamond, uint256 pk) public {
+    function migrateProvenance(address diamond) public {
         console.log("=== Provenance migration (separate transaction) ===");
 
         address[] memory all = ArbiterRegistryFacet(diamond).getArbiters();
@@ -375,7 +373,7 @@ contract UpgradeArbiterAccountability is Script {
         // the migration init contract.
         uint256 seatedCountBefore = ArbiterAccountabilityFacet(diamond).getSeatedCountBy(seater);
 
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         ArbiterProvenanceInit init = new ArbiterProvenanceInit();
         IDiamondCut(diamond).diamondCut(
             new IDiamondCut.FacetCut[](0), // not one route is touched

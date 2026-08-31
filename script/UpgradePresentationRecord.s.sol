@@ -122,7 +122,6 @@ contract UpgradePresentationRecord is Script {
 
     function run() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk = vm.envUint("PRIVATE_KEY");
         require(diamond != address(0), "DIAMOND_ADDRESS not set");
 
         bytes4[] memory replaceSels = replaceSelectors();
@@ -148,7 +147,7 @@ contract UpgradePresentationRecord is Script {
         console.log("");
 
         // ── The upgrade ───────────────────────────────────────────────────
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         ArbiterRegistryFacet facet = new ArbiterRegistryFacet();
         IDiamondCut(diamond).diamondCut(buildCuts(address(facet)), address(0), "");
         vm.stopBroadcast();

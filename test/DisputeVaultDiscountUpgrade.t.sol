@@ -91,12 +91,32 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     uint256 constant ADDED_REGISTRY           = 2;
     uint256 constant ADDED_ACCOUNTABILITY     = 1;
 
-    /// Everything a fresh deploy carries that the live chain does not — and for
-    /// THIS cut that is exactly its own two Add groups and nothing else. No
-    /// third cut is queued behind it in the tree; the day one is, this constant
-    /// grows and the growth has to be named by signature text, the way
-    /// test/GovernanceHandoverUpgrade.t.sol names this cut's three.
-    uint256 constant EXTRA_BEYOND_CHAIN = ADDED_REGISTRY + ADDED_ACCOUNTABILITY;
+    /// Everything a fresh deploy carries that the live chain does not: this
+    /// cut's own two Add groups, plus whatever else is queued in the tree.
+    ///
+    /// ⚠️ THAT DAY CAME ON 31 AUGUST 2026, and the sentence that used to stand
+    /// here -- "no third cut is queued behind it in the tree" -- is why the
+    /// growth is named rather than folded in. RegistryFacet gains
+    /// `notifyWorkHandedIn()`, so that the diamond can see a hand-in at all:
+    /// `Agreement.markDone()` used to emit only on the clone, while the one
+    /// standing observer is pinned to the diamond, so the transition that
+    /// starts the two-day auto-approve clock was invisible from the only
+    /// address anybody watches. It ships with
+    /// script/UpgradeRegistryHandInSignal.s.sol, is not on the chain yet, and
+    /// belongs to neither facet this cut touches.
+    uint256 constant PENDING_HAND_IN_ADDS = 1;
+
+    uint256 constant EXTRA_BEYOND_CHAIN =
+        ADDED_REGISTRY + ADDED_ACCOUNTABILITY + PENDING_HAND_IN_ADDS;
+
+    /// What THIS cut alone puts on a diamond, as opposed to what a fresh deploy
+    /// carries beyond the chain. The two used to be the same number and stopped
+    /// being the same number the moment a fourth cut queued up behind this one,
+    /// which is exactly the confusion worth a separate name: the rig that
+    /// `_deployPreCutDiamond` builds has had EVERY extra stripped, mine
+    /// included, so applying this cut to it moves the count by three and not by
+    /// four.
+    uint256 constant ADDED_BY_THIS_CUT = ADDED_REGISTRY + ADDED_ACCOUNTABILITY;
 
     /// A number from a recorded decision, copied here by a person and NOT
     /// read off the facet: the facet is the thing being checked.
@@ -168,7 +188,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         assertEq(whole.length, CHAIN_ROUTED, "the census does not hold the number of selectors it claims");
 
         bytes4[] memory added = _concat(upgrade.registryAddSelectors(), upgrade.accountabilityAddSelectors());
-        assertEq(added.length, EXTRA_BEYOND_CHAIN, "this cut adds a different number of selectors than the stand expects");
+        assertEq(
+            added.length,
+            ADDED_REGISTRY + ADDED_ACCOUNTABILITY,
+            "this cut adds a different number of selectors than the stand expects"
+        );
         for (uint256 i = 0; i < added.length; i++) {
             for (uint256 j = 0; j < whole.length; j++) {
                 assertTrue(
@@ -356,7 +380,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         upgrade.assertTheSubsidyDoorAnswersAndIsEmpty(address(diamond));
 
         assertEq(usdc.balanceOf(address(diamond)), heldBefore, "the diamond's USDC moved across a cut");
-        assertEq(_routed(), routedBefore + EXTRA_BEYOND_CHAIN, "the routed count moved by something other than the Add groups");
+        assertEq(
+            _routed(),
+            routedBefore + ADDED_REGISTRY + ADDED_ACCOUNTABILITY,
+            "the routed count moved by something other than the Add groups"
+        );
         assertEq(
             IDiamondLoupe(address(diamond)).facetAddresses().length, facetsBefore,
             "the facet count moved - the old facets should have been emptied, not unmounted"
@@ -558,7 +586,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         stale[0] = IDiamondCut.FacetCut(address(new StaleDiscountFacet()), IDiamondCut.FacetCutAction.Replace, one);
         IDiamondCut(address(diamond)).diamondCut(stale, address(0), "");
 
-        assertEq(_routed(), CHAIN_ROUTED + EXTRA_BEYOND_CHAIN, "the sabotage changed the routed count - it is meant not to");
+        assertEq(_routed(), CHAIN_ROUTED + ADDED_BY_THIS_CUT, "the sabotage changed the routed count - it is meant not to");
 
         vm.expectRevert(bytes("post-flight: getDisputeDiscount() is not the number this cut carries"));
         upgrade.assertTheDiscountAnswers(address(diamond), DISCOUNT_AFTER);
@@ -601,7 +629,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         moved[0] = IDiamondCut.FacetCut(address(new MovedVaultFacet()), IDiamondCut.FacetCutAction.Replace, one);
         IDiamondCut(address(diamond)).diamondCut(moved, address(0), "");
 
-        assertEq(_routed(), CHAIN_ROUTED + EXTRA_BEYOND_CHAIN, "the sabotage changed the routed count - it is meant not to");
+        assertEq(_routed(), CHAIN_ROUTED + ADDED_BY_THIS_CUT, "the sabotage changed the routed count - it is meant not to");
 
         UpgradeDisputeVaultDiscount.StorageSnapshot memory afterCut =
             upgrade.snapshotArbitration(address(diamond));

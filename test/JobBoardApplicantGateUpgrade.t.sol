@@ -90,6 +90,18 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     /// Checked by name below where the neighbours are.
     uint256 constant PENDING_DISCOUNT_ADDS = 3;
 
+    /// ⚠️ A FOURTH PENDING DELTA (31 August 2026), named the same way and for the same
+    /// reason. `Agreement.markDone()` used to touch the diamond not at all: it
+    /// stamped the clone and emitted `MarkedDone` THERE, while the one standing
+    /// observer is pinned to the diamond. So the transition that starts the
+    /// two-day auto-approve clock -- after which silence hands the executor the
+    /// whole pot -- was invisible from the only address anybody watches.
+    /// RegistryFacet gains `notifyWorkHandedIn()`, which writes nothing and
+    /// emits `WorkHandedIn`. It ships with
+    /// script/UpgradeRegistryHandInSignal.s.sol and is NOT cut into the chain
+    /// yet; this cut touches neither that facet nor that function.
+    uint256 constant PENDING_HAND_IN_ADDS = 1;
+
     /// `applicantGeneration` is field 8 of `JobBoardStorage.Layout` — see the
     /// same constant, and the same refusal to take it on trust, in
     /// test/JobBoardApplicantGate.t.sol.
@@ -238,7 +250,8 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
         IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
         for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
         assertEq(
-            routed, CHAIN_ROUTED + PENDING_FACTORY_ADDS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS,
+            routed, CHAIN_ROUTED + PENDING_FACTORY_ADDS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS
+                + PENDING_HAND_IN_ADDS,
             "a from-scratch diamond routes a different number of selectors than the live one, beyond the pending cuts"
         );
 

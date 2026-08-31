@@ -164,7 +164,27 @@ contract UpgradeFeeModelSelectorsTest is Test {
         assertEq(replace.length, 13, "RegistryFacet: expected 13 Replace selectors");
         assertEq(add.length, 0, "RegistryFacet: expected 0 Add selectors - this release did not change its ABI");
         _assertDisjoint(replace, add, "RegistryFacet");
-        _assertSameSelectorSet(_concat(replace, add), _abiSelectors("RegistryFacet"), "RegistryFacet");
+        // The live-ABI comparison was dropped on 31 August 2026, the third time
+        // for the third facet, for exactly the reason it was dropped from
+        // testArbiterRegistryFacetSelectors() on 31 July and from
+        // testFactoryFacetSelectors() on 25 August: this script was broadcast,
+        // so its lists are a RECORD of what was mounted on 30 July 2026, and
+        // the facet's ABI keeps growing. RegistryFacet's first growth since is
+        // `notifyWorkHandedIn()` -- markDone() used to touch the diamond not at
+        // all, so the transition that starts the two-day auto-approve clock was
+        // invisible from the one address anything watches.
+        //
+        // Editing the archived script's Add list to cover it was the other way
+        // out and is the wrong one: those lists describe a cut that really
+        // happened, and a record edited to match today is a record that lies
+        // about 30 July. Demanding that a 30 July record equal today's ABI is
+        // demanding that the past match the present.
+        //
+        // Nothing is left unguarded by this. Fresh-deploy drift -- phantom and
+        // undercut both -- is caught against the compiled ABI by
+        // test/DeployFullSelectors.t.sol::testRegistryFacetSelectors, and this
+        // particular addition by its own cut's gate,
+        // test/WorkHandInVisibleUpgrade.t.sol.
     }
 
     function testDealMetadataFacetSelectors() public view {

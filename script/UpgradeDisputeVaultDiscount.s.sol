@@ -104,7 +104,7 @@ pragma solidity ^0.8.20;
 //
 // Usage (live):
 //   forge script script/UpgradeDisputeVaultDiscount.s.sol \
-//     --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY \
+//     --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER \
 //     --broadcast --verify -vvv
 // ============================================================
 
@@ -138,8 +138,11 @@ contract UpgradeDisputeVaultDiscount is Script {
 
     function run() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk      = vm.envUint("PRIVATE_KEY");
-        address broadcaster = vm.addr(pk);
+        // The signer comes from the command line (--account / --private-key), never
+        // from the environment. Foundry fills msg.sender from --sender and derives it
+        // from --private-key; with no wallet named at all it stays forge-std's
+        // DEFAULT_SENDER, which is how a dry run identifies itself below.
+        address broadcaster = msg.sender;
 
         // ── Pre-flight: everything checkable before a wei is spent ─────────
         require(diamond != address(0), "upgrade: DIAMOND_ADDRESS is zero");
@@ -149,10 +152,22 @@ contract UpgradeDisputeVaultDiscount is Script {
         // live in the same .env and all three have code, so a typo would sail
         // through the check above. Probe a selector only this diamond answers.
         address currentOwner = _readAddress(diamond, "owner()");
-        require(
-            currentOwner == broadcaster,
-            "upgrade: PRIVATE_KEY is not the diamond owner - diamondCut would revert after a paid deploy"
-        );
+        if (broadcaster == DEFAULT_SENDER) {
+            // A dry run with nobody named as the signer. Every chain read above still
+            // ran; the only thing not checkable is WHO signs, because nothing said.
+            // Foundry itself refuses to broadcast from DEFAULT_SENDER ("You seem to be
+            // using Foundry's default sender"), so no live run can reach the cut
+            // through this branch -- the check is skipped only when there is nothing
+            // left to protect.
+            console.log("NOTE: no signer named (--account/--sender absent).");
+            console.log("      Ownership is NOT checked in this run. The live run needs:");
+            console.log("      --account deployer --sender", currentOwner);
+        } else {
+            require(
+                currentOwner == broadcaster,
+                "upgrade: the signer is not the diamond owner - diamondCut would revert after a paid deploy"
+            );
+        }
 
         bytes4[] memory regSels    = registryReplaceSelectors();
         bytes4[] memory regAdd     = registryAddSelectors();
@@ -220,7 +235,7 @@ contract UpgradeDisputeVaultDiscount is Script {
         }
 
         // ── The cut ────────────────────────────────────────────────────────
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         ArbiterRegistryFacet registryFacet = new ArbiterRegistryFacet();
         ArbiterAccountabilityFacet accountabilityFacet = new ArbiterAccountabilityFacet();
         IDiamondCut(diamond).diamondCut(
@@ -303,7 +318,7 @@ contract UpgradeDisputeVaultDiscount is Script {
         console.log("which are still on chain and still work - they are the code running today):");
         console.log("  forge script script/UpgradeDisputeVaultDiscount.s.sol \\");
         console.log("    --sig \"rollback(address,address,address[])\" <registry> <accountability> \"[]\" \\");
-        console.log("    --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast");
+        console.log("    --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER --broadcast");
         console.log("  <registry>       =", previousRegistry);
         console.log("  <accountability> =", previousAccountability);
         console.log("");
@@ -333,7 +348,6 @@ contract UpgradeDisputeVaultDiscount is Script {
         address[] calldata agreementsToCheck
     ) external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk      = vm.envUint("PRIVATE_KEY");
         require(diamond != address(0), "rollback: DIAMOND_ADDRESS is zero");
         require(
             previousRegistry != address(0) && previousAccountability != address(0),
@@ -367,7 +381,7 @@ contract UpgradeDisputeVaultDiscount is Script {
         undo[1] = IDiamondCut.FacetCut(previousAccountability, IDiamondCut.FacetCutAction.Replace, accSels);
         undo[2] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, removeAll);
 
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         IDiamondCut(diamond).diamondCut(undo, address(0), "");
         vm.stopBroadcast();
 

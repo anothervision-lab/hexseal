@@ -274,6 +274,9 @@ interface IFactoryFee {
 interface ISignatureRegistry {
     enum AgreementStatus { ACTIVE, COMPLETED, REFUNDED, DISPUTED, RESOLVED }
     function updateStatus(address agreement, AgreementStatus newStatus) external;
+    /// Takes no argument: the registry reads the caller as the deal. See
+    /// RegistryFacet.notifyWorkHandedIn.
+    function notifyWorkHandedIn() external;
 }
 
 interface IArbiterRegistry {
@@ -376,6 +379,17 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     uint256 private constant FAULT_NOTIFY_GAS    = 100_000;
     uint256 private constant ARBITER_TIMEOUT_GAS = 150_000;
     uint256 private constant CLAIM_CLEAR_GAS     = 200_000;
+    /// The hand-in announcement. Cheapest of the diamond calls because it is
+    /// not a write at all -- the facet reads three words of the deal's record
+    /// and emits one log:
+    ///
+    ///   notifyWorkHandedIn   11_446 -> 100_000  (8.7x)
+    ///
+    /// measured through the real proxy with every slot cold and re-measured on
+    /// every run by test/DiamondDeathGasCaps.t.sol section 14. Same cap, and
+    /// the same headroom class, as notifyExecutorFault -- the other call that
+    /// announces something and moves nothing.
+    uint256 private constant HANDOFF_NOTIFY_GAS  = 100_000;
 
     // Spent between the gasleft() check and the CALL opcode itself: cold
     // account access, memory for the calldata, the surrounding opcodes. Same
@@ -1073,6 +1087,14 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     }
 
     /// @notice The executor signals that the work is finished
+    ///
+    /// ANNOUNCED ON THE DIAMOND AS WELL AS HERE, and that is the only thing
+    /// this function does beyond stamping a timestamp. `MarkedDone` below is
+    /// emitted by the CLONE, at an address nothing watches until somebody opens
+    /// that particular deal; the one standing observer is pinned to the
+    /// diamond. So this transition -- the one that starts AUTO_APPROVE_WINDOW,
+    /// after which silence costs the client the entire escrow -- was invisible
+    /// from the only place anybody is looking.
     function markDone() external {
         address sender = _msgSender();
         if (sender != executor) revert NotExecutor();
@@ -1086,6 +1108,37 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         _markedDoneAt = _now40();
 
         emit MarkedDone(executor);
+
+        // TOLERATED, like every other notify in this file, and here the
+        // tolerance is not politeness but the only safe shape. A clone is
+        // nailed to its implementation for life (EIP-1167), so a hard call
+        // would mean that a diamond without this selector -- one cut in the
+        // wrong order, or one the selector was ever removed from -- left the
+        // executor unable to hand work in AT ALL, on every clone born from this
+        // implementation, for as long as those deals live. What is at stake if
+        // the call fails is one notification; what would be at stake if it
+        // reverted is the deal.
+        //
+        // The failure is silent for the same reason notifyExecutorFault and
+        // clearDisputeClaim are silent: the fallback is not a broken product
+        // but the PREVIOUS product. The clone still emits MarkedDone, and the
+        // bell still finds the hand-in on a cold start by reading status() off
+        // the clone.
+        //
+        // CAPPED, because try/catch catches a revert and not a spend: a facet
+        // that burns gas instead of answering takes 63/64 of what is left.
+        // There is deliberately no gasleft() FLOOR, which is the rule
+        // _updateRegistry follows rather than the one autoAwardXP follows: a
+        // starved call here loses a notification and opens no door, so nobody
+        // gains anything by starving it, while a floor would raise the minimum
+        // gas limit of markDone for everybody.
+        //
+        // Last, after the state write and after the clone's own event, so a
+        // diamond that tried to re-enter would find _markedDoneAt already set
+        // and be refused by AlreadyMarkedDone.
+        if (_diamondHasCode()) {
+            try ISignatureRegistry(diamond).notifyWorkHandedIn{gas: HANDOFF_NOTIFY_GAS}() {} catch {}
+        }
     }
 
     /// @notice The client confirms delivery → the USDC goes to the executor

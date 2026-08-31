@@ -9,12 +9,11 @@ import "../src/FactoryFacet.sol";
 /// Run with:
 ///   forge script script/UpdateKeys.s.sol \
 ///     --rpc-url $BASE_SEPOLIA_RPC_URL \
-///     --private-key $PRIVATE_KEY \
+///     --account deployer --sender $OWNER \
 ///     --broadcast
 contract UpdateKeys is Script {
     function run() external {
         address diamond       = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 ownerKey      = vm.envUint("PRIVATE_KEY");
         address newFeeRecipient = vm.envAddress("FEE_RECIPIENT");
 
         console.log("Diamond:          ", diamond);
@@ -26,7 +25,7 @@ contract UpdateKeys is Script {
         console.log("Current feeRecipient: ", currentFeeRecipient);
         console.log("Current forwarder:    ", currentForwarder);
 
-        vm.startBroadcast(ownerKey);
+        vm.startBroadcast();
 
         // Update feeRecipient
         if (currentFeeRecipient != newFeeRecipient) {

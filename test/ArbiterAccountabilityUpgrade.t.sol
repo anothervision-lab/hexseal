@@ -800,11 +800,17 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         stubAddr = address(stub);
     }
 
-    /// Ownership goes to the address derived from PRIVATE_KEY (a two-step handover),
+    /// Ownership goes to the address run()'s broadcast acts as (a two-step handover),
     /// plus the environment run() reads.
-    function _armRun(DiamondProxy diamond) internal returns (uint256 pk) {
-        pk = 0xA11CE;
-        address ownerAddr = vm.addr(pk);
+    /// ⚠️ The owner is forge-std's DEFAULT_SENDER and not an address of our own
+    /// choosing. Since 31 August 2026 the scripts call `vm.startBroadcast()` with no
+    /// argument -- the signer arrives on the command line, so that the key can live in
+    /// an encrypted keystore instead of open in `.env`. Inside a TEST there is no
+    /// command line, and an argument-less broadcast acts as DEFAULT_SENDER (measured,
+    /// not assumed). Hand the diamond to anybody else and every `diamondCut` inside
+    /// run() reverts with NotOwner.
+    function _armRun(DiamondProxy diamond) internal returns (address ownerAddr) {
+        ownerAddr = DEFAULT_SENDER;
         OwnershipFacet(address(diamond)).transferOwnership(ownerAddr);
         vm.prank(ownerAddr);
         OwnershipFacet(address(diamond)).acceptOwnership();
@@ -837,7 +843,6 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
             "now differs between the three suites in the process; see the comment above"
         );
         vm.setEnv("DIAMOND_ADDRESS", vm.toString(address(diamond)));
-        vm.setEnv("PRIVATE_KEY", vm.toString(pk));
     }
 
     /// An arbiter in the state of the live chain: registered, but with an EMPTY
@@ -1288,8 +1293,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         address arb = address(0x42dCd14e);
         _seatArbiterWithoutProvenance(diamond, arb);
 
-        uint256 pk = _armRun(diamond);
-        address ownerAddr = vm.addr(pk);
+        address ownerAddr = _armRun(diamond);
 
         upgrade.run();
 
@@ -1308,12 +1312,12 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         address arb = address(0xA5EA7ED);
         ArbiterRegistryFacet(address(diamond)).addArbiter(arb); // provenance = address(this)
 
-        uint256 pk = _armRun(diamond);
+        address ownerAddr = _armRun(diamond);
         upgrade.run();
 
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedBy(arb), address(this), "the provenance was overwritten with the owner, which is not allowed");
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedCountBy(vm.addr(pk)), 0, "the owner was credited with a seating they did not do");
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedCountBy(ownerAddr), 0, "the owner was credited with a seating they did not do");
     }
 
     /// The emergency entrance works on its own: the cut has landed (a repeated run()
@@ -1335,8 +1339,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
             upgrade.buildCuts(address(newReg), address(newAcc)), address(0), ""
         );
 
-        uint256 pk = _armRun(diamond);
-        address ownerAddr = vm.addr(pk);
+        address ownerAddr = _armRun(diamond);
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedBy(arb), address(0), "premise: the provenance is not filled in yet");
 
@@ -1372,8 +1375,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         _seatArbiterWithoutProvenance(diamond, arb);
         _setVaultBalance(diamond, 777_000_000);
 
-        uint256 pk = _armRun(diamond);
-        address ownerAddr = vm.addr(pk);
+        address ownerAddr = _armRun(diamond);
 
         uint256 routedBefore = upgrade.totalRoutedSelectors(address(diamond));
         assertEq(routedBefore, 10 + 64, "the bench must reproduce the live layout: 64 arbiter selectors");

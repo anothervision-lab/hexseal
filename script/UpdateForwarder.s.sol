@@ -7,11 +7,10 @@ import "../src/FactoryFacet.sol";
 
 contract UpdateForwarder is Script {
     function run() external {
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
         address newForwarder = vm.envAddress("TRUSTED_FORWARDER");
         
-        vm.startBroadcast(deployerKey);
+        vm.startBroadcast();
         
         console.log("Updating trusted forwarder...");
         console.log("Diamond:", diamond);

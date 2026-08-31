@@ -101,7 +101,7 @@ contract FactoryInternalDeployUpgradeTest is Test {
     /// ⚠️ THIS CUT ADDS NOTHING, so every one of these belongs to a DIFFERENT
     /// cut waiting in the same tree, and each is named BY SIGNATURE TEXT below
     /// so the allowance cannot absorb a different drift of the same size.
-    uint256 constant GROWN_ELSEWHERE = 3;
+    uint256 constant GROWN_ELSEWHERE = 4;
     uint256 constant EXTRA_BEYOND_CHAIN = GROWN_ELSEWHERE;
 
     /// ⚠️ WHAT THE TREE CARRIES THAT THE CHAIN DOES NOT, AND WHY IT IS NOT THIS
@@ -124,6 +124,11 @@ contract FactoryInternalDeployUpgradeTest is Test {
         sels[0] = bytes4(keccak256("setDisputeDiscount(uint256)"));
         sels[1] = bytes4(keccak256("getDisputeDiscount()"));
         sels[2] = bytes4(keccak256("getDisputeSubsidy(address)"));
+        // 31 August 2026: RegistryFacet gains the door the diamond needs to see
+        // a hand-in at all. Ships with
+        // script/UpgradeRegistryHandInSignal.s.sol; this cut touches neither
+        // that facet nor that function.
+        sels[3] = bytes4(keccak256("notifyWorkHandedIn()"));
     }
 
     function setUp() public {
@@ -198,12 +203,23 @@ contract FactoryInternalDeployUpgradeTest is Test {
         bytes4[] memory grown = _grownElsewhere();
         bytes4[] memory regAbi = _abiOf("out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json");
         bytes4[] memory accAbi = _abiOf("out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json");
+        // Widened on 31 August 2026, when the fourth queued cut turned out not
+        // to be an arbitration one: the deal registry gained
+        // `notifyWorkHandedIn()`. The condition that carries the weight is the
+        // NEGATIVE one below -- an allowance may not cover anything FactoryFacet
+        // implements, because that is the facet this cut is responsible for.
+        // The positive condition only says the exemption is not stale, and it
+        // stays exactly as strict per facet: the selector must be implemented by
+        // one of the three named facets, never merely "somewhere".
+        bytes4[] memory dealRegistryAbi = _abiOf("out/RegistryFacet.sol/RegistryFacet.json");
         bytes4[] memory factoryAbi = upgrade.artifactSelectors();
 
         for (uint256 i = 0; i < grown.length; i++) {
             assertTrue(
-                _contains(regAbi, grown[i]) || _contains(accAbi, grown[i]),
-                "the allowance is stale: no arbitration facet implements it any more"
+                _contains(regAbi, grown[i])
+                    || _contains(accAbi, grown[i])
+                    || _contains(dealRegistryAbi, grown[i]),
+                "the allowance is stale: no named facet implements it any more"
             );
             assertFalse(
                 _contains(factoryAbi, grown[i]),

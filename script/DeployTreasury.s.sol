@@ -5,7 +5,7 @@ pragma solidity ^0.8.20;
 // Deploys the protocol treasury. It does NOT make it the fee recipient — that is a
 // separate human decision, in a separate transaction:
 //   cast send $DIAMOND_ADDRESS "setFeeRecipient(address)" <treasury> \
-//     --private-key $PRIVATE_KEY --rpc-url $BASE_SEPOLIA_RPC_URL
+//     --account deployer --sender $OWNER --rpc-url $BASE_SEPOLIA_RPC_URL
 // The separation is deliberate: a deployment is reversible (simply do not put it
 // in place), while putting it in place redirects the protocol's whole income.
 

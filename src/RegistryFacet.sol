@@ -79,6 +79,42 @@ contract RegistryFacet {
 
     event AuthorizedFactorySet(address indexed factory);
 
+    /// The executor handed the work in, and a clock is now running against the
+    /// client. Emitted BY THE DIAMOND, on the diamond's own address, and that
+    /// is the entire reason it exists.
+    ///
+    /// `markDone()` writes only to the clone and emits `MarkedDone` there,
+    /// while the one chain observer the web client is allowed to keep is
+    /// pinned to this address. So the transition that starts
+    /// AUTO_APPROVE_WINDOW -- the one where the client's silence hands the
+    /// whole escrow to the executor two days later -- was the only major
+    /// transition in a deal's life the diamond could not see at all.
+    ///
+    /// WHY NOT `AgreementStatusUpdated(agreement, ACTIVE)`, which would have
+    /// needed no new selector and no cut. Two reasons, and the second is
+    /// decisive:
+    ///
+    ///   * the enum above has no member for this, so ACTIVE would have to be
+    ///     read as "handed in" by inference rather than by statement, and the
+    ///     day something else emitted ACTIVE the meaning would break in
+    ///     silence;
+    ///   * `Agreement.syncRegistry()` is callable BY ANYONE and already pushes
+    ///     exactly ACTIVE for any deal that is not disputed or finished. A
+    ///     stranger could therefore ring the client's "your work has arrived"
+    ///     bell at will, on a deal where nothing had happened. That is not a
+    ///     hypothetical shape -- the selector is mounted and the function takes
+    ///     no arguments.
+    ///
+    /// Carries client and executor for the same reason `AgreementRegistered`
+    /// does: an indexed party is a filter the node can apply, so a reader
+    /// interested in one person does not have to hold a map of every deal to
+    /// find out whether this one is theirs.
+    event WorkHandedIn(
+        address indexed agreement,
+        address indexed client,
+        address indexed executor
+    );
+
     // -------- ERRORS --------
 
     error OnlyAuthorizedFactory();
@@ -175,6 +211,35 @@ contract RegistryFacet {
         }
 
         emit AgreementStatusUpdated(agreement, newStatus);
+    }
+
+    /// @notice The Agreement announces that its executor has handed the work in.
+    ///
+    /// THE CALLER IS THE KEY. No `agreement` argument, so there is none to pass
+    /// wrongly and none for a stranger to point at somebody else's deal: the
+    /// only address this function can name is the one that called it, and it
+    /// must already be in the registry. Same shape, and the same argument, as
+    /// `ArbiterRegistryFacet.creditDisputeFee`.
+    ///
+    /// WRITES NOTHING, on purpose. The clone holds `_markedDoneAt` and is the
+    /// authority on it; a copy here would be a second number free to disagree
+    /// with the first, and it would cost a cold SSTORE on every hand-in to
+    /// create that disagreement. The status stays ACTIVE because the deal IS
+    /// still active -- a handed-in deal can still be disputed, released, or
+    /// left to auto-approve -- and moving it out of ACTIVE would drop the pair
+    /// from `activePartyPairs` and stamp `resolvedAt` on a deal that has not
+    /// resolved.
+    ///
+    /// A second call therefore changes no state and costs the caller gas.
+    /// `markDone()` refuses a second run (`AlreadyMarkedDone`), so a second
+    /// call cannot come from an honest clone at all; from a dishonest one it
+    /// buys a duplicate log entry and nothing else.
+    function notifyWorkHandedIn() external {
+        RegistryStorage.AgreementRecord storage record =
+            RegistryStorage.store().agreements[msg.sender];
+        if (record.agreement != msg.sender) revert AgreementNotRegistered();
+
+        emit WorkHandedIn(msg.sender, record.client, record.executor);
     }
 
     /// @notice Updates the Factory address (owner of the Diamond only)

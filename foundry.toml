@@ -20,6 +20,28 @@ via_ir = true
 # unaffected.
 ast = true
 
+# The storage layout is emitted into the same artifacts (key "storageLayout")
+# because test/AgreementStorageLayout.t.sol reads it: the layout of an
+# EIP-1167 implementation is nailed to every clone ever made from it, so a
+# reordered or retyped field is unfixable for deals that already exist, and
+# until now the only lock over it was a shell script outside the suite.
+#
+# It has to live here rather than behind the gate's `forge inspect --json`,
+# for two reasons. Without it a plain `forge build` -- which is what
+# `forge test` runs -- writes an artifact with NO storageLayout key at all
+# (measured 31 Aug 2026: append one comment to src/Agreement.sol, run
+# `forge build`, and the key is gone), so the test would have nothing to
+# read. And, exactly like `ast` above, the requested output feeds the
+# compiler settings hash: while the layout was requested only by the gate,
+# `forge inspect` and `forge build` invalidated each other's cache, which is
+# how check-agreement-layout.sh came back with "storage layout missing from
+# artifact" (exit 3 -- layout NOT checked) on 31 Aug. Requested by every
+# build, nothing thrashes: measured after the change, `forge build` right
+# after a gate run takes 1.2s instead of rebuilding. Bytecode is unaffected;
+# changing this line costs one full via-ir rebuild (~9 minutes on this
+# machine).
+extra_output = ["storageLayout"]
+
 # test/DeployFullSelectors.t.sol reads compiled ABI artifacts (out/<Facet>.sol/<Facet>.json)
 # to derive ground-truth selectors for the DeployFull.s.sol drift gate — read-only,
 # scoped to the build output directory only.

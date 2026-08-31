@@ -7,9 +7,8 @@ import "../src/MinimalForwarder.sol";
 
 contract DeployForwarder is Script {
     function run() external {
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         
-        vm.startBroadcast(deployerKey);
+        vm.startBroadcast();
         
         console.log("Deploying MinimalForwarder...");
         MinimalForwarder forwarder = new MinimalForwarder();

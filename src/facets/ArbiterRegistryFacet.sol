@@ -2480,6 +2480,32 @@ contract ArbiterRegistryFacet {
         return paid == 0 ? APPEAL_DEPOSIT : paid;
     }
 
+    /// @dev A transfer that REPORTS failure instead of reverting on it. Used
+    /// wherever a refund must not be able to drag down the state change it
+    /// accompanies: the claim release in clearDisputeClaim (wrapped by the
+    /// Agreement in a swallowing catch) and the appeal deposit in resolveAppeal
+    /// (the only thing that unfreezes the verdict, and with it the escrow).
+    ///
+    /// The response length is checked explicitly, by the same device as
+    /// SafeUSDC.trySafeTransfer in Agreement.sol: abi.decode panics by itself
+    /// on a response of 1 to 31 bytes, which would make a branch written to be
+    /// soft exactly as hard as an ordinary transfer.
+    ///
+    /// Callers must treat `false` as "the money is still here" and put it
+    /// somewhere it can be pulled from — never as "the money is gone".
+    function _softTransfer(address usdc, address to, uint256 amount)
+        private returns (bool delivered)
+    {
+        (bool ok, bytes memory ret) = usdc.call(
+            abi.encodeWithSelector(IUSDCFull.transfer.selector, to, amount)
+        );
+        if (ok) {
+            if (ret.length == 0) delivered = true;
+            else if (ret.length >= 32) delivered = abi.decode(ret, (bool));
+            // ret.length in 1..31 — delivered stays false, decode is not called.
+        }
+    }
+
     /// A mirror of ArbiterAccountabilityFacet.PROPOSAL_TTL (15 August 2026) —
     /// resignAsArbiter must know the life of a proposal without calling the
     /// other facet (the same device as MISTAKE_THRESHOLD/DAO_THRESHOLD in the
@@ -3174,8 +3200,22 @@ contract ArbiterRegistryFacet {
             // deposit back whether or not this verdict had already been
             // overturned by hand. The deposit is the price of asking, not part
             // of the arbiter's penalty.
-            bool refundOk = IUSDCFull(usdc).transfer(v.appellant, _depositOf(v));
-            require(refundOk, "ArbiterRegistry: deposit refund failed");
+            // Soft, and for a heavier reason than in clearDisputeClaim. The two
+            // writes above are what unfreeze the verdict; a reverting refund
+            // takes them down with it, and every other door out is already shut
+            // (finalizeVerdict: VerdictFrozenError, unfreezeVerdict and
+            // overturnVerdict: AppealInProgress, raiseAppeal: AlreadyAppealed,
+            // Agreement.triggerArbiterTimeout: VerdictInFlight, forever, because
+            // hasSubmittedVerdict never goes back to false). A $20 deposit that
+            // cannot be delivered would therefore strand the WHOLE escrow, in
+            // the clone, where no rescue function exists — and it would strand
+            // it for the man who WON the appeal. Into the existing claimable, so
+            // this costs no storage field and no new selector.
+            uint256 deposit = _depositOf(v);
+            if (!_softTransfer(usdc, v.appellant, deposit)) {
+                d.refundableBounty[v.appellant] += deposit;
+                emit DisputeBountyRefundable(agreement, v.appellant, deposit);
+            }
         } else {
             // Forfeit reads the same record for the same reason: what the vault
             // keeps is what came in, not what the constant says today.
@@ -3585,21 +3625,9 @@ contract ArbiterRegistryFacet {
                 // and the openClaimCount decrement, leaving the arbiter with an open
                 // dispute forever.
                 //
-                // The response length is checked explicitly, by the same device as
-                // SafeUSDC.trySafeTransfer in Agreement.sol: abi.decode panics by
-                // itself on a response of 1 to 31 bytes, and the "soft" refund would
-                // then be as hard as an ordinary one, in the branch made soft on purpose.
-                address usdc = FactoryStorage.store().usdc;
-                (bool ok, bytes memory ret) = usdc.call(
-                    abi.encodeWithSelector(IUSDCFull.transfer.selector, payer, bounty)
-                );
-                bool delivered;
-                if (ok) {
-                    if (ret.length == 0) delivered = true;
-                    else if (ret.length >= 32) delivered = abi.decode(ret, (bool));
-                    // ret.length in 1..31 — delivered stays false, decode is not called.
-                }
-                if (delivered) {
+                // The response length is checked inside _softTransfer, by the same
+                // device as SafeUSDC.trySafeTransfer in Agreement.sol.
+                if (_softTransfer(FactoryStorage.store().usdc, payer, bounty)) {
                     emit DisputeBountyRefunded(agreement, payer, bounty);
                 } else {
                     d.refundableBounty[payer] += bounty;

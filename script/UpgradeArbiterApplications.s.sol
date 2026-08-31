@@ -59,7 +59,7 @@ pragma solidity ^0.8.20;
 //
 // Usage (live):
 //   forge script script/UpgradeArbiterApplications.s.sol \
-//     --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY \
+//     --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER \
 //     --broadcast --verify -vvv
 // ============================================================
 
@@ -101,8 +101,11 @@ contract UpgradeArbiterApplications is Script {
 
     function run() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk      = vm.envUint("PRIVATE_KEY");
-        address broadcaster = vm.addr(pk);
+        // The signer comes from the command line (--account / --private-key), never
+        // from the environment. Foundry fills msg.sender from --sender and derives it
+        // from --private-key; with no wallet named at all it stays forge-std's
+        // DEFAULT_SENDER, which is how a dry run identifies itself below.
+        address broadcaster = msg.sender;
 
         // ── Pre-flight: everything checkable before a wei is spent ─────────
         require(diamond != address(0), "upgrade: DIAMOND_ADDRESS is zero");
@@ -112,10 +115,22 @@ contract UpgradeArbiterApplications is Script {
         // live in the same .env and all three have code, so a typo would sail
         // through the check above. Probe a selector only this diamond answers.
         address currentOwner = _readAddress(diamond, "owner()");
-        require(
-            currentOwner == broadcaster,
-            "upgrade: PRIVATE_KEY is not the diamond owner - diamondCut would revert after a paid deploy"
-        );
+        if (broadcaster == DEFAULT_SENDER) {
+            // A dry run with nobody named as the signer. Every chain read above still
+            // ran; the only thing not checkable is WHO signs, because nothing said.
+            // Foundry itself refuses to broadcast from DEFAULT_SENDER ("You seem to be
+            // using Foundry's default sender"), so no live run can reach the cut
+            // through this branch -- the check is skipped only when there is nothing
+            // left to protect.
+            console.log("NOTE: no signer named (--account/--sender absent).");
+            console.log("      Ownership is NOT checked in this run. The live run needs:");
+            console.log("      --account deployer --sender", currentOwner);
+        } else {
+            require(
+                currentOwner == broadcaster,
+                "upgrade: the signer is not the diamond owner - diamondCut would revert after a paid deploy"
+            );
+        }
 
         bytes4[] memory addSels = addSelectors();
 
@@ -150,7 +165,7 @@ contract UpgradeArbiterApplications is Script {
         console.log("");
 
         // ── The cut ────────────────────────────────────────────────────────
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         ArbiterApplicationsFacet applicationsFacet = new ArbiterApplicationsFacet();
         IDiamondCut(diamond).diamondCut(
             buildCuts(address(applicationsFacet)),
@@ -200,14 +215,14 @@ contract UpgradeArbiterApplications is Script {
         console.log("unreferenced and harmless - a diamond routes nothing to an unmounted address):");
         console.log("  forge script script/UpgradeArbiterApplications.s.sol \\");
         console.log("    --sig \"rollback()\" --rpc-url $BASE_SEPOLIA_RPC_URL \\");
-        console.log("    --private-key $PRIVATE_KEY --broadcast");
+        console.log("    --account deployer --sender $OWNER --broadcast");
         console.log("");
         console.log("  or, by hand, one diamondCut with a single Remove element:");
         console.log("  cast send <diamond> \\");
         console.log("    \"diamondCut((address,uint8,bytes4[])[],address,bytes)\" \\");
         console.log("    \"[(0x0000000000000000000000000000000000000000,2,[<the 11 selectors>])]\" \\");
         console.log("    0x0000000000000000000000000000000000000000 0x \\");
-        console.log("    --private-key $PRIVATE_KEY --rpc-url $BASE_SEPOLIA_RPC_URL");
+        console.log("    --account deployer --sender $OWNER --rpc-url $BASE_SEPOLIA_RPC_URL");
         console.log("  <diamond> =", diamond);
         _printSelectors(addSels);
     }
@@ -219,7 +234,6 @@ contract UpgradeArbiterApplications is Script {
     /// becomes two.
     function rollback() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 pk      = vm.envUint("PRIVATE_KEY");
         require(diamond != address(0), "rollback: DIAMOND_ADDRESS is zero");
 
         bytes4[] memory sels = addSelectors();
@@ -235,7 +249,7 @@ contract UpgradeArbiterApplications is Script {
         IDiamondCut.FacetCut[] memory cuts = new IDiamondCut.FacetCut[](1);
         cuts[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, sels);
 
-        vm.startBroadcast(pk);
+        vm.startBroadcast();
         IDiamondCut(diamond).diamondCut(cuts, address(0), "");
         vm.stopBroadcast();
 

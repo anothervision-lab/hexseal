@@ -86,7 +86,13 @@ contract ArbiterApplicationsUpgradeTest is Test {
     /// `getDisputeDiscount` on ArbiterRegistryFacet and `getDisputeSubsidy` on
     /// ArbiterAccountabilityFacet. No cut signed for that either, so the local
     /// rig now stands SEVEN selectors ahead of the census, not four.
-    uint256 constant PENDING_LOCAL_ADDS    = 7;
+    /// ⚠️ AND SINCE 31 AUGUST 2026 A FOURTH, counted into the same constant:
+    /// RegistryFacet gains `notifyWorkHandedIn()`, so the diamond can see that
+    /// work was handed in -- `markDone()` used to emit only on the clone, while
+    /// the one standing observer is pinned to the diamond. No cut signed for
+    /// that either, so the local rig now stands EIGHT selectors ahead of the
+    /// census, not seven.
+    uint256 constant PENDING_LOCAL_ADDS    = 8;
 
     function setUp() public {
         upgrade = new UpgradeArbiterApplications();
@@ -211,7 +217,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
         // And the shape the live chain will be in afterwards, in the same two
         // numbers the deployment record will carry.
         assertEq(IDiamondLoupe(address(diamond)).facetAddresses().length, 13, "13 facets after the cut");
-        assertEq(_routed(), 214 + PENDING_LOCAL_ADDS, "214 routed selectors after the cut, plus the two pending cuts' adds");
+        assertEq(_routed(), 214 + PENDING_LOCAL_ADDS, "214 routed selectors after the cut, plus the pending cuts' adds");
     }
 
     /// The pre-flight has to REFUSE when the chain is not in the shape the cut

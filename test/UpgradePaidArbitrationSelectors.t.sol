@@ -260,7 +260,11 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
         // recipient refuses now becomes a debt instead of blocking a person's
         // refund. The delivery this script made on 31 July is unchanged; what
         // moved is the live half of the sum, and it will move again.
-        assertEq(total, 169, "post-upgrade diamond should route exactly 169 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
+        // 169 -> 170 on 31 August 2026: RegistryFacet gained
+        // `notifyWorkHandedIn()`, and this total reads nine facets live from
+        // DeployFull, so the registry's growth lands here even though this
+        // archived script never touched it.
+        assertEq(total, 170, "post-upgrade diamond should route exactly 170 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
 
         bytes4[] memory flat = new bytes4[](total);
         uint256 k = 0;

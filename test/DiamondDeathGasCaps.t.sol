@@ -52,6 +52,7 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
     uint256 constant CAP_ARBITER_TIMEOUT = 150_000; // = Agreement.ARBITER_TIMEOUT_GAS
     uint256 constant CAP_CLAIM_CLEAR     = 200_000; // = Agreement.CLAIM_CLEAR_GAS
     uint256 constant CAP_FEE_READ        = 100_000; // = Agreement.FEE_READ_GAS
+    uint256 constant CAP_HANDOFF_NOTIFY  = 100_000; // = Agreement.HANDOFF_NOTIFY_GAS
 
 
 
@@ -80,6 +81,20 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         uint256 toCost = _measureAsAgreement(a, abi.encodeWithSignature("getFeeRecipient()"));
         _assertUnderCap("getFeeRecipient(), all cold", toCost, CAP_FEE_READ);
         assertLt(toCost * 4, CAP_FEE_READ, "and keep at least 4x headroom");
+    }
+
+    /// The hand-in announcement, through the real proxy with every slot cold.
+    ///
+    /// The cheapest diamond call Agreement makes, because it is not a write at
+    /// all: three words of the deal's record read back, one log emitted. It is
+    /// measured for the same reason the fee reads are -- a cap set below the
+    /// real cost would not break anything loudly, it would just stop the
+    /// client's bell from ringing, on every deal, in silence.
+    function testHandInNotifyCostSitsUnderItsCap() public {
+        Agreement a = _activated();
+        uint256 used = _measureAsAgreement(a, abi.encodeWithSignature("notifyWorkHandedIn()"));
+        _assertUnderCap("notifyWorkHandedIn(), all cold", used, CAP_HANDOFF_NOTIFY);
+        assertLt(used * 4, CAP_HANDOFF_NOTIFY, "and keep at least 4x headroom");
     }
 
     function testRegistryUpdateCostSitsUnderItsCap() public {

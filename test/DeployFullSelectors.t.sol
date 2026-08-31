@@ -546,7 +546,24 @@ contract DeployFullSelectorsTest is Test {
         // `getDisputeSubsidy` on the accountability facet. The number here pins
         // what DeployFull builds; the stands that compare a local rig against
         // the chain census carry the same three as a named pending cut.
-        assertEq(totalRouted, 221, "diamond should route exactly 221 selectors total");
+        //
+        // 221 -> 222 on 31 August 2026: RegistryFacet gained
+        // `notifyWorkHandedIn()`. `Agreement.markDone()` used to touch the
+        // diamond not at all -- it stamped the clone and emitted `MarkedDone`
+        // THERE -- so the transition that starts the two-day auto-approve
+        // window, after which silence hands the executor the whole pot, was
+        // invisible from the one address anything watches. Ships with
+        // script/UpgradeRegistryHandInSignal.s.sol.
+        //
+        // ⚠️ MEASURED AGAINST THE CHAIN ON 31 AUGUST 2026, and the answer moved
+        // the story above: the live diamond routes 221 across 13 facets, not
+        // 218. The dispute-vault discount and the DAO handover have BOTH landed
+        // since those censuses were taken (the discount at block 46 119 029,
+        // three receipts `status: 0x1`). So the only thing this tree now
+        // carries that the chain does not is the one selector named here, and
+        // the older "three pending" allowances in the upgrade stands are
+        // counting cuts that have already shipped.
+        assertEq(totalRouted, 222, "diamond should route exactly 222 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

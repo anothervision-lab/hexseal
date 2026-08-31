@@ -58,7 +58,7 @@ pragma solidity ^0.8.20;
 //
 // Usage (live):
 //   forge script script/UpgradeAgreementDisputeExitAndGasCaps.s.sol \
-//     --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY \
+//     --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --sender $OWNER \
 //     --broadcast --verify -vvv
 // ============================================================
 
@@ -70,8 +70,11 @@ import "../src/FactoryFacet.sol";
 contract UpgradeAgreementDisputeExitAndGasCaps is Script {
     function run() external {
         address diamond     = vm.envAddress("DIAMOND_ADDRESS");
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
-        address broadcaster = vm.addr(deployerKey);
+        // The signer comes from the command line (--account / --private-key), never
+        // from the environment. Foundry fills msg.sender from --sender and derives it
+        // from --private-key; with no wallet named at all it stays forge-std's
+        // DEFAULT_SENDER, which is how a dry run identifies itself below.
+        address broadcaster = msg.sender;
 
         // ── Pre-flight: everything checkable before a wei is spent ─────────
         // Two deploys stand in front of setAgreementDeployer. Tripping here
@@ -86,10 +89,22 @@ contract UpgradeAgreementDisputeExitAndGasCaps is Script {
         address currentOwner = _readAddress(diamond, "owner()");
         address oldDeployer  = _readAddress(diamond, "getAgreementDeployer()");
 
-        require(
-            currentOwner == broadcaster,
-            "upgrade: PRIVATE_KEY is not the diamond owner - setAgreementDeployer would revert after two paid deploys"
-        );
+        if (broadcaster == DEFAULT_SENDER) {
+            // A dry run with nobody named as the signer. Every chain read above still
+            // ran; the only thing not checkable is WHO signs, because nothing said.
+            // Foundry itself refuses to broadcast from DEFAULT_SENDER ("You seem to be
+            // using Foundry's default sender"), so no live run can reach the cut
+            // through this branch -- the check is skipped only when there is nothing
+            // left to protect.
+            console.log("NOTE: no signer named (--account/--sender absent).");
+            console.log("      Ownership is NOT checked in this run. The live run needs:");
+            console.log("      --account deployer --sender", currentOwner);
+        } else {
+            require(
+                currentOwner == broadcaster,
+                "upgrade: the signer is not the diamond owner - setAgreementDeployer would revert after two paid deploys"
+            );
+        }
         require(
             oldDeployer != address(0),
             "upgrade: factory has no deployer set - this is a fresh diamond, use DeployFull"
@@ -118,7 +133,7 @@ contract UpgradeAgreementDisputeExitAndGasCaps is Script {
         console.log("");
 
         // ── The upgrade ────────────────────────────────────────────────────
-        vm.startBroadcast(deployerKey);
+        vm.startBroadcast();
 
         // Deployed once, cloned for every deal. Its own constructor sets
         // _initialized = true, so the implementation itself cannot be claimed
@@ -186,7 +201,7 @@ contract UpgradeAgreementDisputeExitAndGasCaps is Script {
         console.log("");
         console.log("Rollback (restores the previous deployer in one transaction):");
         console.log("  cast send <diamond> \"setAgreementDeployer(address)\" <old> \\");
-        console.log("    --private-key $PRIVATE_KEY --rpc-url $BASE_SEPOLIA_RPC_URL");
+        console.log("    --account deployer --sender $OWNER --rpc-url $BASE_SEPOLIA_RPC_URL");
         console.log("  <diamond> =", diamond);
         console.log("  <old>     =", oldDeployer);
     }

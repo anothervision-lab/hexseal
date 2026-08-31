@@ -149,7 +149,7 @@ forge build
 forge test
 ```
 
-`forge test` runs 1399 tests across 66 suites and takes a few seconds; the count is printed
+`forge test` runs 1467 tests across 72 suites and takes a few seconds; the count is printed
 in the last line of its output. The suite runs entirely offline — no RPC endpoint and no
 network access are needed.
 

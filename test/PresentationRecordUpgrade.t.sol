@@ -941,7 +941,7 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
 
     /// Literally run() — not a retelling of its steps but the method itself, with real
     /// vm.envAddress/vm.envUint/vm.startBroadcast, on a locally deployed diamond. The
-    /// owner is the address derived from PRIVATE_KEY (a two-step handover), exactly as
+    /// owner is the address run()'s broadcast acts as (a two-step handover), exactly as
     /// diamondCut requires on the live chain.
     ///
     /// The diamond is seeded NON-empty before the cut: an arbiter, a non-zero vault, a
@@ -950,8 +950,9 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
     /// storage-continuity check INSIDE run() would compare zeroes with zeroes and would
     /// pass even if it were completely broken.
     function test_RunEndToEndOnLocalDiamond() public {
-        uint256 pk = 0xA11CE;
-        address ownerAddr = vm.addr(pk);
+        // DEFAULT_SENDER: see _armRun -- an argument-less vm.startBroadcast() inside a
+        // test acts as forge-std's default sender, so the diamond must be owned by it.
+        address ownerAddr = DEFAULT_SENDER;
         address seededArbiter = address(0xA12BE12);
 
         DiamondProxy diamond = _deployMinimalDiamond();
@@ -969,7 +970,6 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
         assertEq(OwnershipFacet(address(diamond)).owner(), ownerAddr, "ownership did not move");
 
         vm.setEnv("DIAMOND_ADDRESS", vm.toString(address(diamond)));
-        vm.setEnv("PRIVATE_KEY", vm.toString(pk));
 
         uint256 routedBefore = upgrade.totalRoutedSelectors(address(diamond));
 
@@ -1023,8 +1023,9 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
     /// assertNoResponseFloorAnswers from run() while leaving the function itself, and
     /// this test goes red while the others do not.
     function test_RunRevertsWhenFloorAnswersWrong() public {
-        uint256 pk = 0xA11CE;
-        address ownerAddr = vm.addr(pk);
+        // DEFAULT_SENDER: see _armRun -- an argument-less vm.startBroadcast() inside a
+        // test acts as forge-std's default sender, so the diamond must be owned by it.
+        address ownerAddr = DEFAULT_SENDER;
 
         DiamondProxy diamond = _deployMinimalDiamond();
         _mountOldFacet(diamond);
@@ -1034,7 +1035,6 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
         OwnershipFacet(address(diamond)).acceptOwnership();
 
         vm.setEnv("DIAMOND_ADDRESS", vm.toString(address(diamond)));
-        vm.setEnv("PRIVATE_KEY", vm.toString(pk));
 
         vm.mockCall(
             address(diamond),
@@ -1061,8 +1061,9 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
     /// and the same field, read by different code before and after the cut, has
     /// diverged.
     function test_RunRevertsWhenStorageDriftsAcrossTheCut() public {
-        uint256 pk = 0xA11CE;
-        address ownerAddr = vm.addr(pk);
+        // DEFAULT_SENDER: see _armRun -- an argument-less vm.startBroadcast() inside a
+        // test acts as forge-std's default sender, so the diamond must be owned by it.
+        address ownerAddr = DEFAULT_SENDER;
 
         DiamondProxy diamond = _deployMinimalDiamond();
         address oldFacetAddr = _mountOldFacet(diamond);
@@ -1072,7 +1073,6 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
         OwnershipFacet(address(diamond)).acceptOwnership();
 
         vm.setEnv("DIAMOND_ADDRESS", vm.toString(address(diamond)));
-        vm.setEnv("PRIVATE_KEY", vm.toString(pk));
 
         vm.mockCall(
             oldFacetAddr,
@@ -1102,10 +1102,16 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
     // ════════════════════════════════════════════════════════════════════
 
     /// The shared preparation of the negative tests on run(): a diamond with the "old"
-    /// layout, ownership with the PRIVATE_KEY address, and the environment set.
-    function _armRun(DiamondProxy diamond) internal returns (uint256 pk) {
-        pk = 0xA11CE;
-        address ownerAddr = vm.addr(pk);
+    /// layout, ownership with the broadcasting address, and the environment set.
+    /// ⚠️ The owner is forge-std's DEFAULT_SENDER and not an address of our own
+    /// choosing. Since 31 August 2026 the scripts call `vm.startBroadcast()` with no
+    /// argument -- the signer arrives on the command line, so that the key can live in
+    /// an encrypted keystore instead of open in `.env`. Inside a TEST there is no
+    /// command line, and an argument-less broadcast acts as DEFAULT_SENDER (measured,
+    /// not assumed). Hand the diamond to anybody else and every `diamondCut` inside
+    /// run() reverts with NotOwner.
+    function _armRun(DiamondProxy diamond) internal returns (address ownerAddr) {
+        ownerAddr = DEFAULT_SENDER;
         OwnershipFacet(address(diamond)).transferOwnership(ownerAddr);
         vm.prank(ownerAddr);
         OwnershipFacet(address(diamond)).acceptOwnership();
@@ -1138,7 +1144,6 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
             "now differs between the three suites in the process; see the comment above"
         );
         vm.setEnv("DIAMOND_ADDRESS", vm.toString(address(diamond)));
-        vm.setEnv("PRIVATE_KEY", vm.toString(pk));
     }
 
     /// Remove `checkReplaceGroup(...)` from run() and this test goes red.

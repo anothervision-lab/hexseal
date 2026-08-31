@@ -6,7 +6,6 @@ import "../src/DiamondProxy.sol";
 
 contract RemoveOldFacets is Script {
     address DIAMOND = vm.envAddress("DIAMOND_ADDRESS");
-    uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
 
     function run() external {
         require(DIAMOND != address(0), "DIAMOND_ADDRESS not set");
@@ -58,7 +57,7 @@ contract RemoveOldFacets is Script {
         console.log("JobNFTFacet before:", IDiamondLoupe(DIAMOND).facetAddress(0xcc63abf7));
         console.log("OfferNFTFacet before:", IDiamondLoupe(DIAMOND).facetAddress(0x0b569cb4));
 
-        vm.startBroadcast(deployerPrivateKey);
+        vm.startBroadcast();
         IDiamondCut(DIAMOND).diamondCut(cuts, address(0), "");
         vm.stopBroadcast();
 

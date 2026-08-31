@@ -235,7 +235,7 @@ abstract contract DiamondDeathEscrowBase is Test {
         ArbiterRegistryFacet arbiterRegistryFacet = new ArbiterRegistryFacet();
         ReputationFacet      reputationFacet      = new ReputationFacet();
 
-        bytes4[] memory regSels = new bytes4[](12);
+        bytes4[] memory regSels = new bytes4[](13);
         regSels[0]  = RegistryFacet.initRegistry.selector;
         regSels[1]  = RegistryFacet.register.selector;
         regSels[2]  = RegistryFacet.updateStatus.selector;
@@ -248,6 +248,7 @@ abstract contract DiamondDeathEscrowBase is Test {
         regSels[9]  = RegistryFacet.getActive.selector;
         regSels[10] = RegistryFacet.totalAgreements.selector;
         regSels[11] = RegistryFacet.authorizedFactory.selector;
+        regSels[12] = RegistryFacet.notifyWorkHandedIn.selector;
 
         bytes4[] memory facSels = new bytes4[](14);
         facSels[0]  = FactoryFacet.initFactory.selector;

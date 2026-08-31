@@ -151,8 +151,11 @@ contract DeployFull is Script {
         address feeRecipient     = vm.envOr("FEE_RECIPIENT",     address(0));
         address trustedForwarder = vm.envOr("TRUSTED_FORWARDER", address(0));
         address initialArbiter   = vm.envOr("INITIAL_ARBITER",   address(0));
-        uint256 deployerKey      = vm.envUint("PRIVATE_KEY");
-        address owner            = vm.addr(deployerKey);
+        // The address every deployed contract is handed to as its owner. It is the
+        // signer named on the command line (--account / --private-key / --sender),
+        // not a key read out of the environment. Foundry refuses to broadcast from
+        // DEFAULT_SENDER, so a live run can never bake the placeholder in.
+        address owner            = msg.sender;
 
         // ── Pre-flight checks — all BEFORE a single deployment ───────────────
         // Cheaper to stumble here than after the script has already burned gas on
@@ -203,7 +206,7 @@ contract DeployFull is Script {
             "DeployFull: INITIAL_ARBITER is zero - a diamond with no arbiter resolves every dispute as a client refund"
         );
 
-        vm.startBroadcast(deployerKey);
+        vm.startBroadcast();
 
         // ── 1. Deploy every implementation ───────────────────────────────────
         DiamondCutFacet        cutFacet     = new DiamondCutFacet();
@@ -393,9 +396,9 @@ contract DeployFull is Script {
         sels[3] = OwnershipFacet.pendingOwner.selector;
     }
 
-    // RegistryFacet — 13 selectors
+    // RegistryFacet — 14 selectors
     function registryFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](13);
+        sels = new bytes4[](14);
         sels[0]  = RegistryFacet.initRegistry.selector;
         sels[1]  = RegistryFacet.register.selector;
         sels[2]  = RegistryFacet.updateStatus.selector;
@@ -409,6 +412,7 @@ contract DeployFull is Script {
         sels[10] = RegistryFacet.getDisputed.selector;
         sels[11] = RegistryFacet.totalAgreements.selector;
         sels[12] = RegistryFacet.authorizedFactory.selector;
+        sels[13] = RegistryFacet.notifyWorkHandedIn.selector;
     }
 
     // FactoryFacet — 23 selectors (setPaused/isPaused/getProtocolArbiter/
