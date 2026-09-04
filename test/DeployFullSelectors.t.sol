@@ -563,7 +563,19 @@ contract DeployFullSelectorsTest is Test {
         // carries that the chain does not is the one selector named here, and
         // the older "three pending" allowances in the upgrade stands are
         // counting cuts that have already shipped.
-        assertEq(totalRouted, 222, "diamond should route exactly 222 selectors total");
+        //
+        // 222 -> 227 on 3 September 2026, in ONE cut carrying two deliveries.
+        // Four of the five are the emergency brake (decision 17) —
+        // `pauseNewDeals`, `resumeNewDeals`, `newDealsPausedUntil` and the
+        // `NEW_DEALS_PAUSE_DURATION` getter. The fifth is `MAX_FEE_BPS()`
+        // (item 138), the 20% fee ceiling that until now was a bare `2_000`
+        // written twice inside FactoryFacet and readable from nowhere.
+        //
+        // The live chain routes 222 today, measured at block 46 306 403; these
+        // five are the entire delta, and they ship together in
+        // script/UpgradeEmergencyBrake.s.sol, whose stand carries them as the
+        // one named allowance between the local rig and that census.
+        assertEq(totalRouted, 227, "diamond should route exactly 227 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

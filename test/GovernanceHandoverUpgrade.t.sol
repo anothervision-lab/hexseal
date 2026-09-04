@@ -104,12 +104,30 @@ contract GovernanceHandoverUpgradeTest is Test {
     /// never touched: the DEAL registry (`src/RegistryFacet.sol`, not the
     /// arbiter one that shares the word) gains `notifyWorkHandedIn()`. Named by
     /// signature text below like the other three.
+    /// ⚠️ AND A FOURTH PENDING CUT SINCE 3 SEPTEMBER 2026, on yet another facet
+    /// this one has never touched: FactoryFacet gains the emergency brake
+    /// (decision 17). Four selectors, named by signature text below like the
+    /// others.
     uint256 constant EXTRA_BEYOND_CHAIN =
-        ADDED_SELECTORS + GROWN_REGISTRY + GROWN_ACCOUNTABILITY + GROWN_DEAL_REGISTRY;
+        ADDED_SELECTORS + GROWN_REGISTRY + GROWN_ACCOUNTABILITY + GROWN_DEAL_REGISTRY
+        + GROWN_FACTORY + GROWN_FACTORY_FEE_CAP;
 
-    uint256 constant GROWN_REGISTRY       = 2;
-    uint256 constant GROWN_ACCOUNTABILITY = 1;
-    uint256 constant GROWN_DEAL_REGISTRY  = 1;
+    uint256 constant GROWN_REGISTRY        = 2;
+    uint256 constant GROWN_ACCOUNTABILITY  = 1;
+    uint256 constant GROWN_DEAL_REGISTRY   = 1;
+    uint256 constant GROWN_FACTORY         = 4;
+
+    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
+    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
+    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
+    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
+    ///
+    /// It gets a constant of its OWN rather than turning the brake's four into
+    /// a five. The two ride in one transaction but they are two decisions, and
+    /// a number that covers both can no longer say which one drifted. Drop item
+    /// 138 from the cut and exactly this line goes to zero. The selector itself
+    /// is named by signature text in the list below, like every other entry.
+    uint256 constant GROWN_FACTORY_FEE_CAP = 1;
 
     /// ⚠️ WHAT THE FACETS GREW **AFTER** THIS CUT WAS SIGNED — written by hand,
     /// by SIGNATURE TEXT, never taken from the script's own lists.
@@ -156,6 +174,26 @@ contract GovernanceHandoverUpgradeTest is Test {
     function _grownDealRegistryAfterThisCut() internal pure returns (bytes4[] memory sels) {
         sels = new bytes4[](GROWN_DEAL_REGISTRY);
         sels[0] = bytes4(keccak256("notifyWorkHandedIn()"));
+    }
+
+    ///   • pauseNewDeals() / resumeNewDeals() / newDealsPausedUntil() /
+    ///     NEW_DEALS_PAUSE_DURATION() — 3 September 2026, on FactoryFacet,
+    ///     which this cut mounts not a single selector of. The marketplace
+    ///     gets an emergency stop that lets go by itself after 72 hours
+    ///     (decision 17); until it ships, the `whenNotPaused` on nine money
+    ///     doors reads a bool nothing has been able to write since 24 June
+    ///     2026.
+    ///   • MAX_FEE_BPS() — 3 September 2026, on the same FactoryFacet and in
+    ///     the same cut as the four above. Item 138: the 20% ceiling on the fee
+    ///     rate, which stood as a bare `2_000` in two places and could be read
+    ///     from nowhere.
+    function _grownFactoryAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](GROWN_FACTORY + GROWN_FACTORY_FEE_CAP);
+        sels[0] = bytes4(keccak256("pauseNewDeals()"));
+        sels[1] = bytes4(keccak256("resumeNewDeals()"));
+        sels[2] = bytes4(keccak256("newDealsPausedUntil()"));
+        sels[3] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
+        sels[4] = bytes4(keccak256("MAX_FEE_BPS()"));
     }
 
     /// Two numbers from a recorded decision, copied here by a person.
@@ -292,6 +330,16 @@ contract GovernanceHandoverUpgradeTest is Test {
             upgrade.artifactSelectors("out/RegistryFacet.sol/RegistryFacet.json");
         for (uint256 i = 0; i < grownDeal.length; i++) {
             assertTrue(_contains(dealAbi, grownDeal[i]), "the allowance is stale: no such function in the deal registry ABI");
+        }
+
+        // The factory, which this cut does not mount a single selector of
+        // either -- so, as with the deal registry, the only condition its
+        // allowance can be held to is that it is not stale.
+        bytes4[] memory grownFactory = _grownFactoryAfterThisCut();
+        bytes4[] memory factoryAbi =
+            upgrade.artifactSelectors("out/FactoryFacet.sol/FactoryFacet.json");
+        for (uint256 i = 0; i < grownFactory.length; i++) {
+            assertTrue(_contains(factoryAbi, grownFactory[i]), "the allowance is stale: no such function in the factory ABI");
         }
     }
 

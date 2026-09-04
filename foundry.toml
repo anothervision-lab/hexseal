@@ -6,6 +6,59 @@ optimizer = true
 optimizer_runs = 200
 via_ir = true
 
+# ── TOOLCHAIN PINS ────────────────────────────────────────────────────────
+#
+# ⚠️ These three lines are the difference between a gas number that means
+# something and one that means nothing. None of them were set until
+# 1 Sept 2026, and all three silently followed whatever `forge` happened to
+# be installed. That is how CI's `contracts` job went red and stayed red.
+#
+# WHAT HAPPENED, measured 1 Sept 2026 from the CI logs themselves:
+#   * 26 Aug 23:44 -- last green contracts job: forge 1.7.1, solc 0.8.35,
+#     1279/1279 pass.
+#   * 27 Aug 12:30 -- foundry v1.8.0 published.
+#   * 27 Aug 12:37 -- next CI run, SEVEN MINUTES later: forge 1.8.0,
+#     solc 0.8.36, 9 failures. No commit of ours touched any of it.
+# The workflow asked foundry-toolchain for "stable" and got a new one.
+#
+# WHY `isolate` IS THE ONE THAT MATTERS. forge 1.8 flipped its default from
+# false to true. In isolate mode every top-level call from a test is executed
+# as its OWN transaction, so it pays the 21_000 intrinsic gas an inner call
+# never pays. Measured on this tree, same solc, same evm_version, only the
+# flag moved:
+#       getFeeBps()            5_353 -> 31_417   (+26_064)
+#       notifyWorkHandedIn()  11_446 -> 37_510   (+26_064)
+#       creditDisputeFee()    56_718 -> 82_958   (+26_240)
+#       updateStatus()        58_543 -> 83_115   (+24_572)
+# Not one call got dearer. The harness started charging every measurement for
+# a transaction that does not exist in production: Agreement reaches the
+# diamond by an INNER call, inside a transaction already running. So `false`
+# is the model that matches the thing being measured, and every cap literal
+# in test/DiamondDeathGasCaps.t.sol was hand-derived under it.
+#
+# ⚠️ `false` is NOT free of consequence, and this is written down rather than
+# left to be rediscovered: section 15 of that file spends SHIPPED budgets
+# (relay.ts gas limits) on TOP-LEVEL calls, and a real relayer transaction
+# does pay the intrinsic 21_000. For those tests isolate=true is the honest
+# model, and under it testBurningFaultNoticeCannotBlockActivationTimeout
+# fails -- i.e. the shipped 210_000 limit on triggerActivationTimeout() may
+# not survive a gas-burning fault notice. That is an open question about a
+# live budget, NOT something to settle by choosing a flag. See
+# docs/OPEN-ITEMS.md.
+#
+# `solc` is pinned to what the CHAIN actually runs, not to the newest that
+# compiles. Read from Base Sepolia on 1 Sept 2026: the Agreement
+# implementation deployed by the 31 Aug cut (0x5863fac3...) ends in
+# `64736f6c6343 00081f` -- solc 0.8.31. CI was compiling 0.8.36 and measuring
+# bytecode that exists nowhere.
+#
+# `evm_version` is pinned because forge 1.8 moved its default from "prague"
+# to "osaka". The deployed bytecode above was built under prague, and Base
+# has not been assumed to accept osaka opcodes.
+solc = "0.8.31"
+evm_version = "prague"
+isolate = false
+
 # The AST is emitted into the artifacts (out/<File>.sol/<Contract>.json, key
 # "ast") because a build gate reads sources through solc's tree rather than
 # through regular expressions: a `msg.sender` inside a comment is then never

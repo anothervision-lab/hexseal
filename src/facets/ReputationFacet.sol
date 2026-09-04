@@ -15,6 +15,7 @@ pragma solidity ^0.8.20;
 // ============================================================
 
 import "../RegistryFacet.sol"; // RegistryStorage — for verifying agreements
+import "../FactoryFacet.sol";   // FactoryStorage — for the trusted forwarder
 
 interface IAgreementView {
     function status()           external view returns (uint8);
@@ -140,6 +141,29 @@ contract ReputationFacet {
         }
     }
 
+    /// ERC-2771. Until this existed the facet had no notion of a forwarder at all,
+    /// and `claimXP` — the one function in here a person calls with their own
+    /// wallet — read `msg.sender`. Relayed, that is the forwarder's address, so
+    /// the `NotParty` check below would have refused every gasless claim: the same
+    /// shape as incident C1 (`fundDispute`, fix `d172064`), which no direct-call
+    /// test could see.
+    ///
+    /// ⚠️ The two callbacks in this file — `autoAwardXP` and `notifyExecutorFault`
+    /// — deliberately keep RAW `msg.sender`. They are contract-to-contract calls
+    /// whose whole guard is "are you the Agreement I am about to read?". That
+    /// question is about the caller, not about a person behind a messenger, and
+    /// `_msgSender()` there would let anyone who can reach the forwarder append
+    /// an Agreement's address to the calldata and award themselves XP for a deal
+    /// they are not party to.
+    function _msgSender() internal view returns (address sender) {
+        address forwarder = FactoryStorage.store().trustedForwarder;
+        if (msg.sender == forwarder && msg.data.length >= 20) {
+            assembly { sender := shr(96, calldataload(sub(calldatasize(), 20))) }
+        } else {
+            sender = msg.sender;
+        }
+    }
+
     /// @notice Manual XP claim for old deals (predating autoAwardXP). Fallback for legacy deals.
     /// Each side calls separately. The pair cap is assessed on the first call.
     function claimXP(address agreement) external {
@@ -156,7 +180,7 @@ contract ReputationFacet {
 
         if (st != STATUS_COMPLETED && st != STATUS_RESOLVED) revert DealNotEligible();
 
-        address caller = msg.sender;
+        address caller = _msgSender();
         if (caller != cli && caller != exc) revert NotParty();
 
         bool isClient = (caller == cli);

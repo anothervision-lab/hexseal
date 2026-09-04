@@ -264,7 +264,17 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
         // `notifyWorkHandedIn()`, and this total reads nine facets live from
         // DeployFull, so the registry's growth lands here even though this
         // archived script never touched it.
-        assertEq(total, 170, "post-upgrade diamond should route exactly 170 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
+        // 170 -> 175 on 3 September 2026, in ONE cut carrying two deliveries.
+        // Four are the emergency brake (decision 17) -- `pauseNewDeals`,
+        // `resumeNewDeals`, `newDealsPausedUntil` and the
+        // `NEW_DEALS_PAUSE_DURATION` getter. The fifth is `MAX_FEE_BPS()`
+        // (item 138), the 20% fee ceiling that stood as a bare `2_000` in
+        // `initFeeModel` and `setFeeBps` and could be read from nowhere. Same
+        // mechanism as the two moves above: FactoryFacet is one of the nine read
+        // LIVE from DeployFull, so its growth lands in this sum even though this
+        // archived script never touched it. The 31 July delivery of 63 is
+        // unchanged.
+        assertEq(total, 175, "post-upgrade diamond should route exactly 175 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
 
         bytes4[] memory flat = new bytes4[](total);
         uint256 k = 0;

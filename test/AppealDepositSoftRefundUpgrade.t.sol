@@ -106,12 +106,42 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// facet. DeployFull already mounts it, so a rig built from today's tree has
     /// it and the live chain does not. This cut touches neither that facet nor
     /// that selector, which is why the two are order-independent.
-    uint256 constant GROWN_ELSEWHERE    = 1;
-    uint256 constant EXTRA_BEYOND_CHAIN = GROWN_ELSEWHERE;
+    /// ⚠️ 1 -> 5 ON 3 SEPTEMBER 2026. FactoryFacet gains the emergency brake
+    /// (decision 17): `pauseNewDeals()`, `resumeNewDeals()`,
+    /// `newDealsPausedUntil()` and the `NEW_DEALS_PAUSE_DURATION()` getter,
+    /// shipping with script/UpgradeEmergencyBrake.s.sol. Another cut on another
+    /// facet — this one touches only ArbiterRegistryFacet — so the two are
+    /// order-independent, and the four are named by signature text below like
+    /// the one before them.
+    uint256 constant GROWN_ELSEWHERE    = 5;
+
+    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
+    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
+    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
+    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
+    ///
+    /// It gets a constant of its OWN rather than turning the five above into a
+    /// six. The brake and the ceiling ride in one transaction but they are two
+    /// decisions, and a number that covers both can no longer say which one
+    /// drifted. Drop item 138 from the cut and exactly this line goes to zero.
+    /// The selector itself is named by signature text in the list below, like
+    /// every other entry.
+    ///
+    /// It is growth on a facet this cut never touches — this one is
+    /// ArbiterRegistryFacet only — so it is order-independent from this cut,
+    /// exactly like the five before it.
+    uint256 constant GROWN_ELSEWHERE_FEE_CAP = 1;
+
+    uint256 constant EXTRA_BEYOND_CHAIN = GROWN_ELSEWHERE + GROWN_ELSEWHERE_FEE_CAP;
 
     function _grownElsewhere() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](GROWN_ELSEWHERE);
+        sels = new bytes4[](GROWN_ELSEWHERE + GROWN_ELSEWHERE_FEE_CAP);
         sels[0] = bytes4(keccak256("notifyWorkHandedIn()"));
+        sels[1] = bytes4(keccak256("pauseNewDeals()"));
+        sels[2] = bytes4(keccak256("resumeNewDeals()"));
+        sels[3] = bytes4(keccak256("newDealsPausedUntil()"));
+        sels[4] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
+        sels[5] = bytes4(keccak256("MAX_FEE_BPS()"));
     }
 
     function setUp() public {
@@ -250,11 +280,15 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     function test_TheGrowthBeyondThisCutIsRealAndBelongsToAnotherFacet() public view {
         bytes4[] memory grown = _grownElsewhere();
         bytes4[] memory registryAbi = _abiOf("out/RegistryFacet.sol/RegistryFacet.json");
+        bytes4[] memory factoryAbi  = _abiOf("out/FactoryFacet.sol/FactoryFacet.json");
         bytes4[] memory arbiterAbi  = upgrade.artifactSelectors();
         for (uint256 i = 0; i < grown.length; i++) {
+            // Two named facets, and the entry must be implemented by one of
+            // them — never merely "somewhere", which would let a deleted
+            // function's exemption live on and cover the next thing.
             assertTrue(
-                _contains(registryAbi, grown[i]),
-                "an exemption names a selector RegistryFacet does not implement - the exemption is stale"
+                _contains(registryAbi, grown[i]) || _contains(factoryAbi, grown[i]),
+                "an exemption names a selector neither RegistryFacet nor FactoryFacet implements - the exemption is stale"
             );
             assertFalse(
                 _contains(arbiterAbi, grown[i]),
@@ -583,7 +617,11 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
         require(n == EXTRA_BEYOND_CHAIN, "the local rig does not differ from the chain by exactly the cut queued behind this one");
         // And it must be the selector the exemption NAMES, not merely one of
         // the right size.
-        require(extra[0] == _grownElsewhere()[0], "the rig differs from the chain by a selector the exemption does not name");
+        // A set comparison, not `extra[0] == grown[0]`: the loupe hands the
+        // surplus back in facet order, which is not the order this file writes
+        // the exemptions in, and with more than one entry an index-by-index
+        // check would be asserting something about iteration order.
+        _assertSameSet(extra, _grownElsewhere(), "the rig's surplus over the chain");
 
         IDiamondCut.FacetCut[] memory remove = new IDiamondCut.FacetCut[](1);
         remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);

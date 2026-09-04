@@ -321,6 +321,11 @@ contract Treasury {
     error DaoAddressUnset();
     error NotDao();
     error InvalidAmount();
+    /// A read of the diamond that this contract is not allowed to guess at
+    /// came back unusable -- the selector is gone, the facet reverted, or it
+    /// tried to spend more than DIAMOND_VIEW_GAS instead of answering. Carries
+    /// the selector so the refusal names which read died.
+    error DiamondReadFailed(bytes4 selector);
 
     constructor(address usdc_, address diamond_, address foundation_) {
         if (usdc_ == address(0) || diamond_ == address(0) || foundation_ == address(0)) revert ZeroAddress();
@@ -516,16 +521,26 @@ contract Treasury {
         uint256 amount = shortfall > reserveBalance ? reserveBalance : shortfall;
         if (amount == 0) revert ReserveEmpty();
 
-        // Here and in the postcondition below getVaultBalance() is read by an
-        // ORDINARY typed call rather than through _readDiamondWord, on
-        // purpose. Degradation is needed where a failed read walls up the
+        // Here and in the postcondition below getVaultBalance() is read
+        // through the SAME capped path as vaultShortfall(), but with the
+        // opposite verdict on failure: _requireDiamondWord reverts instead of
+        // degrading. Degradation is needed where a failed read walls up the
         // distribution forever (distribute); topUpVault is all-or-nothing
         // anyway, its revert locks nothing, and quietly carrying on here after
         // an unread balance would be worse than a revert: the reserve is
-        // already debited. Control does not even reach this line if the read
-        // is dead — vaultShortfall() above returns 0 and the call fails on
-        // VaultAtTarget.
-        uint256 vaultBefore = IHexsealDiamond(diamond).getVaultBalance();
+        // already debited.
+        //
+        // An earlier revision made these two ordinary TYPED calls and argued
+        // the cap was unnecessary because "control does not even reach this
+        // line if the read is dead - vaultShortfall() above returns 0 and the
+        // call fails on VaultAtTarget". That argument assumed a facet answers
+        // both callers the same way. It need not: the capped read hands it
+        // under DIAMOND_VIEW_GAS, the typed one handed it 63/64 of the whole
+        // transaction, and one gasleft() tells those apart. The same selector,
+        // in the same transaction and the same state, could answer
+        // vaultShortfall() honestly and then eat everything here - measured in
+        // test/TreasuryDiamondGasCaps.t.sol (OPEN-ITEMS item 115).
+        uint256 vaultBefore = _requireDiamondWord(IHexsealDiamond.getVaultBalance.selector);
 
         // The reserve shrinks BEFORE the external call, and the quantity
         // vaultShortfall() reads below is only partially marked (unlike
@@ -555,7 +570,7 @@ contract Treasury {
         // fundVault is entitled to credit MORE than it actually pulled (adding
         // something of its own on top of what was requested, say) — exact
         // equality would forbid such a facet without good reason.
-        uint256 vaultAfter = IHexsealDiamond(diamond).getVaultBalance();
+        uint256 vaultAfter = _requireDiamondWord(IHexsealDiamond.getVaultBalance.selector);
         if (vaultAfter < vaultBefore + amount) revert VaultDidNotGrow();
 
         emit VaultToppedUp(amount);
@@ -601,13 +616,15 @@ contract Treasury {
         // earned" rather than "there is no address" — otherwise it could look
         // from outside as though setDAOAddress alone would have opened the
         // withdrawal, with no real threshold.
-        if (IHexsealDiamond(diamond).getUniqueActiveUsers() < DAO_THRESHOLD) revert DaoNotEarned();
+        if (_requireDiamondWord(IHexsealDiamond.getUniqueActiveUsers.selector) < DAO_THRESHOLD) {
+            revert DaoNotEarned();
+        }
 
         // The DAO address is address(0) by default (see ArbiterRegistryStorage)
         // until the diamond owner calls setDAOAddress. Real USDC reverts on a
         // transfer to zero — without an explicit check here the refusal would
         // look like a bare token revert with no error of its own.
-        address dao = IHexsealDiamond(diamond).getDAOAddress();
+        address dao = _requireDiamondAddress(IHexsealDiamond.getDAOAddress.selector);
         if (dao == address(0)) revert DaoAddressUnset();
         if (msg.sender != dao) revert NotDao();
         if (amount == 0) revert InvalidAmount();
@@ -748,6 +765,57 @@ contract Treasury {
             word := mload(ptr)
         }
         if (!ok) word = 0;
+    }
+
+    /// The same bounded read as _readDiamondWord, for the call sites that must
+    /// REVERT rather than degrade when the diamond does not answer.
+    ///
+    /// WHY A SECOND ENTRY POINT AND NOT A SECOND IMPLEMENTATION. The cap, the
+    /// staticcall and the short-answer check stay in _readDiamondWord and
+    /// nowhere else: a copy of that assembly would be a second place for the
+    /// rule to drift, and drift between two copies of one rule is what the gate
+    /// on this file exists to prevent. What differs here is only the VERDICT on
+    /// a failed read -- and that genuinely differs by call site:
+    ///
+    ///   • vaultShortfall() and foundationBps() degrade ON PURPOSE. A failed
+    ///     read there must not wall up distribute() forever, so they answer 0
+    ///     and FOUNDATION_BPS_POST_DAO respectively (see their docstrings for
+    ///     why those directions and not the other ones).
+    ///   • topUpVault() and withdrawReserve() are all-or-nothing. Carrying on
+    ///     after an unread vault balance would be worse than a revert -- the
+    ///     reserve is already debited by then -- and carrying on after an
+    ///     unread user counter would hand out the reserve with its gate
+    ///     unchecked.
+    ///
+    /// Before this, those sites made ORDINARY typed calls. A typed call does
+    /// revert on a broken facet, which is the right verdict -- but only after
+    /// the facet has already eaten 63/64 of the gas offered, and no revert
+    /// gives that back. The verdict was right and the cost was unbounded; this
+    /// keeps the verdict and bounds the cost (OPEN-ITEMS item 115, the same
+    /// class as item 113 on Agreement).
+    function _requireDiamondWord(bytes4 selector) private view returns (uint256) {
+        (bool ok, uint256 word) = _readDiamondWord(selector);
+        if (!ok) revert DiamondReadFailed(selector);
+        return word;
+    }
+
+    /// getDAOAddress() returns an address, not a word, so it needs the one
+    /// thing _readDiamondWord cannot do on its own: reject a word that is not a
+    /// valid address.
+    ///
+    /// This is not pedantry, it is keeping the semantics that were there. A
+    /// typed call `IHexsealDiamond(diamond).getDAOAddress()` makes solc check
+    /// the returned word has clean upper bits and revert if it does not.
+    /// Reading the same word raw and casting it with uint160 would SILENTLY
+    /// truncate instead, turning a malformed answer into a plausible-looking
+    /// wrong address. The failure direction of that would still be safe here
+    /// (a wrong dao fails the msg.sender != dao check below), but "safe by
+    /// accident" is not the same as "checked", and the next reader would have
+    /// no way to tell which one this was.
+    function _requireDiamondAddress(bytes4 selector) private view returns (address) {
+        uint256 word = _requireDiamondWord(selector);
+        if (word > type(uint160).max) revert DiamondReadFailed(selector);
+        return address(uint160(word));
     }
 
     /// Attempts to fund the vault with amount. Returns (ok, spent): ok —

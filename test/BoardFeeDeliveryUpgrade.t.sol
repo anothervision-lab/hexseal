@@ -96,11 +96,108 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture {
     /// yet; this cut touches neither that facet nor that function.
     uint256 constant PENDING_HAND_IN_ADDS = 1;
 
+    /// ⚠️ A FIFTH PENDING DELTA (3 September 2026), AND THE FIRST ONE ON A FACET
+    /// THIS CUT ITSELF MOUNTS. The marketplace gets an emergency brake that lets
+    /// go by itself (decision 17), and it lands on FactoryFacet: four new
+    /// selectors — `pauseNewDeals()`, `resumeNewDeals()`, `newDealsPausedUntil()`
+    /// and the `NEW_DEALS_PAUSE_DURATION()` getter — plus a `whenNotPaused` on
+    /// both boards that stops reading a bool nothing has been able to write since
+    /// 24 June 2026. Ships with script/UpgradeEmergencyBrake.s.sol.
+    ///
+    /// ⚠️ WHY THAT MATTERS MORE THAN THE FOUR BEFORE IT. The other four grew on
+    /// facets this cut never touched, so naming them cost nothing. This one grows
+    /// FactoryFacet, which this cut replaces — so the allowance sits exactly where
+    /// a real hole would sit, and it is held to two conditions by
+    /// `test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted`: each entry
+    /// must be in FactoryFacet's ABI today (a stale exemption dies) and in NEITHER
+    /// of this cut's two factory groups (an exemption may not cover something the
+    /// cut did mount).
+    ///
+    /// ⚠️ THIS CUT'S OWN LISTS ARE NOT EDITED TO ABSORB THE GROWTH, and must never
+    /// be: they are the record of a transaction broadcast on 25 August 2026.
+    /// Editing them would make the script lie about what it did.
+    uint256 constant PENDING_BRAKE_ADDS = 4;
+
+    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
+    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
+    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
+    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector. It lands
+    /// on the facet THIS cut replaces, exactly like the brake's four, and is
+    /// held to the same two conditions.
+    ///
+    /// It gets a constant of its OWN rather than turning the brake's four into
+    /// a five. The two ride in one transaction but they are two decisions, and
+    /// a number that covers both can no longer say which one drifted. Drop item
+    /// 138 from the cut and exactly this line goes to zero.
+    uint256 constant PENDING_FEE_CAP_ADDS = 1;
+
     /// Everything a fresh deploy carries that the live chain does not: this
-    /// cut's own additions plus the pending pair above.
+    /// cut's own additions plus the pending cuts above.
     uint256 constant EXTRA_BEYOND_CHAIN =
         ADDED_SELECTORS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS
-        + PENDING_HAND_IN_ADDS;
+        + PENDING_HAND_IN_ADDS + PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS;
+
+    /// The five, by SIGNATURE TEXT, never taken from the later script's lists.
+    function _grownFactoryAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS);
+        sels[0] = bytes4(keccak256("pauseNewDeals()"));
+        sels[1] = bytes4(keccak256("resumeNewDeals()"));
+        sels[2] = bytes4(keccak256("newDealsPausedUntil()"));
+        sels[3] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
+        sels[4] = bytes4(keccak256("MAX_FEE_BPS()"));
+    }
+
+    /// The allowance held to its own two conditions, in its own test so that a
+    /// failure names which one broke.
+    ///
+    /// What disappears from behaviour if this is removed: the allowance becomes
+    /// an unchecked hole — four FactoryFacet selectors could be dropped out of
+    /// this cut's lists and parked here, and the coverage lock below would call
+    /// the cut complete.
+    function test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted() public {
+        UpgradeBoardFeeDelivery u = _upgrade();
+        bytes4[] memory grown = _grownFactoryAfterThisCut();
+        bytes4[] memory factoryAbi = u.artifactSelectors("out/FactoryFacet.sol/FactoryFacet.json");
+        for (uint256 i = 0; i < grown.length; i++) {
+            assertTrue(
+                _contains(factoryAbi, grown[i]),
+                "the allowance is stale: FactoryFacet no longer implements it"
+            );
+            assertFalse(
+                _contains(u.factoryReplaceSelectors(), grown[i]),
+                "the allowance covers a selector this cut REPLACED"
+            );
+            assertFalse(
+                _contains(u.factoryAddSelectors(), grown[i]),
+                "the allowance covers a selector this cut ADDED"
+            );
+        }
+    }
+
+    function _contains(bytes4[] memory haystack, bytes4 needle) internal pure returns (bool) {
+        for (uint256 i = 0; i < haystack.length; i++) if (haystack[i] == needle) return true;
+        return false;
+    }
+
+    /// The coverage claim, with the later growth named rather than folded in.
+    ///
+    /// ⚠️ NOT `u.assertListsCoverTheCompiledFacets(...)` ANY MORE, and the script
+    /// keeps that strict version untouched on purpose. It asks "is the compiled
+    /// facet exactly what I mount", and for this cut the honest answer is NO —
+    /// FactoryFacet has grown four functions since 25 August. `run()` still asks
+    /// it strictly, which is correct: re-running this script today would deploy a
+    /// FactoryFacet carrying the brake and mount only 23 of its 27 functions,
+    /// shipping four dead ones. The refusal is the script telling the truth about
+    /// itself, and it is not silenced.
+    function _assertListsCoverTheCompiledFacetsAllowingLaterGrowth(UpgradeBoardFeeDelivery u) internal view {
+        _assertSameSet(u.jobBoardReplaceSelectors(), u.artifactSelectors("out/JobBoardFacet.sol/JobBoardFacet.json"), "JobBoardFacet");
+        _assertSameSet(u.serviceBoardReplaceSelectors(), u.artifactSelectors("out/ServiceBoardFacet.sol/ServiceBoardFacet.json"), "ServiceBoardFacet");
+        _assertSameSet(
+            _concat(_concat(u.factoryReplaceSelectors(), u.factoryAddSelectors()), _grownFactoryAfterThisCut()),
+            u.artifactSelectors("out/FactoryFacet.sol/FactoryFacet.json"),
+            "FactoryFacet (this cut's two groups plus the named later growth)"
+        );
+    }
 
     function _upgrade() internal returns (UpgradeBoardFeeDelivery) {
         if (address(upgrade) == address(0)) upgrade = new UpgradeBoardFeeDelivery();
@@ -130,12 +227,7 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture {
     /// button did nothing.
     function test_ListsCoverExactlyTheCompiledFacets() public {
         UpgradeBoardFeeDelivery u = _upgrade();
-        u.assertListsCoverTheCompiledFacets(
-            u.jobBoardReplaceSelectors(),
-            u.serviceBoardReplaceSelectors(),
-            u.factoryReplaceSelectors(),
-            u.factoryAddSelectors()
-        );
+        _assertListsCoverTheCompiledFacetsAllowingLaterGrowth(u);
 
         assertEq(u.jobBoardReplaceSelectors().length, JOBBOARD_SELECTORS);
         assertEq(u.serviceBoardReplaceSelectors().length, SERVICE_SELECTORS);
@@ -194,8 +286,27 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture {
             if (!found) unmounted++;
         }
         assertEq(
-            unmounted, ADDED_SELECTORS,
-            "the compiled FactoryFacet gains a different number of functions than this cut adds"
+            unmounted, ADDED_SELECTORS + PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS,
+            "the compiled FactoryFacet gains a different number of functions than this cut adds plus the named later growth"
+        );
+
+        // A count agrees on a swap, so the surplus is also asked BY NAME: every
+        // one of the five beyond this cut's two must be a selector this file
+        // has named -- the brake's four or item 138's MAX_FEE_BPS() -- and
+        // every one of those five must be in the surplus.
+        bytes4[] memory surplus = new bytes4[](unmounted);
+        uint256 k;
+        for (uint256 i = 0; i < fromArtifact.length; i++) {
+            bool found;
+            for (uint256 j = 0; j < mounted.length; j++) {
+                if (fromArtifact[i] == mounted[j]) { found = true; break; }
+            }
+            if (!found) surplus[k++] = fromArtifact[i];
+        }
+        _assertSameSet(
+            surplus,
+            _concat(_upgrade().factoryAddSelectors(), _grownFactoryAfterThisCut()),
+            "the artifact's surplus over the census"
         );
     }
 
@@ -226,7 +337,7 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture {
         _assertSameSet(u.jobBoardReplaceSelectors(), deploy.jobBoardFacetSelectors(), "JobBoard vs DeployFull");
         _assertSameSet(u.serviceBoardReplaceSelectors(), deploy.serviceBoardFacetSelectors(), "ServiceBoard vs DeployFull");
         _assertSameSet(
-            _concat(u.factoryReplaceSelectors(), u.factoryAddSelectors()),
+            _concat(_concat(u.factoryReplaceSelectors(), u.factoryAddSelectors()), _grownFactoryAfterThisCut()),
             deploy.factoryFacetSelectors(),
             "Factory vs DeployFull"
         );
@@ -271,8 +382,10 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture {
         bytes4[] memory facSels = u.factoryReplaceSelectors();
         bytes4[] memory addSels = u.factoryAddSelectors();
 
-        // Pre-flight, exactly as run() calls it.
-        u.assertListsCoverTheCompiledFacets(jobSels, svcSels, facSels, addSels);
+        // Pre-flight, as run() calls it — except for the coverage check, which
+        // run() asks strictly and which now refuses, correctly: see
+        // _assertListsCoverTheCompiledFacetsAllowingLaterGrowth.
+        _assertListsCoverTheCompiledFacetsAllowingLaterGrowth(u);
         address previousJobBoard = u.assertAllMountedOnOneFacet(jobSels, address(diamond));
         address previousServiceBoard = u.assertAllMountedOnOneFacet(svcSels, address(diamond));
         address previousFactory = u.assertAllMountedOnOneFacet(facSels, address(diamond));

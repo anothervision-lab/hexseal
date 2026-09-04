@@ -92,7 +92,24 @@ contract ArbiterApplicationsUpgradeTest is Test {
     /// the one standing observer is pinned to the diamond. No cut signed for
     /// that either, so the local rig now stands EIGHT selectors ahead of the
     /// census, not seven.
-    uint256 constant PENDING_LOCAL_ADDS    = 8;
+    /// 8 -> 12 on 3 September 2026: the emergency brake (decision 17) adds four
+    /// selectors to FactoryFacet — `pauseNewDeals()`, `resumeNewDeals()`,
+    /// `newDealsPausedUntil()` and the `NEW_DEALS_PAUSE_DURATION()` getter — and
+    /// no cut has been signed for them. This cut touches neither that facet nor
+    /// those functions; it ships with script/UpgradeEmergencyBrake.s.sol.
+    uint256 constant PENDING_LOCAL_ADDS    = 12;
+
+    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
+    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
+    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
+    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
+    ///
+    /// It gets a constant of its OWN rather than turning the twelve into a
+    /// thirteen. The two ride in one transaction but they are two decisions,
+    /// and a number that covers both can no longer say which one drifted. Drop
+    /// item 138 from the cut and exactly this line goes to zero. This cut
+    /// touches neither that facet nor that function.
+    uint256 constant PENDING_FEE_CAP_ADDS  = 1;
 
     function setUp() public {
         upgrade = new UpgradeArbiterApplications();
@@ -165,7 +182,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
             "the local pre-cut diamond has a different number of facets than the live one"
         );
         assertEq(
-            _routed(), CHAIN_ROUTED_BEFORE + PENDING_LOCAL_ADDS,
+            _routed(), CHAIN_ROUTED_BEFORE + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS,
             "the local pre-cut diamond routes a different number of selectors than the live one, beyond the pending cut"
         );
     }
@@ -217,7 +234,10 @@ contract ArbiterApplicationsUpgradeTest is Test {
         // And the shape the live chain will be in afterwards, in the same two
         // numbers the deployment record will carry.
         assertEq(IDiamondLoupe(address(diamond)).facetAddresses().length, 13, "13 facets after the cut");
-        assertEq(_routed(), 214 + PENDING_LOCAL_ADDS, "214 routed selectors after the cut, plus the pending cuts' adds");
+        assertEq(
+            _routed(), 214 + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS,
+            "214 routed selectors after the cut, plus the pending cuts' adds"
+        );
     }
 
     /// The pre-flight has to REFUSE when the chain is not in the shape the cut
@@ -270,7 +290,10 @@ contract ArbiterApplicationsUpgradeTest is Test {
             );
         }
         assertEq(_routed(), routedAfterCut - ADDED_SELECTORS, "the rollback removed a different number of selectors");
-        assertEq(_routed(), CHAIN_ROUTED_BEFORE + PENDING_LOCAL_ADDS, "the rollback did not restore the pre-cut shape");
+        assertEq(
+            _routed(), CHAIN_ROUTED_BEFORE + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS,
+            "the rollback did not restore the pre-cut shape"
+        );
     }
 
     // ══════════════════════════════════════════════════════════════════════

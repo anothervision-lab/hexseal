@@ -415,13 +415,16 @@ contract DeployFull is Script {
         sels[13] = RegistryFacet.notifyWorkHandedIn.selector;
     }
 
-    // FactoryFacet — 23 selectors (setPaused/isPaused/getProtocolArbiter/
+    // FactoryFacet — 28 selectors (setPaused/isPaused/getProtocolArbiter/
     // setProtocolArbiter/getArbitrationThreshold/setArbitrationThreshold were deleted
     // and are no longer in the ABI; 21 -> 23 on 25 August 2026:
     // getUndeliveredFees/withdrawUndeliveredFees — a fee the recipient would not take
-    // is now a debt to the protocol rather than a person's locked refund)
+    // is now a debt to the protocol rather than a person's locked refund;
+    // 23 -> 27 on 3 September 2026: the emergency brake, decision 17;
+    // 27 -> 28 on 3 September 2026: MAX_FEE_BPS, the fee ceiling that used to be
+    // a bare literal written twice — item 138)
     function factoryFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](23);
+        sels = new bytes4[](28);
         sels[0]  = FactoryFacet.initFactory.selector;
         sels[1]  = FactoryFacet.deployAgreement.selector;
         sels[2]  = FactoryFacet.deployAndFund.selector;
@@ -451,6 +454,25 @@ contract DeployFull is Script {
         // collected. Without both, a board would push a debt into a field nobody reads.
         sels[21] = FactoryFacet.getUndeliveredFees.selector;
         sels[22] = FactoryFacet.withdrawUndeliveredFees.selector;
+        // The emergency brake (decision 17), 3 September 2026. A diamond
+        // deployed from scratch has to carry it: the boards' `whenNotPaused`
+        // reads the brake's clock now, and a fresh deployment that mounted the
+        // readers without the writer would ship the exact ornament this cut
+        // exists to remove — a guard on nine money doors that nothing can arm.
+        // Mounted on the live diamond by script/UpgradeEmergencyBrake.s.sol.
+        sels[23] = FactoryFacet.pauseNewDeals.selector;
+        sels[24] = FactoryFacet.resumeNewDeals.selector;
+        sels[25] = FactoryFacet.newDealsPausedUntil.selector;
+        // A public constant's getter has no `.selector` on the contract type —
+        // Solidity exposes that only for functions — so it is spelled out.
+        sels[26] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
+        // The fee ceiling (item 138), 3 September 2026. Named rather than left
+        // as the bare `2_000` that stood in `initFeeModel` and `setFeeBps`, and
+        // mounted rather than kept internal: the admin screen that refuses a
+        // rate above the ceiling keeps its own copy of "20%" today, and a copy
+        // is what goes stale on the next cut. Same spelling-out as the line
+        // above, and for the same reason.
+        sels[27] = bytes4(keccak256("MAX_FEE_BPS()"));
     }
 
     // JobBoardFacet — 13 selectors

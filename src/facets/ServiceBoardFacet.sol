@@ -204,7 +204,14 @@ contract ServiceBoardFacet {
     }
 
     modifier whenNotPaused() {
-        if (FactoryStorage.store().paused) revert FactoryPaused();
+        // Reads the brake's clock, not the dead `paused` bool it used to read.
+        // The bool has had no writer since 24 June 2026, so this modifier stood
+        // on nine money doors for ten weeks looking like a working guard and
+        // being an ornament. The rule itself lives in FactoryStorage — one
+        // implementation, called from all three facets, because two readings of
+        // "is it braked" that drift apart give a protocol braked at one door
+        // and open at the next.
+        if (FactoryStorage.newDealsPaused(FactoryStorage.store())) revert FactoryPaused();
         _;
     }
 

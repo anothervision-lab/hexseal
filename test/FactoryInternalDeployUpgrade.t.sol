@@ -102,7 +102,39 @@ contract FactoryInternalDeployUpgradeTest is Test {
     /// cut waiting in the same tree, and each is named BY SIGNATURE TEXT below
     /// so the allowance cannot absorb a different drift of the same size.
     uint256 constant GROWN_ELSEWHERE = 4;
-    uint256 constant EXTRA_BEYOND_CHAIN = GROWN_ELSEWHERE;
+
+    /// ⚠️ AND SINCE 3 SEPTEMBER 2026, GROWTH ON THIS CUT'S OWN FACET — the
+    /// first of its kind here, and the one that has to be watched. FactoryFacet
+    /// gains the emergency brake (decision 17): `pauseNewDeals()`,
+    /// `resumeNewDeals()`, `newDealsPausedUntil()` and the
+    /// `NEW_DEALS_PAUSE_DURATION()` getter, shipping with
+    /// script/UpgradeEmergencyBrake.s.sol and cut into nothing yet.
+    ///
+    /// It gets an allowance of its OWN rather than being folded into
+    /// `GROWN_ELSEWHERE`, because the two are held to opposite conditions:
+    /// `_grownElsewhere` may not name a FactoryFacet selector, and this one may
+    /// name nothing else. Folding them together would delete exactly the check
+    /// that stops an exemption from hiding a hole in this cut.
+    ///
+    /// ⚠️ THIS CUT'S OWN LIST IS NOT EDITED TO ABSORB IT, and must never be: it
+    /// is the record of a transaction broadcast on 29 August 2026.
+    uint256 constant GROWN_FACTORY = 4;
+
+    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
+    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
+    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
+    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector. It lands
+    /// on the facet THIS cut replaces, exactly like the brake's four, and is
+    /// held to the same two conditions.
+    ///
+    /// It gets a constant of its OWN rather than turning the brake's four into
+    /// a five. The two ride in one transaction but they are two decisions, and
+    /// a number that covers both can no longer say which one drifted. Drop item
+    /// 138 from the cut and exactly this line goes to zero.
+    uint256 constant GROWN_FACTORY_FEE_CAP = 1;
+
+    uint256 constant EXTRA_BEYOND_CHAIN =
+        GROWN_ELSEWHERE + GROWN_FACTORY + GROWN_FACTORY_FEE_CAP;
 
     /// ⚠️ WHAT THE TREE CARRIES THAT THE CHAIN DOES NOT, AND WHY IT IS NOT THIS
     /// CUT'S BUSINESS — written by hand, by SIGNATURE TEXT, never taken from any
@@ -131,6 +163,50 @@ contract FactoryInternalDeployUpgradeTest is Test {
         sels[3] = bytes4(keccak256("notifyWorkHandedIn()"));
     }
 
+    /// The five, by SIGNATURE TEXT, never taken from the later script's lists.
+    function _grownFactoryAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](GROWN_FACTORY + GROWN_FACTORY_FEE_CAP);
+        sels[0] = bytes4(keccak256("pauseNewDeals()"));
+        sels[1] = bytes4(keccak256("resumeNewDeals()"));
+        sels[2] = bytes4(keccak256("newDealsPausedUntil()"));
+        sels[3] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
+        sels[4] = bytes4(keccak256("MAX_FEE_BPS()"));
+    }
+
+    /// The coverage claim, with the later growth named rather than folded in.
+    ///
+    /// ⚠️ NOT `upgrade.assertReplaceListCoversTheWholeFacet(...)` ANY MORE, and
+    /// the script keeps that strict version untouched on purpose. It asks "is
+    /// the compiled facet exactly what I mount", and for this cut the honest
+    /// answer is now NO. `run()` still asks it strictly, which is correct:
+    /// re-running this script today would deploy a FactoryFacet carrying the
+    /// brake and mount only 23 of its 27 functions, shipping four dead ones.
+    /// The refusal is the script telling the truth about itself, and it is not
+    /// silenced.
+    function _assertReplaceListCoversTheFacetAllowingLaterGrowth() internal view {
+        _assertSameSet(
+            _concat(upgrade.replaceSelectors(), _grownFactoryAfterThisCut()),
+            upgrade.artifactSelectors(),
+            "FactoryFacet (this cut's Replace list plus the named later growth)"
+        );
+    }
+
+    /// The same for "does the compiled facet need an Add group": every function
+    /// it exposes must be routed on the rig, UNLESS it is one of the five named
+    /// above -- the brake's four and item 138's MAX_FEE_BPS(). Same refusal text as the script's, so the sabotage test below
+    /// still reddens on the sabotage and not on the allowance.
+    function _assertNoAddGroupNeededBeyondTheNamedGrowth() internal view {
+        bytes4[] memory fromArtifact = upgrade.artifactSelectors();
+        bytes4[] memory grown = _grownFactoryAfterThisCut();
+        for (uint256 i = 0; i < fromArtifact.length; i++) {
+            if (_contains(grown, fromArtifact[i])) continue;
+            require(
+                IDiamondLoupe(address(diamond)).facetAddress(fromArtifact[i]) != address(0),
+                "pre-flight: the compiled facet exposes a function that is mounted nowhere - this cut needs an Add group and has none"
+            );
+        }
+    }
+
     function setUp() public {
         upgrade = new UpgradeFactoryInternalDeploy();
         deploy  = new DeployFull();
@@ -147,7 +223,7 @@ contract FactoryInternalDeployUpgradeTest is Test {
     /// gains and nobody mounts would otherwise ship dead: present in the ABI,
     /// routed nowhere, discovered by the first person whose button did nothing.
     function test_TheReplaceListCoversExactlyTheCompiledFacet() public view {
-        upgrade.assertReplaceListCoversTheWholeFacet(upgrade.replaceSelectors());
+        _assertReplaceListCoversTheFacetAllowingLaterGrowth();
         assertEq(upgrade.replaceSelectors().length, FACTORY_SELECTORS);
     }
 
@@ -178,18 +254,35 @@ contract FactoryInternalDeployUpgradeTest is Test {
     /// route. One more function, added later without touching the script, would
     /// need an Add group this cut does not have — caught here rather than by
     /// whoever presses the button.
-    function test_TheCompiledFactoryFacetGainsNothingAndSoNeedsNoAddGroup() public view {
+    /// ⚠️ RENAMED AND REWRITTEN ON 3 SEPTEMBER 2026. It used to be called
+    /// `...GainsNothingAndSoNeedsNoAddGroup`, and the premise stopped being
+    /// true: the compiled facet now exposes four functions the chain routes
+    /// nowhere. Keeping the old name and widening the number would have left a
+    /// test whose name asserts one thing and whose body checks another.
+    function test_TheCompiledFactoryFacetGainsOnlyTheNamedLaterGrowth() public view {
         bytes4[] memory fromArtifact = upgrade.artifactSelectors();
         bytes4[] memory whole = _censusAt(".selectors", ".count");
+        bytes4[] memory grown = _grownFactoryAfterThisCut();
         assertEq(whole.length, CHAIN_ROUTED, "the census does not hold the number of selectors it claims");
 
         for (uint256 i = 0; i < fromArtifact.length; i++) {
             assertTrue(
-                _contains(whole, fromArtifact[i]),
-                "the compiled FactoryFacet exposes a function the live chain routes nowhere - this cut needs an Add group and has none"
+                _contains(whole, fromArtifact[i]) || _contains(grown, fromArtifact[i]),
+                "the compiled FactoryFacet exposes a function the live chain routes nowhere and nothing named claims - this cut needs an Add group and has none"
             );
         }
-        assertEq(fromArtifact.length, FACTORY_SELECTORS, "the compiled facet has a different number of functions than the chain mounts");
+        // And the growth is not merely allowed, it is REQUIRED to be there: an
+        // allowance for a function that has been deleted would otherwise sit
+        // here forever, covering the next thing of the same size.
+        for (uint256 i = 0; i < grown.length; i++) {
+            assertTrue(_contains(fromArtifact, grown[i]), "the allowance is stale: FactoryFacet no longer implements it");
+            assertFalse(_contains(whole, grown[i]), "the allowance names a selector the live chain already routes");
+            assertFalse(_contains(upgrade.replaceSelectors(), grown[i]), "the allowance covers a selector this cut REPLACED");
+        }
+        assertEq(
+            fromArtifact.length, FACTORY_SELECTORS + GROWN_FACTORY + GROWN_FACTORY_FEE_CAP,
+            "the compiled facet has a different number of functions than the chain mounts plus the named later growth"
+        );
     }
 
     /// The allowance is held to its own two conditions, in its own test so that
@@ -258,7 +351,11 @@ contract FactoryInternalDeployUpgradeTest is Test {
     /// the fresh deploy ever disagree about what the facet exposes, one of the
     /// two diamonds is wrong and nothing else would say which.
     function test_TheCutAndTheFreshDeployMountTheSameSet() public view {
-        _assertSameSet(upgrade.replaceSelectors(), deploy.factoryFacetSelectors(), "FactoryFacet vs DeployFull");
+        _assertSameSet(
+            _concat(upgrade.replaceSelectors(), _grownFactoryAfterThisCut()),
+            deploy.factoryFacetSelectors(),
+            "FactoryFacet vs DeployFull"
+        );
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -300,8 +397,8 @@ contract FactoryInternalDeployUpgradeTest is Test {
         // Pre-flight, exactly as run() calls it — bar the two checks that assume
         // all twenty-three sit on ONE facet, which the staging above breaks on
         // purpose. Their own refusals are tested separately below.
-        upgrade.assertReplaceListCoversTheWholeFacet(sels);
-        upgrade.assertTheCompiledFacetNeedsNoAddGroup(address(diamond));
+        _assertReplaceListCoversTheFacetAllowingLaterGrowth();
+        _assertNoAddGroupNeededBeyondTheNamedGrowth();
         upgrade.assertTheDoorIsStillOpenToStrangers(address(diamond));
 
         uint256 routedBefore = _routed();
@@ -436,7 +533,7 @@ contract FactoryInternalDeployUpgradeTest is Test {
         vm.expectRevert(
             bytes("pre-flight: the compiled facet exposes a function that is mounted nowhere - this cut needs an Add group and has none")
         );
-        upgrade.assertTheCompiledFacetNeedsNoAddGroup(address(diamond));
+        this.exposed_assertNoAddGroupNeededBeyondTheNamedGrowth();
     }
 
     /// The group must be on ONE facet. Two addresses answering the same group is
@@ -542,6 +639,18 @@ contract FactoryInternalDeployUpgradeTest is Test {
         IDiamondCut.FacetCut[] memory rep = new IDiamondCut.FacetCut[](1);
         rep[0] = IDiamondCut.FacetCut(facet, IDiamondCut.FacetCutAction.Replace, one);
         IDiamondCut(address(diamond)).diamondCut(rep, address(0), "");
+    }
+
+    function _concat(bytes4[] memory a, bytes4[] memory b) internal pure returns (bytes4[] memory out) {
+        out = new bytes4[](a.length + b.length);
+        for (uint256 i = 0; i < a.length; i++) out[i] = a[i];
+        for (uint256 i = 0; i < b.length; i++) out[a.length + i] = b[i];
+    }
+
+    /// `vm.expectRevert` needs an external call to watch, and the check it is
+    /// pointed at is internal to this contract.
+    function exposed_assertNoAddGroupNeededBeyondTheNamedGrowth() external view {
+        _assertNoAddGroupNeededBeyondTheNamedGrowth();
     }
 
     function _contains(bytes4[] memory haystack, bytes4 needle) internal pure returns (bool) {

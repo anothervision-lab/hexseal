@@ -102,6 +102,28 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     /// yet; this cut touches neither that facet nor that function.
     uint256 constant PENDING_HAND_IN_ADDS = 1;
 
+    /// ⚠️ A PENDING DELTA OF 3 SEPTEMBER 2026, named the same way and for the
+    /// same reason. The marketplace gets an emergency brake that lets go by
+    /// itself (decision 17): FactoryFacet gains `pauseNewDeals()`,
+    /// `resumeNewDeals()`, `newDealsPausedUntil()` and the
+    /// `NEW_DEALS_PAUSE_DURATION()` getter, and both boards' `whenNotPaused`
+    /// stops reading a `paused` bool that has had no writer since 24 June 2026.
+    /// No cut has been signed for it, so a from-scratch deploy now stands four
+    /// further selectors ahead of this census. Ships with
+    /// script/UpgradeEmergencyBrake.s.sol.
+    uint256 constant PENDING_BRAKE_ADDS = 4;
+
+    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
+    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
+    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
+    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
+    ///
+    /// It gets a constant of its OWN rather than turning the brake's four into
+    /// a five. The two ride in one transaction but they are two decisions, and
+    /// a number that covers both can no longer say which one drifted. Drop item
+    /// 138 from the cut and exactly this line goes to zero.
+    uint256 constant PENDING_FEE_CAP_ADDS = 1;
+
     /// `applicantGeneration` is field 8 of `JobBoardStorage.Layout` — see the
     /// same constant, and the same refusal to take it on trust, in
     /// test/JobBoardApplicantGate.t.sol.
@@ -251,7 +273,7 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
         for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
         assertEq(
             routed, CHAIN_ROUTED + PENDING_FACTORY_ADDS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS
-                + PENDING_HAND_IN_ADDS,
+                + PENDING_HAND_IN_ADDS + PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS,
             "a from-scratch diamond routes a different number of selectors than the live one, beyond the pending cuts"
         );
 

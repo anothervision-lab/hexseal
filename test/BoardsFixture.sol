@@ -113,7 +113,8 @@ abstract contract BoardsFixture is Test {
     /// Read off by the packing rules: usdc(0), feeRecipient(1), regionFee(2),
     /// trustedForwarder(3), diamond+paused(4 — the bool packed into the tail of
     /// the slot), protocolArbiter(5), arbitrationThreshold(6),
-    /// agreementDeployer(7), feeBps(8), feeFloor(9), maxPendingRequests(10).
+    /// agreementDeployer(7), feeBps(8), feeFloor(9), maxPendingRequests(10),
+    /// undeliveredFee(11), newDealsPausedUntil(12 — appended 3 September 2026).
     /// The offsets are not taken on trust — _unconfigureFeeModel() first asserts
     /// that the values initFactory seeded really are sitting at them, and only
     /// then zeroes them.
@@ -188,7 +189,7 @@ abstract contract BoardsFixture is Test {
         regSels[11] = RegistryFacet.authorizedFactory.selector;
 
         // --- Factory selectors ---
-        bytes4[] memory facSels = new bytes4[](23);
+        bytes4[] memory facSels = new bytes4[](27);
         facSels[0] = FactoryFacet.initFactory.selector;
         facSels[1] = FactoryFacet.deployAgreement.selector;
         facSels[2] = FactoryFacet.setRegionFee.selector;
@@ -213,6 +214,17 @@ abstract contract BoardsFixture is Test {
         // The fee the feeRecipient did not accept: the debt and the way to claim it.
         facSels[21] = FactoryFacet.getUndeliveredFees.selector;
         facSels[22] = FactoryFacet.withdrawUndeliveredFees.selector;
+        // The emergency brake (decision 17), added 3 September 2026. Mounted
+        // here rather than in a cut of its own because every board test that
+        // touches a money door now has to be able to ask whether the door is
+        // braked — and because a selector this fixture does not mount is a
+        // selector no board test can prove is missing.
+        facSels[23] = FactoryFacet.pauseNewDeals.selector;
+        facSels[24] = FactoryFacet.resumeNewDeals.selector;
+        facSels[25] = FactoryFacet.newDealsPausedUntil.selector;
+        // A public constant's getter has no `.selector` on the contract type —
+        // Solidity only exposes that for functions — so it is spelled out.
+        facSels[26] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
         // initFeeModel is deliberately NOT mounted — the atomic-seeding test adds
         // it with a diamondCut of its own, and a repeated Add reverts.
 

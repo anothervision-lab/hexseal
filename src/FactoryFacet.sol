@@ -88,6 +88,28 @@ library FactoryStorage {
         //                            + requestFeeHeld + arbiter-namespace
         //                            balances + undeliveredFee
         uint256 undeliveredFee;
+
+        // ---- appended 3 September 2026: the emergency brake (decision 17) ----
+        //
+        // The moment the brake lets go, as a unix timestamp.
+        //
+        // NOT a bool, and that is the whole design. A bool cannot expire by
+        // itself, so somebody has to come back and clear it — and a switch that
+        // stays down until a person remembers it is exactly the thing decision
+        // 17 refuses: "тихо заморозить протокол навсегда нельзя, придётся жать
+        // снова, и каждое нажатие видно". A timestamp lets go on its own.
+        //
+        // Zero — the state of the live diamond on the day this field appears —
+        // reads as "not braked", and so does any timestamp already in the past.
+        // There is no separate "was it ever pressed" flag and there must not be
+        // one: the only question anybody asks is whether the brake is down NOW.
+        //
+        // The dead `bool paused` above is left exactly where it is. It is not
+        // reused and not removed: the layout is append-only and a live
+        // diamond's slots are never renumbered. Nothing has been able to write
+        // it since `setPaused` was removed on 24 June 2026, and nothing will —
+        // the readers move to this field in the same cut.
+        uint256 newDealsPausedUntil;
     }
 
     function store() internal pure returns (Layout storage fs) {
@@ -102,6 +124,20 @@ library FactoryStorage {
     ///         no second copy.
     /// @dev The floor is applied AFTER the percentage: the larger of the two is
     ///      taken, not their sum.
+    /// @notice Is the brake down right now? The single implementation of that
+    ///         question — FactoryFacet, JobBoardFacet and ServiceBoardFacet all
+    ///         call it, and there must be no second copy, same rule as `quote`.
+    ///
+    /// @dev A second copy is how the brake would come apart: the boards and the
+    ///      factory are cut separately, and two readings of "paused" that drift
+    ///      apart by one comparison give a protocol that is braked at one door
+    ///      and open at the next. `block.timestamp` is fine to compare against
+    ///      here — a validator can nudge it by seconds, and the brake is
+    ///      measured in days.
+    function newDealsPaused(Layout storage fs) internal view returns (bool) {
+        return block.timestamp < fs.newDealsPausedUntil;
+    }
+
     function quote(Layout storage fs, uint256 amount) internal view returns (uint256 fee) {
         uint256 floor_ = fs.feeFloor;
         if (floor_ == 0) revert FeeNotConfigured();
@@ -250,6 +286,47 @@ contract FactoryFacet {
     // door forever, leaving only a paid dispute.
     uint256 constant MAX_DEADLINE_DAYS = 365;
 
+    // -------- FEE CEILING --------
+    //
+    // The highest rate the protocol will ever charge, in basis points.
+    // 2000 = 20%.
+    //
+    // Two doors write `feeBps` -- `initFeeModel`, which runs once and cannot be
+    // undone, and `setFeeBps`, which the owner may call forever -- and until now
+    // each carried its own bare `2_000` with no name on it. Two copies of a
+    // number that MUST agree is the shape a drift takes: raise one and the
+    // one-shot path and the ordinary path disagree about where the ceiling is,
+    // with nothing to say so. Neither literal referred to the other, and neither
+    // could be read by anything outside this file.
+    //
+    // `public` for the same reason NEW_DEALS_PAUSE_DURATION is public: the admin
+    // screen that refuses a rate above the ceiling has to know where the ceiling
+    // is, and a copy of the number in a form is a copy that goes stale on the
+    // next cut. Being public makes it a selector, MAX_FEE_BPS(), which this cut
+    // mounts as an Add.
+    uint256 public constant MAX_FEE_BPS = 2_000;
+
+    // How long one press of the emergency brake holds, before it lets go on its
+    // own (decision 17, 17 August 2026; the number chosen by the owner on
+    // 3 September 2026).
+    //
+    // 72 hours is not a fresh number: it is the same length the arbiter
+    // suspension already holds (decision 1). Reusing it rather than inventing a
+    // fourth duration is deliberate — every distinct window in this protocol is
+    // one more thing a person has to hold in their head, and these two are the
+    // same kind of thing: a reversible hold somebody has to renew.
+    //
+    // It is long enough to ship a facet replacement (that takes twenty minutes,
+    // not days) and short enough that forgetting about it costs three days of
+    // new deals rather than the protocol.
+    //
+    // `public` on purpose: the screen that tells a person "new deals are paused"
+    // has to say for how long, and the relayer already reads window constants
+    // off the chain rather than keeping its own copy of them
+    // (`makeCachedConstantMsReader`). A copy in a config file is a copy that
+    // goes stale on the next cut.
+    uint256 public constant NEW_DEALS_PAUSE_DURATION = 72 hours;
+
     event RegionFeeUpdated(uint8 indexed region, uint256 newFee);
     event FeeRecipientUpdated(address indexed newRecipient);
     event TrustedForwarderUpdated(address indexed newForwarder);
@@ -258,6 +335,23 @@ contract FactoryFacet {
     event FeeBpsUpdated(uint256 newBps);
     event FeeFloorUpdated(uint256 newFloor);
     event MaxPendingRequestsUpdated(uint256 newMax);
+
+    /// The emergency brake went down. `until` is when it lets go by itself —
+    /// carried in the event rather than left to be read back, so that the log
+    /// alone answers "how long was the protocol braked" without a node that
+    /// still has the state.
+    ///
+    /// Emitted on EVERY press, including a press while the brake is already
+    /// down. That is what makes "нажал и забыл" impossible to hide: holding the
+    /// brake for a week is not one silent flag, it is three signed
+    /// transactions, each one in the log with a name against it.
+    event NewDealsPaused(address indexed by, uint256 until);
+
+    /// The brake was let go early. Not emitted when it expires on its own —
+    /// expiry is the absence of an event, and there is no transaction to hang
+    /// one on. A reader wanting "when did it actually end" takes
+    /// `min(until, timestamp of the NewDealsResumed that follows)`.
+    event NewDealsResumed(address indexed by);
 
     /// A fee the boards booked as owed because `feeRecipient` would not take
     /// it, later handed over in one lump. Deliberately NOT `FeeCollected`: that
@@ -297,6 +391,19 @@ contract FactoryFacet {
     /// than a silent no-op: a keeper that gets "done" for a zero transfer
     /// cannot tell a healthy ledger from a broken reader.
     error NothingUndelivered();
+
+    /// The emergency brake is down: no new money comes in until it lets go.
+    ///
+    /// Deliberately the SAME name, and therefore the same selector
+    /// (`0x68c2f226`), as `JobBoardFacet.FactoryPaused` and
+    /// `ServiceBoardFacet.FactoryPaused`. Those two are already decoded by name
+    /// in both relay tables (`relayer/app.js`, `frontend/src/app/api/relay`)
+    /// and already have a sentence in all fourteen locales
+    /// (`board.post_common.error_factory_paused`). A new name here would be a
+    /// new selector, and the person who hit it would get a hex string instead
+    /// of a sentence — on the one door, `deployAndFund`, that had no gate at
+    /// all until this change.
+    error FactoryPaused();
 
     // -------- OWNER CHECK --------
 
@@ -365,7 +472,7 @@ contract FactoryFacet {
         // flat fee — quote() hands back the floor on any amount, with no revert
         // and no event. After that, a typo in one argument is fixable only by a
         // new diamondCut.
-        if (bps == 0 || bps > 2_000) revert FeeBpsTooHigh();
+        if (bps == 0 || bps > MAX_FEE_BPS) revert FeeBpsTooHigh();
         fs.feeBps = bps;
         fs.feeFloor = floor;
         fs.maxPendingRequests = maxPending;
@@ -421,6 +528,18 @@ contract FactoryFacet {
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (fs.agreementDeployer == address(0)) revert DeployerNotSet();
+
+        // The emergency brake (decision 17). Both deal-creating doors carry it,
+        // and that is not the same lock twice: the boards gate themselves with
+        // `whenNotPaused` before they get here, but a board is a facet that can
+        // be replaced without this one, and every deal in the protocol is born
+        // on one of these two lines. A gate on the birth of the deal cannot be
+        // forgotten by a facet written later.
+        //
+        // Costs one cold SLOAD (2100 gas) on a transaction that spends around
+        // half a million creating a clone and moving USDC — under half a
+        // percent, paid once per deal.
+        if (FactoryStorage.newDealsPaused(fs)) revert FactoryPaused();
 
         if (IRegistry(fs.diamond).hasActivePair(client, executor)) revert ActiveDealExists();
 
@@ -484,6 +603,18 @@ contract FactoryFacet {
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (fs.agreementDeployer == address(0)) revert DeployerNotSet();
 
+        // The emergency brake (decision 17). Both deal-creating doors carry it,
+        // and that is not the same lock twice: the boards gate themselves with
+        // `whenNotPaused` before they get here, but a board is a facet that can
+        // be replaced without this one, and every deal in the protocol is born
+        // on one of these two lines. A gate on the birth of the deal cannot be
+        // forgotten by a facet written later.
+        //
+        // Costs one cold SLOAD (2100 gas) on a transaction that spends around
+        // half a million creating a clone and moving USDC — under half a
+        // percent, paid once per deal.
+        if (FactoryStorage.newDealsPaused(fs)) revert FactoryPaused();
+
         if (IRegistry(fs.diamond).hasActivePair(client, executor)) revert ActiveDealExists();
 
         uint256 fee = FactoryStorage.quote(fs, amount);
@@ -544,7 +675,44 @@ contract FactoryFacet {
         emit FeeRecipientUpdated(newRecipient);
     }
 
+    /// @notice Point the protocol at a new ERC-2771 forwarder.
+    ///
+    /// ⚠️ ZERO IS REFUSED, BECAUSE THIS CONTRACT ALREADY REFUSED IT ONCE. The
+    /// factory decided about this field in `initFactory`, which reverts
+    /// `FactoryZeroAddress` on a zero forwarder, and the neighbour immediately
+    /// below, `setAgreementDeployer`, checks its own argument. The setter for
+    /// THIS field was the one place the decision was not carried -- and it is
+    /// the field whose damage does not stay where it was done.
+    ///
+    /// WHAT A ZERO WOULD ACTUALLY COST. Not "the relayer takes the money". A
+    /// zero forwarder cannot match anybody: `msg.sender == forwarder` never
+    /// holds, because no transaction has ever been sent from the zero address.
+    /// So `_msgSender()` falls through to `msg.sender`, which on the relayed
+    /// road is the FORWARDER contract, not the person who signed. Two different
+    /// costs follow, and only one of them can be taken back:
+    ///
+    ///   * Diamond-wide and repairable. Seven facets resolve their sender
+    ///     through `FactoryStorage.store().trustedForwarder` -- this one, both
+    ///     boards, the three arbiter facets and reputation. All of them lose
+    ///     the relayed road at once. Setting the field again fixes this half.
+    ///
+    ///   * Per-clone and PERMANENT. The forwarder is baked into an Agreement at
+    ///     birth: `deployAgreement` and `deployAndFund` hand `fs.trustedForwarder`
+    ///     to the deployer, `Agreement._initTrustedForwarder` writes it once,
+    ///     and the clone exposes no setter to anyone -- only a getter. An
+    ///     EIP-1167 clone is nailed to its implementation for life, so every
+    ///     deal born while the field held zero keeps the zero forever. A later
+    ///     fix reaches deals created after it and no others.
+    ///
+    /// On the money doors of such a clone the failure is at least LOUD:
+    /// `_msgSender()` returns the relayer and `if (sender != client) revert
+    /// NotClient()` refuses. The parties can still act from their own wallets
+    /// paying their own gas, which on a marketplace built for a person with no
+    /// ETH reads as "I cannot close my own deal". Where there is no money and
+    /// no counterparty check, the failure is SILENT instead -- an application
+    /// for a job would simply be recorded as coming from the relayer.
     function setTrustedForwarder(address newForwarder) external onlyOwner {
+        if (newForwarder == address(0)) revert FactoryZeroAddress();
         FactoryStorage.store().trustedForwarder = newForwarder;
         emit TrustedForwarderUpdated(newForwarder);
     }
@@ -557,7 +725,7 @@ contract FactoryFacet {
 
     /// @notice The rate in basis points. 500 = 5%.
     function setFeeBps(uint256 newBps) external onlyOwner {
-        if (newBps > 2_000) revert FeeBpsTooHigh(); // 20% cap — guards against a typo in a zero
+        if (newBps > MAX_FEE_BPS) revert FeeBpsTooHigh(); // guards against a typo in a zero
         FactoryStorage.store().feeBps = newBps;
         emit FeeBpsUpdated(newBps);
     }
@@ -573,6 +741,89 @@ contract FactoryFacet {
     function setMaxPendingRequests(uint256 newMax) external onlyOwner {
         FactoryStorage.store().maxPendingRequests = newMax;
         emit MaxPendingRequestsUpdated(newMax);
+    }
+
+    // -------- EMERGENCY BRAKE (decision 17) --------
+    //
+    // What it stops: the doors where money ENTERS the protocol — posting a job
+    // or a service, requesting one, hiring off either board, and the direct
+    // hire. Counted, not estimated: TEN doors on the two boards read this same
+    // clock through `whenNotPaused` (four on JobBoard, six on ServiceBoard),
+    // plus `deployAndFund` and `deployAgreement` below, which are the factory's
+    // own.
+    //
+    // Two of those ten — `editJob` and `editService` — move no money at all.
+    // They are braked anyway, and that is a deliberate keep rather than an
+    // oversight: they were already behind this modifier before the brake had a
+    // writer, and a board where nothing can be hired but listings keep being
+    // rewritten is a board telling people a story about work they cannot take.
+    // Decision 17 sets the floor for what the brake must cover, not the
+    // ceiling.
+    //
+    // What it deliberately does NOT stop, and this is the half that matters:
+    //
+    //   * every deal that already exists. A deal is an EIP-1167 clone nailed to
+    //     its implementation for life and running on its own clock, and every
+    //     one of its eight calls back into this diamond is gas-capped and
+    //     wrapped in try/catch (decision 35). Braking the factory cannot reach
+    //     into a live deal, and pressing this is not a way to touch one.
+    //
+    //   * every exit. `cancelJob`, `cancelRequest`, `rejectRequest`,
+    //     `removeService` and `withdrawApplication` carry no gate and must
+    //     never grow one: money already parked on the diamond has to be able to
+    //     leave WHILE the brake is down. A brake that also traps the money it
+    //     stopped is not a brake, it is the accident.
+    //
+    // Who may press: the diamond's owner, and nobody else. Not the arbiter
+    // chief — decision 17 says so outright, and the reason is scope: the chief
+    // is a role invented to run the arbiter corps, and this stops the whole
+    // marketplace. "После передачи — у адреса управления" needs no separate
+    // wiring: handover transfers ownership of the diamond, and `onlyOwner`
+    // follows it. A second door for `daoAddress` would be a second key to the
+    // same lock, and `daoAddress` is the arbiter registry's field, not this
+    // one's.
+    //
+    // This adds no centralisation that was not already there: the owner can
+    // stop the marketplace today by replacing a facet. What the brake buys is
+    // speed and reversibility — a cut is neither, and under a timelock it will
+    // be two steps.
+
+    /// @notice Press the emergency brake: no new deals and no new money in for
+    ///         NEW_DEALS_PAUSE_DURATION.
+    ///
+    /// @dev Every press is a fresh full duration measured from now, including a
+    ///      press while the brake is already down — it does not add on to what
+    ///      is left, and it cannot be used to stack the brake out to a year in
+    ///      one transaction. Holding it longer than one duration costs one
+    ///      signed, logged transaction per period, on purpose.
+    function pauseNewDeals() external onlyOwner {
+        uint256 until_ = block.timestamp + NEW_DEALS_PAUSE_DURATION;
+        FactoryStorage.store().newDealsPausedUntil = until_;
+        emit NewDealsPaused(msg.sender, until_);
+    }
+
+    /// @notice Let the brake go before it expires.
+    ///
+    /// @dev Writes zero rather than `block.timestamp`: both read as "not
+    ///      braked" through `newDealsPaused`, but zero is the value the field
+    ///      has never been pressed, so the state after an early release is the
+    ///      state before the first press, and there is no third case to reason
+    ///      about. Deliberately not guarded on "is it even down" — a no-op
+    ///      release is harmless, and a revert would mean the owner reaching for
+    ///      the release in an emergency has to first find out whether he needs
+    ///      it.
+    function resumeNewDeals() external onlyOwner {
+        FactoryStorage.store().newDealsPausedUntil = 0;
+        emit NewDealsResumed(msg.sender);
+    }
+
+    /// @notice When the brake lets go by itself, as a unix timestamp. Zero, or
+    ///         any value in the past, means it is not down.
+    /// @dev The screen needs the moment, not a bool, so it can count down
+    ///      instead of saying "come back later" — decision 45, the platform is
+    ///      built for an ordinary person.
+    function newDealsPausedUntil() external view returns (uint256) {
+        return FactoryStorage.store().newDealsPausedUntil;
     }
 
     // -------- READ --------
