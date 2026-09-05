@@ -164,24 +164,33 @@ The order is fixed: the forwarder must exist before `DeployFull` reads
 
 ```bash
 forge script script/DeployForwarder.s.sol \
-  --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast --verify
+  --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --broadcast --verify
 
 # put the printed address into TRUSTED_FORWARDER, then:
 forge script script/DeployFull.s.sol \
-  --rpc-url $BASE_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast --verify
+  --rpc-url $BASE_SEPOLIA_RPC_URL --account deployer --broadcast --verify
 ```
+
+`--account` names a keystore entry and prompts for its password. The signing key does not
+live in the shell, in `.env`, or in a scrollback buffer -- a `--private-key` that reaches a
+terminal has been in a process list, a history file and a crash log before it ever reached
+the chain.
 
 `DeployFull` also requires `FEE_RECIPIENT`, `INITIAL_ARBITER` and `USDC_ADDRESS`, and
 reverts pre-flight if any of them is zero.
 
-`script/DeployTreasury.s.sol` deploys the treasury separately. Pointing the protocol's
-income at it is a deliberate second transaction rather than part of the deployment, because
-deploying is reversible and redirecting the income is not:
+`script/DeployProtocolTreasury.s.sol` deploys the treasury separately. Pointing the
+protocol's income at it is a deliberate second transaction rather than part of the
+deployment, because deploying is reversible and redirecting the income is not:
 
 ```bash
 cast send $DIAMOND_ADDRESS "setFeeRecipient(address)" <treasury> \
-  --private-key $PRIVATE_KEY --rpc-url $BASE_SEPOLIA_RPC_URL
+  --account deployer --rpc-url $BASE_SEPOLIA_RPC_URL
 ```
+
+The gap between the two is the point: until the seat moves, the treasury is a deployed
+contract nothing reads, and the facet that feeds it can be unrouted cleanly. After it moves,
+it cannot.
 
 ## Deployed contracts (Base Sepolia)
 
@@ -189,8 +198,37 @@ cast send $DIAMOND_ADDRESS "setFeeRecipient(address)" <treasury> \
 |---|---|
 | DiamondProxy | [`0x760F07367888C62f7c2Dfb619A5e534132855ce5`](https://sepolia.basescan.org/address/0x760F07367888C62f7c2Dfb619A5e534132855ce5) |
 | MinimalForwarder | `0x268dCfa7ab0DC134d01C5cBcAa7d2834d6dD0f0f` |
-| Treasury | `0x2e7a7A0515bfDC0006A812EBb3E55d32800Bc660` |
+| ProtocolTreasury | [`0x7901B687B8720C767F32b7BaB73c133396a2277E`](https://sepolia.basescan.org/address/0x7901B687B8720C767F32b7BaB73c133396a2277E) |
+| Treasury (superseded 5 Sept 2026) | `0x2e7a7A0515bfDC0006A812EBb3E55d32800Bc660` |
 | USDC (test) | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` |
+
+### The treasury, and the handle anybody may pull
+
+Protocol income lands in `ProtocolTreasury` and is split four ways: a share to the
+foundation, a share to the arbiter vault until it reaches its target, a share to a pot that
+pays arbitration work, and whatever is left to the reserve. The split is not stored as a
+promise — the order of the ladder, the recipients, and a frozen CEILING on every share live
+in a contract **outside the diamond, with no admin and no upgrade path**. The owner may
+lower his own share and can never raise it past its ceiling; the reserve is guaranteed a
+tenth of income by arithmetic rather than by anybody's restraint.
+
+⚠️ **`distribute()` is permissionless, and that is deliberate.** Anybody may call it. It is
+worth saying plainly what it does and does not do, because an open function that moves
+protocol money invites the worst reading:
+
+* it **pays nobody**. It moves the money already sitting in the treasury from "undistributed"
+  into four counters, by percentages the contract reads at that moment;
+* the outcome **does not depend on who calls it**. There is no caller-shaped branch, no
+  reward for calling, and no way to influence the split by choosing when — the shares are
+  read fresh on every call;
+* leaving it uncalled is safe. The money stays in the treasury and stays counted; calling it
+  an hour later or a year later produces the same result;
+* the actual payouts are separate calls, and each one can only send money to the address the
+  contract already holds — the foundation's address, for instance, is `immutable`.
+
+The reason it is open to everybody rather than owned by us is the same reason the escrow's
+exits are: **a protocol whose money only moves when we press something is a protocol that
+stops when we do.**
 
 Facet addresses are deliberately not listed. They change with every upgrade, and a table of
 them goes stale silently. Ask the chain instead: `facets()` on the proxy is the EIP-2535
