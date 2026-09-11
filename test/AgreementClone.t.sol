@@ -152,6 +152,14 @@ contract MockUSDCClone {
     }
 }
 
+/// The one thing the clone asks its diamond for on the top-up path: the rate.
+/// A diamond that does not answer makes proposeExtra revert FeeUnavailable, so
+/// the gasless fixture below needs a diamond with code on it before it can
+/// tell a refusal for EMPTY TERMS apart from a refusal for a mute diamond.
+contract MockFeeDiamondClone {
+    function getFeeBps() external pure returns (uint256) { return 500; }
+}
+
 /// The gasless path end to end: a real MinimalForwarder → an Agreement clone.
 ///
 /// WHY A SEPARATE TEST. With the move to EIP-1167 the trustedForwarder moved
@@ -171,13 +179,13 @@ contract MockUSDCClone {
 /// the tail of those arguments instead of the signer's address, and every
 /// action by a party to the deal would be rejected as "not the client".
 contract AgreementCloneGaslessTest is Test {
-    MinimalForwarder  forwarder;
-    Agreement         impl;
-    AgreementDeployer deployer;
-    MockUSDCClone     usdc;
+    MinimalForwarder     forwarder;
+    Agreement            impl;
+    AgreementDeployer    deployer;
+    MockUSDCClone        usdc;
+    MockFeeDiamondClone  feeDiamond;
 
     address constant CALLER  = address(0xCA11E4);
-    address constant DIAMOND = address(0xD1A);
     uint256 constant AMOUNT  = 1_000_000;
 
     uint256 constant CLIENT_PK   = 0xC11;
@@ -198,6 +206,9 @@ contract AgreementCloneGaslessTest is Test {
         usdc      = new MockUSDCClone();
         impl      = new Agreement();
         deployer  = new AgreementDeployer(CALLER, address(impl));
+        // A diamond with code on it, so the top-up path can get an answer about
+        // the rate. Nothing else in this fixture asks the diamond anything.
+        feeDiamond = new MockFeeDiamondClone();
 
         client   = vm.addr(CLIENT_PK);
         executor = vm.addr(EXECUTOR_PK);
@@ -207,7 +218,7 @@ contract AgreementCloneGaslessTest is Test {
         agr = Agreement(deployer.deploy(
             client, executor, address(0),
             AMOUNT, 7, "terms",
-            DIAMOND, address(usdc), address(forwarder), DIAMOND
+            address(feeDiamond), address(usdc), address(forwarder), address(feeDiamond)
         ));
 
         usdc.mint(client, AMOUNT);
@@ -302,5 +313,128 @@ contract AgreementCloneGaslessTest is Test {
         vm.prank(client);
         agr.fund();
         assertEq(agr.fundedAt(), block.timestamp, "direct fund() broken");
+    }
+
+    // ============================================================
+    //  A TOP-UP CARRIES WORDS OF ITS OWN, ON THE GASLESS PATH TOO
+    //  (decision 76)
+    // ============================================================
+    //
+    // ⚠️ WHY THIS IS NOT COVERED BY THE DIRECT-CALL TESTS IN Extras.t.sol.
+    // Everything a person actually does here arrives through the relayer, so
+    // the refusal that matters is the one seen at the end of a real
+    // MinimalForwarder. A test that calls the clone directly cannot tell that
+    // apart from a refusal that only happens to fire for wallets — that is the
+    // exact shape of the fundDispute bug of 31 July 2026 (d172064), where a
+    // check read msg.sender and the relayed call never worked once while every
+    // direct test stayed green.
+    //
+    // The forwarder does not revert when the inner call fails, so both halves
+    // are read off `execute`'s return value, not off the absence of a revert.
+
+    /// Bring the deal to ACTIVE the way a person would: both steps relayed.
+    function _relayedActiveDeal() internal {
+        (bool funded, ) = _relay(CLIENT_PK, abi.encodeWithSelector(Agreement.fund.selector));
+        assertTrue(funded, "setup: relayed fund failed");
+        (bool active, ) = _relay(EXECUTOR_PK, abi.encodeWithSelector(Agreement.activate.selector));
+        assertTrue(active, "setup: relayed activate failed");
+    }
+
+    /// Give the client enough USDC and enough allowance for a top-up of
+    /// `amount` plus the 5% the client pays on top.
+    function _fundClientForTopUp(uint256 amount) internal returns (uint256 total) {
+        total = amount + agr.quoteExtraFee(amount);
+        usdc.mint(client, total);
+        vm.prank(client);
+        usdc.approve(address(agr), total);
+    }
+
+    function testGaslessProposeExtraWithEmptyTermsIsRefused() public {
+        _relayedActiveDeal();
+        uint256 total = _fundClientForTopUp(500_000);
+
+        uint256 clientBefore = usdc.balanceOf(client);
+        uint256 agrBefore    = usdc.balanceOf(address(agr));
+
+        (bool ok, bytes memory retdata) = _relay(
+            CLIENT_PK,
+            abi.encodeWithSelector(Agreement.proposeExtra.selector, uint256(500_000), "")
+        );
+
+        assertFalse(ok, "the clone accepted a relayed top-up with no words at all");
+        assertEq(bytes4(retdata), Agreement.EmptyTerms.selector, "wrong revert reason");
+
+        // The refusal is free of consequence on this path too.
+        assertEq(agr.nextExtraId(), 0, "nextExtraId moved on a refused relayed top-up");
+        assertEq(agr.pendingExtrasTotal(), 0, "pendingExtrasTotal moved");
+        assertEq(agr.pendingExtraFeeTotal(), 0, "pendingExtraFeeTotal moved");
+        assertEq(usdc.balanceOf(client), clientBefore, "the client paid for a refused top-up");
+        assertEq(usdc.balanceOf(address(agr)), agrBefore, "the clone took money for a refused top-up");
+        // The allowance is untouched, so nothing was pulled and silently sent back.
+        assertEq(usdc.allowance(client, address(agr)), total, "allowance was spent");
+    }
+
+    /// The positive control the refusal above needs. Without it that test
+    /// passes in a world where the relayed top-up never works at all — which
+    /// is precisely the world the fundDispute bug lived in.
+    function testGaslessProposeExtraWithRealTermsGoesThrough() public {
+        _relayedActiveDeal();
+        uint256 total = _fundClientForTopUp(500_000);
+
+        (bool ok, ) = _relay(
+            CLIENT_PK,
+            abi.encodeWithSelector(Agreement.proposeExtra.selector, uint256(500_000), "one more screen")
+        );
+
+        assertTrue(ok, "a relayed top-up WITH terms was refused");
+        assertEq(agr.nextExtraId(), 1, "the top-up was not recorded");
+        assertEq(agr.pendingExtrasTotal(), 500_000, "pendingExtrasTotal");
+        (uint256 amount, string memory terms, ) = agr.extras(0);
+        assertEq(amount, 500_000, "amount");
+        assertEq(terms, "one more screen", "terms did not survive the forwarder");
+        // The money moved from the SIGNER, not from the forwarder: the whole
+        // point of _msgSender() on this path.
+        assertEq(usdc.balanceOf(address(agr)), AMOUNT + total, "the clone did not receive the top-up");
+        assertEq(usdc.balanceOf(client), 0, "the client was not the payer");
+        assertEq(usdc.balanceOf(address(forwarder)), 0, "the forwarder paid, which is the bug");
+    }
+
+    /// ⚠️ PLACEMENT, WHICH THE OTHER TESTS CANNOT SEE.
+    ///
+    /// "Nothing was written and no token moved" is true of ANY revert — the
+    /// EVM rolls the whole call back — so asserting it proves the function
+    /// refused, not that the refusal came early. This proves the early part:
+    /// against a diamond that will not name the rate, an empty top-up must
+    /// still come back EmptyTerms. If the check sat one line lower, the same
+    /// call would die on FeeUnavailable instead.
+    ///
+    /// The second half is the control that makes the first half mean
+    /// something: with real terms, the very same clone DOES die on
+    /// FeeUnavailable. So the diamond really is mute, and the first assertion
+    /// is not passing because the fee read happened to succeed.
+    function testEmptyTermsIsDecidedBeforeTheDiamondIsAskedForTheRate() public {
+        address muteDiamond = address(0xD1A); // no code on it at all
+        vm.prank(CALLER);
+        Agreement mute = Agreement(deployer.deploy(
+            client, executor, address(0),
+            AMOUNT, 7, "terms",
+            muteDiamond, address(usdc), address(forwarder), muteDiamond
+        ));
+
+        usdc.mint(client, AMOUNT * 4);
+        vm.startPrank(client);
+        usdc.approve(address(mute), type(uint256).max);
+        mute.fund();
+        vm.stopPrank();
+        vm.prank(executor);
+        mute.activate();
+
+        vm.prank(client);
+        vm.expectRevert(Agreement.EmptyTerms.selector);
+        mute.proposeExtra(500_000, "");
+
+        vm.prank(client);
+        vm.expectRevert(Agreement.FeeUnavailable.selector);
+        mute.proposeExtra(500_000, "one more screen");
     }
 }

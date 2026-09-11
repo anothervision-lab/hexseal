@@ -1603,6 +1603,10 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// The USDC is locked in the Agreement. The executor accepts (acceptExtra) or rejects (rejectExtra).
     /// Every accepted extra is added to the base amount on release.
     ///
+    /// `extraTerms` is REQUIRED and refused when empty (EmptyTerms), the same
+    /// way the deal's own terms are refused at `initialize`. Why, and what the
+    /// interface still has to do about whitespace, is at the check itself.
+    ///
     /// The client pays the protocol fee ON TOP of the top-up, the way the
     /// client pays it on top of the deal at hire (FactoryFacet.deployAndFund),
     /// and both halves move in ONE transferFrom so one allowance covers the
@@ -1615,6 +1619,44 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         address sender = _msgSender();
         if (sender != client) revert NotClient();
         if (extraAmount == 0) revert ZeroAmount();
+        // A TOP-UP IS A SEPARATE AGREEMENT, so it needs words of its own --
+        // decision 76, 6 September 2026. A dispute does not have to begin with
+        // the deal; it can begin with the top-up. When it does, the arbiter
+        // opens the case and sees money moved with nothing at all saying what
+        // it was moved for, and there is nothing to judge by. The owner put it
+        // this way, and the wording here is a translation of his -- the Russian
+        // original is quoted in full in docs/DECISIONS.md, 76: the top-up is
+        // one more puzzle for the arbiter, so let it come commented, otherwise
+        // it is blind; and a top-up that carries no evidence at all, in a case
+        // where everything else looks tidy, asks two people to sink themselves
+        // over it.
+        //
+        // `initialize` has refused empty terms with this same error since the
+        // beginning (decision 37); proposeExtra never inherited it. Its
+        // refusals were ZeroAmount, NotClient, NotActive, AlreadyMarkedDone,
+        // AlreadyDisputed, AlreadyFinalized and DeadlinePassed, and emptiness
+        // was not among them.
+        //
+        // MEASURED BY LENGTH, exactly as in `initialize`, and the reasoning
+        // there is not repeated. What that costs is worth saying out loud
+        // rather than leaving to be discovered: A STRING OF NOTHING BUT SPACES
+        // PASSES THIS CHECK. Trimming belongs to the interface, which is where
+        // the other half of this rule lives -- if the frontend does not trim
+        // before it sends, the hole stays open, and no line in this file will
+        // close it. There is no maximum length either, for the same reason:
+        // the deal's own terms have none, and a second, different rule for the
+        // same kind of text would be worse than the one it replaced.
+        //
+        // PLACED AMONG THE CHEAP CHECKS, and the reason is not the one it
+        // looks like. "Nothing is written and no money moves" needs no help
+        // from the ordering -- the revert rolls the whole call back wherever
+        // the check stands. What the ordering buys is the two things a revert
+        // cannot: the refusal is decided WITHOUT asking the diamond for the
+        // rate, so an empty top-up against a diamond that has gone quiet still
+        // comes back EmptyTerms rather than FeeUnavailable and names the real
+        // problem; and it is decided for the least gas, which on the gasless
+        // path is the relayer's money, spent on every mistyped attempt.
+        if (bytes(extraTerms).length == 0) revert EmptyTerms();
         if (_activatedAt == 0) revert NotActive();
         if (_markedDoneAt != 0) revert AlreadyMarkedDone();
         if (_disputedAt != 0) revert AlreadyDisputed();
@@ -1916,7 +1958,11 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
             '{"trait_type":"Client","value":"',        _toHex(client),          '"},'
             '{"trait_type":"Executor","value":"',      _toHex(executor),        '"},'
             '{"trait_type":"Arbiter","value":"',       _toHex(arbiter),         '"},'
-            '{"trait_type":"Terms","value":"',          _truncateStr(terms, 200),     '"}'
+            // Layers 1, 2 and 4, in that order and only in that order: the
+            // percent pass runs LAST, over finished JSON, because what it is
+            // quoting for is the address the finished JSON travels inside.
+            '{"trait_type":"Terms","value":"',
+                _escapeUri(_escapeJson(_truncateStr(terms, 200))), '"}'
         ));
     }
 
@@ -1960,7 +2006,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
             '<text x="32" y="286" class="v">', _shortAddr(executor), '</text>',
             '<line x1="32" y1="304" x2="368" y2="304"/>',
             '<text x="32" y="326" class="lb">TERMS</text>',
-            '<text x="32" y="344" font-size="10" fill="#555">', _truncateStr(terms, 48), '</text>'
+            '<text x="32" y="344" font-size="10" fill="#555">', _escapeXml(_truncateStr(terms, 48)), '</text>'
         ));
     }
 
@@ -2002,13 +2048,230 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         return string(abi.encodePacked(_uint2str(whole), ".", f, " USDC"));
     }
 
+    // ══════════════════════════════════════════════════════════════════════
+    // FOUR LAYERS, IN THIS ORDER, AND THEY ARE NOT INTERCHANGEABLE.
+    //
+    // The terms are a string a human typed, and by the time anyone reads them
+    // back they have been pasted into three nested documents at once. Each of
+    // the three forbids different characters and spells its escapes
+    // differently, so each gets a pass of its own. Every defect this cluster
+    // was written against is one layer doing another one's job, or not being
+    // there at all:
+    //
+    //   1. THE CUT      -- `_truncateStr`, counted in LETTERS, never in bytes.
+    //   2. JSON         -- `_escapeJson`: '"', '\\', and every control byte.
+    //   3. XML          -- `_escapeXml`: '&', '<', '>'. THE PICTURE ONLY.
+    //   4. THE ADDRESS  -- `_escapeUri`: percent-encoding, ON TOP OF THE
+    //                      FINISHED JSON, because the whole document leaves
+    //                      here as a `data:` URI and a URI has its own rules.
+    //
+    // WHICH LAYERS RUN WHERE. The attribute takes 1, then 2, then 4. The
+    // picture takes 1, then 3, and is then base64-encoded -- and base64's
+    // alphabet (A-Z a-z 0-9 + / =) contains nothing layer 4 would touch, which
+    // is why the picture needs no fourth pass and the attribute does.
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Cuts `s` down to at most `maxLen` BYTES, and never through the middle
+    /// of a letter.
+    ///
+    /// ⚠️ WHY THE WALK-BACK. UTF-8 is variable width -- one byte for ASCII,
+    /// two for Cyrillic, three for CJK, four for an emoji -- so a budget
+    /// counted in bytes lands inside a letter whenever it falls mid-sequence,
+    /// and what is left is not text. Measured on Base Sepolia deal
+    /// 0x20E1E36A...: its picture ended in a replacement character, because
+    /// the 48th byte of its terms was the second half of a Cyrillic letter.
+    /// The owner read that as "the picture fell apart".
+    ///
+    /// A continuation byte is `10xxxxxx`. Stepping back over them costs at
+    /// most three iterations and gives up at most one letter, which is why the
+    /// budget is honoured to within one character rather than merely honoured.
     function _truncateStr(string memory s, uint256 maxLen) private pure returns (string memory) {
         bytes memory b = bytes(s);
         if (b.length <= maxLen) return s;
-        bytes memory r = new bytes(maxLen + 3);
-        for (uint256 i = 0; i < maxLen; i++) r[i] = b[i];
-        r[maxLen] = '.'; r[maxLen + 1] = '.'; r[maxLen + 2] = '.';
+        uint256 end = maxLen;
+        while (end > 0 && uint8(b[end]) & 0xC0 == 0x80) end--;
+        bytes memory r = new bytes(end + 3);
+        for (uint256 i = 0; i < end; i++) r[i] = b[i];
+        r[end] = '.'; r[end + 1] = '.'; r[end + 2] = '.';
         return string(r);
+    }
+
+    /// The deal's terms as the BODY OF A JSON STRING: the quote, the
+    /// backslash, and every control byte 0x00-0x1F, which RFC 8259 forbids
+    /// raw inside a string.
+    ///
+    /// ⚠️ WHAT THIS COST BEFORE IT EXISTED. Measured off Base Sepolia on
+    /// 6 September 2026: deal 0xf45EdB8D... returns 2988 characters of
+    /// `tokenURI` and JSON.parse dies on it -- "Bad control character in
+    /// string literal at position 2870", a raw newline the client typed into
+    /// the terms. Nothing rendered the token: not this project's pages, not a
+    /// wallet, not an aggregator. It looked, from the outside, like the NFT
+    /// did not exist.
+    ///
+    /// ⚠️ THIS IS NOT `_escapeXml` AND MUST NEVER BE MERGED WITH IT. The two
+    /// documents forbid different characters and spell their escapes
+    /// differently: `&` is nothing to JSON and fatal to XML, `\n` is fatal to
+    /// JSON and ordinary whitespace in XML. One escaper serving both would be
+    /// wrong in both places while looking like the problem had been solved.
+    function _escapeJson(string memory s) private pure returns (string memory out) {
+        bytes memory b = bytes(s);
+        uint256 n = b.length;
+        // Written in assembly, and only because the plain Solidity version of
+        // these two loops came to 2_343 bytes against 1_331 of headroom --
+        // measured 6 September 2026, 25_588 against the EIP-170 ceiling of
+        // 24_576. The rules below are the same ones; what is gone is the
+        // bounds check on every byte written and the zero-fill of a buffer
+        // every byte of which is then overwritten.
+        assembly ("memory-safe") {
+            out := mload(0x40)
+            let dst := add(out, 0x20)
+            let src := add(b, 0x20)
+            for { let i := 0 } lt(i, n) { i := add(i, 1) } {
+                let c := byte(0, mload(add(src, i)))
+                switch c
+                // 0x5C is a backslash; the second byte is the escape letter.
+                case 0x22 { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x22) dst := add(dst, 2) } // "
+                case 0x5C { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x5C) dst := add(dst, 2) } // \\
+                case 0x0A { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x6E) dst := add(dst, 2) } // \n
+                case 0x0D { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x72) dst := add(dst, 2) } // \r
+                case 0x09 { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x74) dst := add(dst, 2) } // \t
+                default {
+                    switch lt(c, 0x20)
+                    // Everything else below 0x20 has no short form and needs
+                    // the six-byte one. Kept rather than dropped: the terms
+                    // are what an arbiter judges by, and quietly losing part
+                    // of them is worse than showing an escape.
+                    case 1 {
+                        mstore8(dst, 0x5C)                                              // \
+                        mstore8(add(dst, 1), 0x75)                                      // u
+                        mstore8(add(dst, 2), 0x30)                                      // 0
+                        mstore8(add(dst, 3), 0x30)                                      // 0
+                        mstore8(add(dst, 4), byte(shr(4, c), "0123456789abcdef"))
+                        mstore8(add(dst, 5), byte(and(c, 15), "0123456789abcdef"))
+                        dst := add(dst, 6)
+                    }
+                    default { mstore8(dst, c) dst := add(dst, 1) }
+                }
+            }
+            mstore(out, sub(dst, add(out, 0x20)))
+            mstore(0x40, and(add(dst, 31), not(31)))
+        }
+    }
+
+    /// The deal's terms as XML character data: `&`, `<` and `>`.
+    ///
+    /// ⚠️ THE ORDER-OF-REPLACEMENT TRAP IS NOT AVOIDED HERE, IT IS ABSENT.
+    /// Doing this as successive string replacements has one right order --
+    /// `&` first, or the ampersands the later passes write get escaped again
+    /// -- and every other order is a bug that survives casual reading. This
+    /// pass reads each INPUT byte exactly once and never looks at its own
+    /// output, so no order exists to get wrong.
+    ///
+    /// Control bytes are turned into spaces rather than escaped, and that is
+    /// the one place this differs from `_escapeJson`: XML 1.0 cannot carry
+    /// 0x00-0x08, 0x0B, 0x0C or 0x0E-0x1F at all, not even as a numeric
+    /// character reference, so there is nothing to escape them INTO. A picture
+    /// carrying one is a picture no parser will open. Tab, newline and
+    /// carriage return are legal and pass through.
+    ///
+    /// ⚠️ Not the same function as `_escapeJson`; see the warning there.
+    function _escapeXml(string memory s) private pure returns (string memory out) {
+        bytes memory b = bytes(s);
+        uint256 n = b.length;
+        // Assembly for the same reason as `_escapeJson`; see the note there.
+        assembly ("memory-safe") {
+            out := mload(0x40)
+            let dst := add(out, 0x20)
+            let src := add(b, 0x20)
+            for { let i := 0 } lt(i, n) { i := add(i, 1) } {
+                let c := byte(0, mload(add(src, i)))
+                switch c
+                case 0x26 { mstore8(dst, 0x26) mstore8(add(dst, 1), 0x61) mstore8(add(dst, 2), 0x6D) mstore8(add(dst, 3), 0x70) mstore8(add(dst, 4), 0x3B) dst := add(dst, 5) } // &amp;
+                case 0x3C { mstore8(dst, 0x26) mstore8(add(dst, 1), 0x6C) mstore8(add(dst, 2), 0x74) mstore8(add(dst, 3), 0x3B) dst := add(dst, 4) } // &lt;
+                case 0x3E { mstore8(dst, 0x26) mstore8(add(dst, 1), 0x67) mstore8(add(dst, 2), 0x74) mstore8(add(dst, 3), 0x3B) dst := add(dst, 4) } // &gt;
+                default {
+                    // Tab (0x09), newline (0x0A) and carriage return (0x0D)
+                    // are the only control bytes XML 1.0 can carry; the rest
+                    // become spaces, because there is nothing to escape them
+                    // into.
+                    if and(lt(c, 0x20), iszero(or(eq(c, 0x09), or(eq(c, 0x0A), eq(c, 0x0D))))) {
+                        c := 0x20
+                    }
+                    mstore8(dst, c)
+                    dst := add(dst, 1)
+                }
+            }
+            mstore(out, sub(dst, add(out, 0x20)))
+            mstore(0x40, and(add(dst, 31), not(31)))
+        }
+    }
+
+    /// The finished JSON as part of an ADDRESS: the percent sign and the hash.
+    ///
+    /// ⚠️ WHAT A '#' DOES, MEASURED 6 SEPTEMBER 2026 AND NOT REASONED ABOUT.
+    /// `tokenURI` hands back `data:application/json;utf8,{...}`, and that is a
+    /// URI, so a URI parser reads it. Terms of "pay after review #2, budget
+    /// 50% now" render 2_873 characters; Node's WHATWG `new URL()` puts the
+    /// last 30 of them in `url.hash` -- an anchor, not data -- and what is
+    /// left ends in the middle of a string, so `JSON.parse` dies with
+    /// "Unterminated string in JSON at position 2824". Nothing renders. The
+    /// same shape of failure as the raw newline, under a different rule, in a
+    /// third document.
+    ///
+    /// ⚠️ AND WHY '%' IS NOT OPTIONAL, measured the same day. Terms of "budget
+    /// 50% now" are fine for a reader that splits on the comma, and kill a
+    /// reader that percent-decodes -- the correct way to read a URI -- with
+    /// URIError "URI malformed". Beyond that, encoding '#' alone would make
+    /// the two DIFFERENT inputs "%23" and "#" arrive as the same three
+    /// characters, and nothing downstream could tell them apart again. The
+    /// pair is the unit; neither half of it is any use alone.
+    ///
+    /// ⚠️ THE ORDER-OF-REPLACEMENT TRAP IS ABSENT HERE, NOT AVOIDED -- the
+    /// same property `_escapeXml` has, and it matters more here. Written as
+    /// successive replacements, '%' MUST be done first, or the escapes the
+    /// later passes write get re-encoded and '#' comes out as "%2523". This
+    /// pass reads each INPUT byte exactly once and never looks at its own
+    /// output, so there is no order to get wrong.
+    ///
+    /// ⚠️ IT IS APPLIED TO THE TERMS, NOT TO THE WHOLE DOCUMENT, and that is a
+    /// measurement rather than a preference. With ordinary terms the finished
+    /// document holds ZERO '#' and ZERO '%' -- the addresses are hex, the
+    /// numbers are decimal, the picture is base64 -- so the terms are the only
+    /// place either character can enter, and a document-wide pass of this same
+    /// rule would emit the same bytes for a pass over 2_800 of them instead of
+    /// 200. A document-wide pass that encoded everything a URI reserves would
+    /// be worse than useless: it would encode all 70 of the document's quotes
+    /// too, and every reader that does NOT percent-decode would stop seeing a
+    /// certificate at all -- including this project's own reader,
+    /// `frontend/src/lib/tokenUriImage.ts`, which splits on the first comma
+    /// and calls JSON.parse on the tail.
+    ///
+    /// ⚠️ Neither `_escapeJson` nor `_escapeXml`; see the roll call above.
+    function _escapeUri(string memory s) private pure returns (string memory out) {
+        bytes memory b = bytes(s);
+        uint256 n = b.length;
+        // Assembly for the same reason as the other two; see the note on
+        // `_escapeJson`.
+        assembly ("memory-safe") {
+            out := mload(0x40)
+            let dst := add(out, 0x20)
+            let src := add(b, 0x20)
+            for { let i := 0 } lt(i, n) { i := add(i, 1) } {
+                let c := byte(0, mload(add(src, i)))
+                // 0x25 is '%' and 0x23 is '#'. Both come out as "%" followed
+                // by their two hex digits.
+                switch or(eq(c, 0x25), eq(c, 0x23))
+                case 1 {
+                    mstore8(dst, 0x25)
+                    mstore8(add(dst, 1), byte(shr(4, c), "0123456789ABCDEF"))
+                    mstore8(add(dst, 2), byte(and(c, 15), "0123456789ABCDEF"))
+                    dst := add(dst, 3)
+                }
+                default { mstore8(dst, c) dst := add(dst, 1) }
+            }
+            mstore(out, sub(dst, add(out, 0x20)))
+            mstore(0x40, and(add(dst, 31), not(31)))
+        }
     }
 
     function _base64Encode(bytes memory data) private pure returns (string memory) {
