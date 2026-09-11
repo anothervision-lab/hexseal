@@ -43,8 +43,8 @@ via_ir = true
 # model, and under it testBurningFaultNoticeCannotBlockActivationTimeout
 # fails -- i.e. the shipped 210_000 limit on triggerActivationTimeout() may
 # not survive a gas-burning fault notice. That is an open question about a
-# live budget, NOT something to settle by choosing a flag. See
-# docs/OPEN-ITEMS.md.
+# live budget, NOT something to settle by choosing a flag, and it is carried
+# on the open list rather than closed here.
 #
 # `solc` is pinned to what the CHAIN actually runs, not to the newest that
 # compiles. Read from Base Sepolia on 1 Sept 2026: the Agreement

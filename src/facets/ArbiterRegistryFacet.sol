@@ -1497,9 +1497,9 @@ contract ArbiterRegistryFacet {
     /// published.
     error HasLiveRemovalProposal();
 
-    // ── Handover of the corps to governance (15 August 2026): the owner's
-    // decision verbatim — "no hand-seated ones", "the person must step out and
-    // only the diamond stays, admitting people through the gate" ──
+    // ── Handover of the corps to governance (15 August 2026): no hand-seated
+    // ones, the person steps out and only the diamond stays, admitting people
+    // through the gate ──
     /// activateDAO() is one-way and is undone nowhere: switching it on without
     /// having set daoAddress orphans the corps in one transaction — automation
     /// catches only what the chain sees, and seating or removing by hand becomes
@@ -1780,11 +1780,11 @@ contract ArbiterRegistryFacet {
 
     // -------- ADMIN: MANAGE ARBITERS --------
 
-    /// The chief's role is abolished together with governance activation (the
-    /// owner's decision verbatim, 15 August 2026: "no hand-seated ones", "the
-    /// person must step out and only the diamond stays, admitting people through
-    /// the gate"). A ratchet: isDaoActive() is irreversible, and after the
-    /// handover nobody at all can appoint a new chief.
+    /// The chief's role is abolished together with governance activation
+    /// (decided 15 August 2026: no hand-seated ones, the person steps out and
+    /// only the diamond stays, admitting people through the gate). A ratchet:
+    /// isDaoActive() is irreversible, and after the handover nobody at all can
+    /// appoint a new chief.
     ///
     /// ⚠️ THE PREDICATE HERE IS THE ABOLITION OF THE ROLE, NOT THE HANDOVER OF
     /// SEATING (16 August 2026). It is NOT the same condition as in
@@ -1862,9 +1862,9 @@ contract ArbiterRegistryFacet {
     }
 
     /// Entry into the arbiter corps under live governance is only through
-    /// applyAsArbiter (self-registration past the XP/cleanStreak/bond gate). The
-    /// owner's decision verbatim, 15 August 2026: "no hand-seated ones" —
-    /// neither the owner nor the chief seats arbiters once governance is on.
+    /// applyAsArbiter (self-registration past the XP/cleanStreak/bond gate).
+    /// Decided 15 August 2026: no hand-seated ones — neither the owner nor the
+    /// chief seats arbiters once governance is on.
     ///
     /// ⚠️ On `&& d.daoAddress != address(0)` — see _requireSeatingNotHandedOver.
     ///
@@ -2846,8 +2846,8 @@ contract ArbiterRegistryFacet {
             // The seat is no longer taken here. The automatic path stops the
             // arbiter at once and ACCUSES him; the removal itself runs through
             // the common door — proposal, 48 hours, a right to answer — like
-            // every other removal. Owner's decision of 18 August 2026: "the
-            // same door, and the suspension is the fast path".
+            // every other removal. Decided 18 August 2026: the same door, and
+            // the suspension is the fast path.
             //
             // Before this, the quiet door also survived the handover:
             // overturnVerdict sits under onlyOwnerOrDAO, which lets the owner

@@ -908,8 +908,8 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
     // ============================================================
     //  THE AUTOMATIC ROAD GIVES THE RIGHT OF REPLY TOO
     //
-    //  The owner's decision: the rule sounds in one sentence — "you were removed, so
-    //  you may answer" — regardless of who pressed. The ArbiterDemoted public record
+    //  The rule sounds in one sentence — you were removed, so you may answer —
+    //  regardless of who pressed. The ArbiterDemoted public record
     //  is eternal exactly as ArbiterRemovedForCause is.
     //
     //  ⚠️ Removal later moved into the common door, and `removedAt` is now set only by

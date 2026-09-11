@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import "./BoardsFixture.sol";
 import "../src/Agreement.sol";
 
-/// Tests for the emergency brake (decision 17, docs/DECISIONS.md).
+/// Tests for the emergency brake (decision 17).
 ///
 /// The brake is a self-expiring hold on the doors where money ENTERS the
 /// protocol. Three properties carry the whole design, and each one is a way the

@@ -9,10 +9,9 @@
 #
 # That hand-copy is deliberate and must stay: reading the cap back out of the
 # contract under test would make the assertion a mirror -- expected and
-# measured coming from the same place, agreeing with themselves forever
-# (docs/PROCESS.md). But until 1 Sept 2026 the copy was joined to the original
-# by NOTHING except that `//` comment, and the comment is not checked by
-# anything.
+# measured coming from the same place, agreeing with themselves forever. But
+# until 1 Sept 2026 the copy was joined to the original by NOTHING except that
+# `//` comment, and the comment is not checked by anything.
 #
 # The hole that leaves is the expensive one. When a headroom lock goes red the
 # cheapest-looking repair is to raise the number in the test until it is green

@@ -1264,8 +1264,8 @@ contract ArbiterAccountabilityFacet {
         // answer CauseNotProven. The charge did not die with it — it hung for
         // the full PROPOSAL_TTL, barring resignAsArbiter — so he ended up
         // neither removed nor free, which is the worse of the two outcomes for
-        // everybody. Owner's words: "doing something and then getting away with
-        // it does not fly — prove you did not do it".
+        // everybody. Doing something and then getting away with it does not
+        // fly: a charge is answered by disproving it, not by outliving it.
         //
         // ⚠️ WHAT DOES CANCEL A CHAIN ACCUSATION — exactly four things, and
         // good behaviour afterwards is not among them. This list is the answer

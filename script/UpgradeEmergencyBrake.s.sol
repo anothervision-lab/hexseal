@@ -46,9 +46,9 @@ pragma solidity ^0.8.20;
 // go early.
 //
 // ⚠️ WHY THE FIVE NEW SELECTORS ARE A GROUP OF THEIR OWN AND NOT FOLDED INTO
-// THE FACTORY'S Replace. That is decision 55 (docs/DECISIONS.md), taken on
-// 31 August after the same shortcut was proposed and refused: "Приклеить к ней
-// `Add` значит эту защиту снять ради экономии одной транзакции". `Replace`
+// THE FACTORY'S Replace. That is decision 55, taken on 31 August after the
+// same shortcut was proposed and refused: gluing an `Add` onto the Replace
+// takes this protection off in order to save one transaction. `Replace`
 // reverts on a selector that is NOT mounted; `Add` reverts on one that IS.
 // A cut written as a single quiet Replace has no pair that can drop it, which
 // sounds like a virtue and is the opposite: the five new functions would have
@@ -88,8 +88,8 @@ pragma solidity ^0.8.20;
 // THE STORAGE IS APPENDED TO, NEVER REORDERED. One new `uint256` at the end of
 // `FactoryStorage.Layout`. The dead `paused` bool stays exactly where it is,
 // packed in the tail of slot 4 -- not reused, not removed. Slots on a live
-// diamond are never renumbered (docs/CONTRACT_GUIDE.md), and the July 2026
-// `termsHash -> terms` accident is what that rule is made of. The post-flight
+// diamond are never renumbered, and the July 2026 `termsHash -> terms`
+// accident is what that rule is made of. The post-flight
 // below reads eight witnesses across the cut and refuses if any of them moved,
 // which is how an append that silently landed on an occupied slot would be
 // caught: `newDealsPausedUntil()` answering anything but zero on a diamond that

@@ -117,9 +117,9 @@ contract ArbiterApplicationsFacet {
     // -------- CONSTANTS --------
 
     /// How long an application stands, AND how long a refused applicant waits
-    /// before putting himself forward again. Owner's decision of 24 August
-    /// 2026, and one number rather than two on purpose: "as long as an
-    /// application lives, that is how long you wait after a refusal".
+    /// before putting himself forward again. Decided on 24 August 2026, and
+    /// one number rather than two on purpose: as long as an application lives,
+    /// that is how long you wait after a refusal.
     ///
     /// The life of the application answers the owner's own rule that a silent
     /// queue is worse than a refusal — nobody has to REMEMBER an applicant for
@@ -272,10 +272,11 @@ contract ArbiterApplicationsFacet {
 
     // ── The filter door, and why every refusal names ONE fact ─────────────
     //
-    // Owner's decision of 11 September 2026, and the whole of it: "48 hours is
-    // a reset of something already confirmed, and an application does not need
-    // that. What matters is what has already been EARNED, not the selection
-    // window. The bond comes back. Nothing is stolen. Plainly a filter."
+    // Decided on 11 September 2026, and this is the whole of it. The 48-hour
+    // pause is a reset of something already confirmed, and an application does
+    // not need one. What matters is what has already been EARNED, not the
+    // selection window. The bond comes back and nothing is stolen: plainly a
+    // filter.
     //
     // So a seat nothing has been earned in is taken back at once, and a seat
     // with a record behind it keeps the whole procedure — proposal, 48-hour
@@ -875,11 +876,11 @@ contract ArbiterApplicationsFacet {
     /// afterwards meant `removeArbiterForCause` — a proposal, a 48-hour pause,
     /// a right of reply, a fourteen-day window, a numeric CAUSE and a forfeited
     /// bond. That is, to un-seat somebody who had done nothing at all, a person
-    /// had to accuse him of something and take his money. The owner's words on
-    /// 11 September 2026: "48 hours is a reset of something already confirmed,
-    /// and an application does not need that... if I do not leave an accusation,
-    /// what am I waiting 48 hours for. The bond comes back. Nothing is stolen,
-    /// nobody is cheated. Plainly a filter."
+    /// had to accuse him of something and take his money. Decided on
+    /// 11 September 2026: the 48-hour pause is a reset of something already
+    /// confirmed, and an application does not need one. With no accusation left
+    /// behind and the bond returned in full, nothing is stolen and nobody is
+    /// cheated -- plainly a filter.
     ///
     /// WHAT IT IS NOT. It is not a second removal door and it must never grow
     /// into one. The procedure is untouched: every arbiter with a record behind

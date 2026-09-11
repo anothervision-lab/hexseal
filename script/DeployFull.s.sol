@@ -40,7 +40,7 @@ pragma solidity ^0.8.20;
 // same threshold from the other side), and ArbiterAccountabilityFacet gained
 // removeArbiterForCause, getMistakeThreshold and three test getters for the light
 // bench (+5) — and along with that addArbiter/setChiefArbiter began reverting while
-// the DAO is active (the owner's decision, word for word: "no hand-picked ones"),
+// the DAO is active (a deliberate decision: no hand-picked ones),
 // with no change to the selector count; then 191, the same day, in review: three
 // duplicate test getters (isRegisteredArbiterHere/getMistakeStreakOf/
 // getNoResponseAtHere — exactly the defect getChiefArbiterAddress had been) were

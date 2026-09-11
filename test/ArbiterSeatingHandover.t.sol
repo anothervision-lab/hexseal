@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// "No hand-picked ones" — the owner's decision, word for word, taken on
-// 15 August 2026 AFTER the work had been briefed: "hand-picked arbiters will
-// have to convert into DAO arbiters, the chief is abolished, the human must step
-// out and only the diamond remains, admitting people through a gate". With the
-// DAO active a human has no door into the corps at all:
+// No hand-picked ones — decided on 15 August 2026, AFTER the work had been
+// briefed: hand-picked arbiters convert into DAO arbiters, the chief is
+// abolished, the human steps out and only the diamond remains, admitting
+// people through a gate. With the DAO active a human has no door into the
+// corps at all:
 //   • addArbiter      — reverts SeatingHandedOver(); the only way in is
 //                        applyAsArbiter (self-enrolment through the
 //                        XP/cleanStreak/bond gate);

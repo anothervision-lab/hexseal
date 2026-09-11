@@ -2,7 +2,7 @@
   "note": [
     "A SNAPSHOT OF THE LIVE CHAIN BEFORE THE \"EMERGENCY BRAKE\" CUT (3 September 2026).",
     "Read off Base Sepolia at block 46306403 with the public endpoint, NOT derived from",
-    "any script's own lists and NOT copied out of a document. CLAUDE.md forbids the",
+    "any script's own lists and NOT copied out of a document. The house rule forbids",
     "second: addresses and selector counts come from the chain or from",
     "broadcast/<Script>.s.sol/84532/run-latest.json, never from prose.",
     "",

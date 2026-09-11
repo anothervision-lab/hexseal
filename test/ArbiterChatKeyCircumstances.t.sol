@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 // The project's five circumstance questions, applied to setArbiterChatKey().
-// The rule they come from, word for word: "'fix this' gets done formally;
-// 'prove by measurement that something changed' does not." Every test below is
+// The rule they come from: `fix this` gets done formally, `prove by
+// measurement that something changed` does not. Every test below is
 // a measurement rather than an argument: it checks the state AFTER the event,
 // not the fact that a function was called.
 //

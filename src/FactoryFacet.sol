@@ -816,11 +816,11 @@ contract FactoryFacet {
     // Who may press: the diamond's owner, and nobody else. Not the arbiter
     // chief — decision 17 says so outright, and the reason is scope: the chief
     // is a role invented to run the arbiter corps, and this stops the whole
-    // marketplace. "После передачи — у адреса управления" needs no separate
-    // wiring: handover transfers ownership of the diamond, and `onlyOwner`
-    // follows it. A second door for `daoAddress` would be a second key to the
-    // same lock, and `daoAddress` is the arbiter registry's field, not this
-    // one's.
+    // marketplace. After a handover the power sits with whatever address
+    // governs, and that needs no separate wiring: handover transfers ownership
+    // of the diamond, and `onlyOwner` follows it. A second door for
+    // `daoAddress` would be a second key to the same lock, and `daoAddress` is
+    // the arbiter registry's field, not this one's.
     //
     // This adds no centralisation that was not already there: the owner can
     // stop the marketplace today by replacing a facet. What the brake buys is

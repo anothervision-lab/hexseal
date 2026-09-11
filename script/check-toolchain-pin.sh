@@ -27,8 +27,8 @@
 # WHERE THE EXPECTED VALUES COME FROM. They are literals HERE, fixed by hand.
 # They are deliberately NOT read out of ci.yml or foundry.toml: a gate that
 # derives what it expects from the thing it checks agrees with itself always
-# and can never fail (docs/PROCESS.md, the mirror). Changing the toolchain is
-# meant to cost one edit in this file, made on purpose.
+# and can never fail -- that is the mirror. Changing the toolchain is meant to
+# cost one edit in this file, made on purpose.
 #
 # EXPECTED_SOLC is not a taste. Read from Base Sepolia on 1 Sept 2026, the
 # Agreement implementation shipped by the 31 Aug cut

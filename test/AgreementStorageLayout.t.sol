@@ -45,8 +45,8 @@ import "../src/Agreement.sol";
 /// EXPECTED VALUES ARE A HUMAN-FIXED LITERAL. The table below is typed out by
 /// hand and reviewed; it is NOT derived from the artifact, from the snapshot
 /// file, or from anything else the test also checks. A lock whose expectation is
-/// computed from the thing under test agrees with itself forever (recorded as
-/// the 4th way to be fooled by a red count, docs/PROCESS.md).
+/// computed from the thing under test agrees with itself forever -- the 4th
+/// way to be fooled by a red count.
 ///
 /// WHAT IT CATCHES: reordering two fields (even two that share one slot),
 /// inserting a field in the middle, widening a type, a shrunk or emptied layout
