@@ -63,6 +63,7 @@ import "../src/FactoryFacet.sol";
 import "../src/AgreementDeployer.sol";
 import "../src/Agreement.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
+import "../src/facets/ArbiterApplicationsFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 
@@ -340,7 +341,9 @@ abstract contract DiamondDeathEscrowBase is Test {
         ownSels[2] = OwnershipFacet.acceptOwnership.selector;
         ownSels[3] = OwnershipFacet.pendingOwner.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](8);
+
+
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](9);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet),        IDiamondCut.FacetCutAction.Add, regSels);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet),         IDiamondCut.FacetCutAction.Add, facSels);
         cut[2] = IDiamondCut.FacetCut(address(diamondCutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
@@ -350,6 +353,9 @@ abstract contract DiamondDeathEscrowBase is Test {
         cut[6] = IDiamondCut.FacetCut(address(reputationFacet),      IDiamondCut.FacetCutAction.Add, repSels);
         cut[7] = IDiamondCut.FacetCut(
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
+        );
+        cut[8] = IDiamondCut.FacetCut(
+            address(new ArbiterApplicationsFacet()), IDiamondCut.FacetCutAction.Add, _applicationsSelectors()
         );
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
@@ -361,6 +367,45 @@ abstract contract DiamondDeathEscrowBase is Test {
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
+
+        _postSeatBond(arbiterAddr);
+    }
+
+    /// The bond behind a hand-given seat (8 September 2026).
+    ///
+    /// `addArbiter` seats and takes no money; since the bond gate landed, every
+    /// arbiter door refuses an unbonded seat with `BondNotPosted`. So this rig's
+    /// arbiter pays like a real one — his own USDC, moved by his own call.
+    ///
+    /// ⚠️ NOT faked with `vm.store`. A bond booked without the money behind it
+    /// would leave the balance identity 50 USDC short, and that identity is the
+    /// whole point of this fixture.
+    ///
+    /// The amount is READ from the diamond, never written as a literal here: a
+    /// copy would go on agreeing with itself after the real number moved.
+    ///
+    /// Its own function rather than four lines in setUp: setUp is already one
+    /// stack slot from the via_ir limit.
+    /// Three selectors of the applications facet, and no more: the door a seated
+    /// arbiter posts his bond through, the read that says whether he has, and
+    /// the requirements this fixture reads the amount from.
+    ///
+    /// A function rather than a local in the cut builder: that builder is one
+    /// stack slot from the via_ir limit, and a fourth memory array there does
+    /// not fit.
+    function _applicationsSelectors() internal pure returns (bytes4[] memory appSels) {
+        appSels = new bytes4[](3);
+        appSels[0] = ArbiterApplicationsFacet.postArbiterBond.selector;
+        appSels[1] = ArbiterApplicationsFacet.isArbiterActive.selector;
+        appSels[2] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
+    }
+
+    function _postSeatBond(address who) internal {
+        (, , uint256 seatBond, ) =
+            ArbiterApplicationsFacet(address(diamond)).getApplicationRequirements();
+        usdc.mint(who, seatBond);
+        vm.prank(who); usdc.approve(address(diamond), seatBond);
+        vm.prank(who); ArbiterApplicationsFacet(address(diamond)).postArbiterBond();
     }
 
     // ============================================================

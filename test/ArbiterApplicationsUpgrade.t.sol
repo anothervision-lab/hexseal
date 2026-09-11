@@ -60,7 +60,19 @@ contract ArbiterApplicationsUpgradeTest is Test {
     /// being a stand-in without anybody noticing.
     uint256 constant CHAIN_FACETS_BEFORE   = 12;
     uint256 constant CHAIN_ROUTED_BEFORE   = 203;
-    uint256 constant ADDED_SELECTORS       = 11;
+    // ⚠️ ELEVEN WHEN THIS CUT SHIPPED, FIFTEEN IN THE TREE (8 and
+    // 11 September 2026). The facet gained `postArbiterBond()` and
+    // `isArbiterActive(address)`, then `revokeUnprovenSeat(address,string)` and
+    // `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)`.
+    // This stand drives the script over a LOCAL rig, and the script's job is
+    // "mount the whole facet" — so the number follows the compiled facet, not
+    // what the live chain received. The live diamond gets the first two through
+    // script/UpgradeArbiterBondRequired.s.sol and the last two through
+    // script/UpgradeUnprovenSeatRevocationAndBondPermit.s.sol, which carries both of the
+    // 11 September decisions in one transaction; re-running the applications
+    // cut against it is refused by its own assertAllUnmounted before any money
+    // moves.
+    uint256 constant ADDED_SELECTORS = 15;
 
     /// ⚠️ ONE PENDING DELTA, NAMED RATHER THAN FOLDED IN. Since 25 August 2026
     /// the tree also carries script/UpgradeBoardFeeDelivery.s.sol, which ADDS
@@ -130,8 +142,8 @@ contract ArbiterApplicationsUpgradeTest is Test {
 
         // And said out loud as a number a person fixed, so a facet that
         // silently grows a twelfth function stops here too.
-        assertEq(upgrade.addSelectors().length, ADDED_SELECTORS, "the cut no longer adds eleven selectors");
-        assertEq(upgrade.artifactSelectors().length, ADDED_SELECTORS, "the facet no longer exposes eleven functions");
+        assertEq(upgrade.addSelectors().length, ADDED_SELECTORS, "the cut no longer adds the whole facet");
+        assertEq(upgrade.artifactSelectors().length, ADDED_SELECTORS, "the facet exposes a different number of functions");
     }
 
     /// Every added selector against the LIVE CHAIN as it was read on 24 August
@@ -198,7 +210,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
         assertEq(cuts.length, 1, "the cut must be a single element - there is nothing to replace or remove");
         assertEq(cuts[0].facetAddress, facetAddr, "the element points at the facet it was handed");
         assertTrue(cuts[0].action == IDiamondCut.FacetCutAction.Add, "the element must be Add");
-        assertEq(cuts[0].functionSelectors.length, ADDED_SELECTORS, "the element carries all eleven selectors");
+        assertEq(cuts[0].functionSelectors.length, ADDED_SELECTORS, "the element carries the whole facet");
     }
 
     function test_PreFlightPassesOnAPreCutDiamondAndTheCutLands() public {
@@ -235,7 +247,16 @@ contract ArbiterApplicationsUpgradeTest is Test {
         // numbers the deployment record will carry.
         assertEq(IDiamondLoupe(address(diamond)).facetAddresses().length, 13, "13 facets after the cut");
         assertEq(
-            _routed(), 214 + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS,
+            // ⚠️ The cut now carries fifteen, not eleven: the facet gained
+            // `postArbiterBond()` and `isArbiterActive(address)` on 8 September
+            // 2026, then `revokeUnprovenSeat(address,string)` and
+            // `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)` on the
+            // 11th. ADDED_SELECTORS is the one number that moved on the cut's
+            // side; the three trailing literals are the same growth seen from
+            // the census side, and they stay THREE — the bond pair, the seat
+            // door and the permit door are three decisions, and a single 4
+            // could no longer say which of them drifted.
+            _routed(), 214 + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS + 2 + 1 + 1,
             "214 routed selectors after the cut, plus the pending cuts' adds"
         );
     }
@@ -271,7 +292,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
         IDiamondCut(address(diamond)).diamondCut(cuts, address(0), "");
     }
 
-    /// The rollback path, proved rather than described: the eleven selectors go
+    /// The rollback path, proved rather than described: every added selector goes
     /// dark and the rest of the diamond is untouched.
     function test_RollbackRemovesExactlyTheElevenSelectors() public {
         bytes4[] memory sels = upgrade.addSelectors();

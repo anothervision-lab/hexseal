@@ -236,6 +236,7 @@ contract DisputeSettlementTest is Test {
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
+        _bondSeat(arbiterAddr);
     }
 
     // ============================================================
@@ -2010,4 +2011,28 @@ contract DisputeSettlementTest is Test {
         assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(peer), 0, "claimable cleared");
         assertEq(usdc.balanceOf(address(relayForwarder)), 0, "the forwarder must never receive the refund");
     }
+
+    /// The bond behind a hand-given seat (8 September 2026).
+    ///
+    /// `addArbiter` seats and takes no money, and since the bond gate landed a
+    /// seated arbiter with a zero bond is refused by every arbiter door with
+    /// `BondNotPosted`. The real door is `ArbiterApplicationsFacet.postArbiterBond`;
+    /// this rig does not mount that facet, so the field is written directly —
+    /// the same device this file already uses to seat.
+    ///
+    /// Slot 12 of the arbiter namespace is `arbiterBond`, pinned by
+    /// test/StorageLayout.t.sol. The value is the real bond, 50 USDC at six
+    /// decimals.
+    ///
+    /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
+    /// in this file refunds or forfeits a bond; a rig that does either must
+    /// move real money instead, or the diamond pays out what it never took.
+    function _bondSeat(address who) internal {
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(who, uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 12)),
+            bytes32(uint256(50_000_000))
+        );
+    }
+
 }

@@ -84,9 +84,46 @@ library FactoryStorage {
         //
         // Whoever adds a new fee path adds it to this ledger too, or the
         // balance identity below stops holding:
-        //   USDC.balanceOf(diamond) == jobFunds + jobFeeHeld + requestFunds
-        //                            + requestFeeHeld + arbiter-namespace
-        //                            balances + undeliveredFee
+        //
+        //   USDC.balanceOf(diamond) == jobFunds + jobFeeHeld
+        //                            + requestFunds + requestFeeHeld
+        //                            + undeliveredFee
+        //                            + vaultBalance + the arbiter payroll pot
+        //                            + treasurySlice
+        //                            + arbiterBond + arbiterRewards
+        //                            + refundableBounty + disputeBounty
+        //                            + appeal deposits still in flight
+        //
+        // ⚠️ THE ARBITER HALF USED TO READ "arbiter-namespace balances", and
+        // that catch-all is what let two real terms hide inside it until
+        // 4 September 2026. The arbiter payroll pot (decision 69's stream) was
+        // uncounted because nothing filled it; the cut that set the stream's
+        // share to 20% made it fill on its own, with decision 73's payout not
+        // yet written -- a pot the diamond holds and nobody comes for. An
+        // uncounted pot does not merely go unbooked: under it any OTHER counter
+        // may drift low and be paid for out of money no one is collecting, so
+        // the withdrawal that should have failed loudly goes through in silence.
+        // The second was the appeal deposit between raiseAppeal and
+        // resolveAppeal. Name the terms; a catch-all cannot be checked.
+        //
+        // ⚠️ TWO OF THESE ARE NOT PLAIN BALANCES.
+        //   * `disputeVaultSubsidy` is NOT a term. It is a sub-label of
+        //     `disputeBounty` recording how much of that bounty came out of the
+        //     vault, and fundDispute already took it off `vaultBalance` without
+        //     moving a token. Adding it double-counts.
+        //   * `PendingVerdict.appealDeposit` is a RECEIPT, not a balance:
+        //     neither branch of resolveAppeal zeroes it. It counts only while
+        //     `appealed && !appealResolved`.
+        //
+        // ⚠️ ONE LEGITIMATE BREAK: a dispute fee credited here but whose
+        // transfer the token refused stays in the CLONE as
+        // Agreement.undeliveredFee, so the diamond's books lead its balance by
+        // exactly that much until somebody pulls it.
+        //
+        // The executable form of all of this is `_diamondLedger` in
+        // test/MoneyPathBase.sol, asserted after every movement of money by
+        // `_assertDiamondBalances`; test/DiamondLedgerIdentity.t.sol is the
+        // file that walks a whole dispute past it.
         uint256 undeliveredFee;
 
         // ---- appended 3 September 2026: the emergency brake (decision 17) ----
@@ -96,8 +133,9 @@ library FactoryStorage {
         // NOT a bool, and that is the whole design. A bool cannot expire by
         // itself, so somebody has to come back and clear it — and a switch that
         // stays down until a person remembers it is exactly the thing decision
-        // 17 refuses: "тихо заморозить протокол навсегда нельзя, придётся жать
-        // снова, и каждое нажатие видно". A timestamp lets go on its own.
+        // 17 refuses: the protocol must not be frozen for good and in silence —
+        // it has to be pressed again, and every press is visible. A timestamp
+        // lets go on its own.
         //
         // Zero — the state of the live diamond on the day this field appears —
         // reads as "not braked", and so does any timestamp already in the past.
@@ -342,7 +380,8 @@ contract FactoryFacet {
     /// still has the state.
     ///
     /// Emitted on EVERY press, including a press while the brake is already
-    /// down. That is what makes "нажал и забыл" impossible to hide: holding the
+    /// down. That is what makes pressing it and forgetting impossible to hide:
+    /// holding the
     /// brake for a week is not one silent flag, it is three signed
     /// transactions, each one in the log with a name against it.
     event NewDealsPaused(address indexed by, uint256 until);

@@ -575,7 +575,22 @@ contract DeployFullSelectorsTest is Test {
         // five are the entire delta, and they ship together in
         // script/UpgradeEmergencyBrake.s.sol, whose stand carries them as the
         // one named allowance between the local rig and that census.
-        assertEq(totalRouted, 227, "diamond should route exactly 227 selectors total");
+        // 227 -> 229 on 8 September 2026: ArbiterApplicationsFacet gained
+        // `postArbiterBond()` and `isArbiterActive(address)` — the door a
+        // hand-seated arbiter posts his own bond through, and the read that
+        // tells a form whether he still owes it. The live chain routes 227
+        // until script/UpgradeArbiterBondRequired.s.sol lands; this number is
+        // what a diamond built from THIS TREE routes, which is the thing the
+        // line is about.
+        // 229 -> 230 on 11 September 2026: ArbiterApplicationsFacet gains
+        // `revokeUnprovenSeat(address,string)`, the door that takes back a
+        // granted seat nothing has been earned in.
+        // 230 -> 231 on 11 September 2026, same day and the SAME cut, a second
+        // decision: `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)`,
+        // the bond door that takes a signed EIP-2612 paper instead of an
+        // allowance granted beforehand. The allowance door stays mounted beside
+        // it — whoever has already approved the diamond keeps his way in.
+        assertEq(totalRouted, 231, "diamond should route exactly 231 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

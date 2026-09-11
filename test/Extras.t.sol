@@ -211,6 +211,20 @@ contract ExtrasTest is Test {
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+        // A hand-given seat carries no bond, and since 8 September 2026 an
+        // unbonded seat is refused by every arbiter door. This rig mounts the
+        // registry by hand and has no applications facet, so the field is
+        // written directly — slot 12 of the arbiter namespace, pinned by
+        // test/StorageLayout.t.sol. No USDC moves, and nothing here refunds or
+        // forfeits a bond.
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(
+                arbiter,
+                uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 12
+            )),
+            bytes32(uint256(50_000_000))
+        );
     }
 
     // ============================================================
@@ -528,5 +542,129 @@ contract ExtrasTest is Test {
         vm.expectRevert(Agreement.ZeroAmount.selector);
         Agreement(agr).proposeExtra(0, EXTRA_HASH);
         vm.stopPrank();
+    }
+
+    // ============================================================
+    //  A TOP-UP CARRIES WORDS OF ITS OWN  (decision 76)
+    // ============================================================
+    //
+    // A dispute can begin with the top-up rather than with the deal. If it
+    // does, the arbiter must not find money that moved with nothing saying
+    // what for. The deal itself has refused empty terms since the beginning;
+    // these are the tests that say the top-up now refuses them too.
+
+    function testExtras_EmptyTermsReverts() public {
+        address agr = _deployActive();
+        vm.startPrank(client);
+        usdc.approve(agr, EXTRA_A + Agreement(agr).quoteExtraFee(EXTRA_A));
+        vm.expectRevert(Agreement.EmptyTerms.selector);
+        Agreement(agr).proposeExtra(EXTRA_A, "");
+        vm.stopPrank();
+    }
+
+    /// The positive half of the same pair. Without it the test above passes in
+    /// a world where proposeExtra refuses everything.
+    function testExtras_NonEmptyTermsIsAccepted() public {
+        address agr = _deployActive();
+        uint256 extraId = _proposeExtra(agr, EXTRA_A);
+
+        (uint256 amount, string memory terms, Agreement.ExtraStatus status) =
+            Agreement(agr).extras(extraId);
+        assertEq(amount, EXTRA_A, "amount not recorded");
+        assertEq(terms, EXTRA_HASH, "terms not recorded");
+        assertEq(uint8(status), uint8(Agreement.ExtraStatus.PENDING), "status");
+    }
+
+    /// A single character is enough. The chain's question is "was anything
+    /// recorded at all", not "is this good prose" — the same answer
+    /// `initialize` gives, and pinning it here stops a future minimum length
+    /// from arriving unannounced.
+    function testExtras_OneCharacterOfTermsIsEnough() public {
+        address agr = _deployActive();
+        vm.startPrank(client);
+        usdc.approve(agr, EXTRA_A + Agreement(agr).quoteExtraFee(EXTRA_A));
+        Agreement(agr).proposeExtra(EXTRA_A, ".");
+        vm.stopPrank();
+        assertEq(Agreement(agr).nextExtraId(), 1, "a one-character top-up was refused");
+    }
+
+    /// ⚠️ HALF OF THIS RULE LIVES IN THE INTERFACE, and this test says so out
+    /// loud rather than leaving it to be discovered on a live deal: the chain
+    /// measures LENGTH, so a string of spaces is recorded. Trimming is the
+    /// frontend's job (decision 37). If this test ever goes red because the
+    /// chain started refusing whitespace, that is a deliberate change of
+    /// position, not a bug fix — the deal's own terms would have to move with
+    /// it, or the two would disagree.
+    function testExtras_WhitespaceOnlyTermsPassTheChain() public {
+        address agr = _deployActive();
+        vm.startPrank(client);
+        usdc.approve(agr, EXTRA_A + Agreement(agr).quoteExtraFee(EXTRA_A));
+        Agreement(agr).proposeExtra(EXTRA_A, "   ");
+        vm.stopPrank();
+
+        (, string memory terms, ) = Agreement(agr).extras(0);
+        assertEq(terms, "   ", "the chain is expected to record whitespace, not refuse it");
+    }
+
+    /// THE REFUSAL MUST BE FREE OF CONSEQUENCE, not merely a revert. The check
+    /// sits ahead of nextExtraId, ahead of the write to `extras`, ahead of
+    /// pendingExtrasTotal / pendingExtraFeeTotal and ahead of the one
+    /// transferFrom — so an empty top-up must leave the ledger and both
+    /// balances exactly as it found them. Measured, not assumed: a check
+    /// placed after the writes would still revert and still look correct.
+    function testExtras_EmptyTermsMovesNothingAtAll() public {
+        address agr = _deployActive();
+
+        uint256 nextIdBefore   = Agreement(agr).nextExtraId();
+        uint256 pendingBefore  = Agreement(agr).pendingExtrasTotal();
+        uint256 feeTotalBefore = Agreement(agr).pendingExtraFeeTotal();
+        uint256 clientBefore   = usdc.balanceOf(client);
+        uint256 agrBefore      = usdc.balanceOf(agr);
+        uint256 execBefore     = usdc.balanceOf(executor);
+
+        vm.startPrank(client);
+        usdc.approve(agr, EXTRA_A + Agreement(agr).quoteExtraFee(EXTRA_A));
+        vm.expectRevert(Agreement.EmptyTerms.selector);
+        Agreement(agr).proposeExtra(EXTRA_A, "");
+        vm.stopPrank();
+
+        assertEq(Agreement(agr).nextExtraId(),          nextIdBefore,   "nextExtraId moved");
+        assertEq(Agreement(agr).pendingExtrasTotal(),   pendingBefore,  "pendingExtrasTotal moved");
+        assertEq(Agreement(agr).pendingExtraFeeTotal(), feeTotalBefore, "pendingExtraFeeTotal moved");
+        assertEq(usdc.balanceOf(client), clientBefore, "client paid for a refused top-up");
+        assertEq(usdc.balanceOf(agr),    agrBefore,    "the clone took money for a refused top-up");
+        assertEq(usdc.balanceOf(executor), execBefore, "executor balance moved");
+
+        // Slot 0 of the ledger must be untouched, not merely uncounted.
+        (uint256 amount, string memory terms, Agreement.ExtraStatus status) =
+            Agreement(agr).extras(nextIdBefore);
+        assertEq(amount, 0, "an amount was written for a refused top-up");
+        assertEq(terms, "", "terms were written for a refused top-up");
+        assertEq(uint8(status), uint8(Agreement.ExtraStatus.PENDING), "a status was written");
+
+        // And the money is still whole across every account.
+        assertEq(_systemBalance(agr), INITIAL_TOTAL, "invariant after a refused top-up");
+    }
+
+    /// The refusal must arrive BEFORE the deal's own state is consulted for
+    /// money reasons — but it must not arrive before the ones that are cheaper
+    /// still. This pins the order: a stranger with empty terms is told
+    /// NotClient, not EmptyTerms, so the new check did not quietly take over
+    /// somebody else's refusal.
+    function testExtras_EmptyTermsDoesNotShadowNotClient() public {
+        address agr = _deployActive();
+        vm.prank(executor);
+        vm.expectRevert(Agreement.NotClient.selector);
+        Agreement(agr).proposeExtra(EXTRA_A, "");
+    }
+
+    /// And the other side of the same order: zero amount still wins over empty
+    /// terms, so `testExtras_ZeroAmountReverts` above is not passing by
+    /// accident once both are wrong at once.
+    function testExtras_ZeroAmountStillWinsOverEmptyTerms() public {
+        address agr = _deployActive();
+        vm.prank(client);
+        vm.expectRevert(Agreement.ZeroAmount.selector);
+        Agreement(agr).proposeExtra(0, "");
     }
 }

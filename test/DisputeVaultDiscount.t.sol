@@ -100,7 +100,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), 4_600_000, "the party paid $4.60, not $7.60");
         assertEq(_bounty(a), FULL_TOPUP, "the arbiter is still promised the whole $7.60");
@@ -139,7 +139,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), quoted, "charged exactly what was quoted");
     }
@@ -161,7 +161,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), FULL_TOPUP, "the party paid all of it");
         assertEq(_subsidy(a), 0, "nothing was reserved");
@@ -180,7 +180,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         assertEq(_subsidy(a), 1_000_000);
         assertEq(_vault(), 0, "the bank is empty, not negative");
@@ -205,7 +205,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertEq(_quote(a), FULL_TOPUP - DEFAULT_DISCOUNT);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
         assertEq(_subsidy(a), DEFAULT_DISCOUNT);
         assertEq(_vault(), 0);
         _assertDiamondBalances("bank spent exactly");
@@ -241,7 +241,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a1));
-        _trackBounty(address(a1));
+        _trackDeal(address(a1));
 
         // No verdict, no finalization, nothing resolved -- and the second quote
         // has already changed.
@@ -255,7 +255,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         uint256 before = usdc.balanceOf(c2);
         vm.prank(c2);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a2));
-        _trackBounty(address(a2));
+        _trackDeal(address(a2));
         assertEq(before - usdc.balanceOf(c2), FULL_TOPUP, "and paid it");
         assertEq(_subsidy(a2), 0);
         _assertDiamondBalances("two disputes, one discount");
@@ -287,13 +287,13 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         vm.prank(client); a1.raiseDispute();
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a1));
-        _trackBounty(address(a1));
+        _trackDeal(address(a1));
 
         Agreement a2 = _disputedDeal(c2, AMOUNT);
         assertEq(_quote(a2), FULL_TOPUP - 500_000, "fifty cents is what is left");
         vm.prank(c2);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a2));
-        _trackBounty(address(a2));
+        _trackDeal(address(a2));
 
         assertEq(_subsidy(a1), DEFAULT_DISCOUNT);
         assertEq(_subsidy(a2), 500_000);
@@ -319,7 +319,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
         uint256 paid = before - usdc.balanceOf(client);
         assertEq(paid, FULL_TOPUP - DEFAULT_DISCOUNT, "$4.60 out of his own pocket");
-        _trackBounty(address(a));
+        _trackDeal(address(a));
         assertEq(_vault(), 0, "reserved");
 
         uint256 afterFunding = usdc.balanceOf(client);
@@ -355,7 +355,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
             vm.prank(milker);
             ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
             uint256 paid = walletBefore - usdc.balanceOf(milker);
-            _trackBounty(address(a));
+            _trackDeal(address(a));
 
             uint256 afterFunding = usdc.balanceOf(milker);
             // Anchored on the deal's own clock rather than on the loop's: each
@@ -386,7 +386,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         vm.prank(client); a.raiseDispute();
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         _claimByArbiter(a);
         vm.prank(arbiterAddr);
@@ -427,7 +427,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
         assertEq(_subsidy(a), 5_000_000);
         assertEq(_vault(), 45_000_000);
         _assertDiamondBalances("after a discount that moved");
@@ -448,7 +448,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         vm.prank(client); a.raiseDispute();
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(9_000_000);
 
@@ -486,7 +486,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         assertEq(_bounty(a), gross, "the arbiter is still promised the whole $2.80");
         assertEq(_subsidy(a), gross - 1, "the bank covered all of it but the last coin");
@@ -517,7 +517,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        _trackBounty(address(a));
+        _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), 1);
         assertEq(_bounty(a), FULL_TOPUP);

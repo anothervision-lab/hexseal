@@ -30,8 +30,10 @@ import "../src/JobReceiptFacet.sol";
 import "../src/facets/JobBoardFacet.sol";
 import "../src/facets/ServiceBoardFacet.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
+import "../src/facets/ArbiterApplicationsFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
+import {TreasuryLinkFacet} from "../src/facets/TreasuryLinkFacet.sol";
 
 // ---------- MOCK USDC ----------
 //
@@ -134,6 +136,7 @@ abstract contract MoneyPathBase is Test {
         ArbiterRegistryFacet arbFacet        = new ArbiterRegistryFacet();
         ArbiterAccountabilityFacet accFacet  = new ArbiterAccountabilityFacet();
         ReputationFacet      repFacet        = new ReputationFacet();
+        TreasuryLinkFacet    linkFacet       = new TreasuryLinkFacet();
 
         bytes4[] memory regSels = new bytes4[](13);
         regSels[0]  = RegistryFacet.initRegistry.selector;
@@ -207,7 +210,7 @@ abstract contract MoneyPathBase is Test {
         receiptSels[2] = JobReceiptFacet.isJobReceiptBurned.selector;
         receiptSels[3] = JobReceiptFacet.getTokenIdByJobId.selector;
 
-        bytes4[] memory arbSels = new bytes4[](27);
+        bytes4[] memory arbSels = new bytes4[](31);
         arbSels[0]  = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[1]  = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[2]  = ArbiterRegistryFacet.claimDispute.selector;
@@ -235,17 +238,35 @@ abstract contract MoneyPathBase is Test {
         arbSels[24] = ArbiterRegistryFacet.setDisputeDiscount.selector;
         arbSels[25] = ArbiterRegistryFacet.getDisputeDiscount.selector;
         arbSels[26] = ArbiterRegistryFacet.overturnVerdict.selector;
+        // The appeal flow. Mounted here because the appeal deposit is a term of
+        // the balance identity below, and a term nothing in this fixture could
+        // ever move is a term nothing in this fixture could ever check.
+        arbSels[27] = ArbiterRegistryFacet.raiseAppeal.selector;
+        arbSels[28] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        arbSels[29] = ArbiterRegistryFacet.resolveAppeal.selector;
+        arbSels[30] = ArbiterRegistryFacet.getAppealVotes.selector;
 
         bytes4[] memory accSels = new bytes4[](3);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
         accSels[1] = ArbiterAccountabilityFacet.getArbiterBond.selector;
         accSels[2] = ArbiterAccountabilityFacet.getDisputeSubsidy.selector;
 
+        // Two selectors and no more: the payroll pot and its reading. The pot
+        // is the reason this facet is here at all — decision 69 fills it and
+        // decision 73 has not yet given it a door, so from 4 September the
+        // diamond starts holding money nobody comes for, and money nobody comes
+        // for is exactly what would otherwise absorb a miscount in silence.
+        bytes4[] memory linkSels = new bytes4[](2);
+        linkSels[0] = TreasuryLinkFacet.fundArbiterPayroll.selector;
+        linkSels[1] = TreasuryLinkFacet.getArbiterPayrollBalance.selector;
+
         bytes4[] memory repSels = new bytes4[](4);
         repSels[0] = ReputationFacet.autoAwardXP.selector;
         repSels[1] = ReputationFacet.notifyExecutorFault.selector;
         repSels[2] = ReputationFacet.getXP.selector;
         repSels[3] = ReputationFacet.getUnresolvedDisputes.selector;
+
+
 
         bytes4[] memory cutSels = new bytes4[](1);
         cutSels[0] = DiamondCutFacet.diamondCut.selector;
@@ -263,7 +284,7 @@ abstract contract MoneyPathBase is Test {
         ownSels[2] = OwnershipFacet.acceptOwnership.selector;
         ownSels[3] = OwnershipFacet.pendingOwner.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](11);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](13);
         cut[0]  = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, regSels);
         cut[1]  = IDiamondCut.FacetCut(address(factoryFacet),  IDiamondCut.FacetCutAction.Add, facSels);
         cut[2]  = IDiamondCut.FacetCut(address(cutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
@@ -275,6 +296,8 @@ abstract contract MoneyPathBase is Test {
         cut[8]  = IDiamondCut.FacetCut(address(arbFacet),      IDiamondCut.FacetCutAction.Add, arbSels);
         cut[9]  = IDiamondCut.FacetCut(address(accFacet),      IDiamondCut.FacetCutAction.Add, accSels);
         cut[10] = IDiamondCut.FacetCut(address(repFacet),      IDiamondCut.FacetCutAction.Add, repSels);
+        cut[11] = IDiamondCut.FacetCut(address(linkFacet),     IDiamondCut.FacetCutAction.Add, linkSels);
+        cut[12] = IDiamondCut.FacetCut(address(new ArbiterApplicationsFacet()), IDiamondCut.FacetCutAction.Add, _applicationsSelectors());
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -286,9 +309,66 @@ abstract contract MoneyPathBase is Test {
         );
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
 
+        _postSeatBond(arbiterAddr);
+
         vm.prank(client);   usdc.approve(address(diamond), type(uint256).max);
         vm.prank(executor); usdc.approve(address(diamond), type(uint256).max);
         vm.prank(stranger); usdc.approve(address(diamond), type(uint256).max);
+
+        // The six the fixture funds. Anyone a test brings in on top of these
+        // goes through _trackActor.
+        _trackActor(owner);
+        _trackActor(client);
+        _trackActor(executor);
+        _trackActor(arbiterAddr);
+        _trackActor(feeRecipient);
+        _trackActor(stranger);
+    }
+
+    /// The bond behind a hand-given seat (8 September 2026).
+    ///
+    /// `addArbiter` seats and takes no money; since the bond gate landed, every
+    /// arbiter door refuses an unbonded seat with `BondNotPosted`. So this rig's
+    /// arbiter pays like a real one — his own USDC, moved by his own call.
+    ///
+    /// ⚠️ NOT faked with `vm.store`. A bond booked without the money behind it
+    /// would leave the balance identity 50 USDC short, and that identity is the
+    /// whole point of this fixture.
+    ///
+    /// The amount is READ from the diamond, never written as a literal here: a
+    /// copy would go on agreeing with itself after the real number moved.
+    ///
+    /// Its own function rather than four lines in setUp: setUp is already one
+    /// stack slot from the via_ir limit.
+    /// Three selectors of the applications facet, and no more: the door a seated
+    /// arbiter posts his bond through, the read that says whether he has, and
+    /// the requirements this fixture reads the amount from.
+    ///
+    /// A function rather than a local in the cut builder: that builder is one
+    /// stack slot from the via_ir limit, and a fourth memory array there does
+    /// not fit.
+    function _applicationsSelectors() internal pure returns (bytes4[] memory appSels) {
+        appSels = new bytes4[](3);
+        appSels[0] = ArbiterApplicationsFacet.postArbiterBond.selector;
+        appSels[1] = ArbiterApplicationsFacet.isArbiterActive.selector;
+        appSels[2] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
+    }
+
+    /// What this fixture's arbiter has locked as his seat bond.
+    ///
+    /// Every assertion below that used to read "the diamond keeps nothing" now
+    /// means "nothing BEYOND this": the bond is posted in setUp and sits there
+    /// for the life of the rig. Kept as a field rather than a literal so those
+    /// assertions stay tied to the number the diamond actually charges.
+    uint256 internal seatBondHeld;
+
+    function _postSeatBond(address who) internal {
+        (, , uint256 seatBond, ) =
+            ArbiterApplicationsFacet(address(diamond)).getApplicationRequirements();
+        usdc.mint(who, seatBond);
+        vm.prank(who); usdc.approve(address(diamond), seatBond);
+        vm.prank(who); ArbiterApplicationsFacet(address(diamond)).postArbiterBond();
+        seatBondHeld = seatBond;
     }
 
     // ============================================================
@@ -322,29 +402,97 @@ abstract contract MoneyPathBase is Test {
         total += ArbiterRegistryFacet(address(diamond)).getVaultBalance();
         total += ArbiterRegistryFacet(address(diamond)).getTreasurySlice();
 
+        // ---- the payroll pot (added 4 September 2026) ----
+        //
+        // The stream decision 69 opened and decision 73 has not yet given a
+        // door. It was missing from this sum while nothing could fill it; from
+        // the cut that set the stream's share it fills on its own, and a pot
+        // that is held but not booked is the one thing that makes every OTHER
+        // term unfalsifiable — a miscount anywhere else would simply be paid
+        // for out of money nobody comes to collect, and the identity would go
+        // on agreeing.
+        total += TreasuryLinkFacet(address(diamond)).getArbiterPayrollBalance();
+
         // Per-address terms: only the actors this fixture ever funds can hold
-        // one, and each is named rather than scanned.
-        address[6] memory actors = [owner, client, executor, arbiterAddr, feeRecipient, stranger];
-        for (uint256 i = 0; i < actors.length; i++) {
-            total += ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(actors[i]);
-            total += ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(actors[i]);
-            total += ArbiterRegistryFacet(address(diamond)).getRefundableBounty(actors[i]);
+        // one, and each is named rather than scanned. Forgetting one is a
+        // SAFE forgetting: an unnamed holder makes the sum too small, and too
+        // small is the direction that goes red.
+        for (uint256 i = 0; i < _ledgerActors.length; i++) {
+            address who = _ledgerActors[i];
+            total += ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(who);
+            total += ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(who);
+            total += ArbiterRegistryFacet(address(diamond)).getRefundableBounty(who);
         }
 
-        // Bounties sit per-agreement; the caller registers the ones it made.
-        for (uint256 i = 0; i < _bountyAgreements.length; i++) {
-            total += ArbiterRegistryFacet(address(diamond)).getDisputeBounty(_bountyAgreements[i]);
+        // Per-agreement terms; the caller registers the deals it made.
+        for (uint256 i = 0; i < _trackedDeals.length; i++) {
+            address deal = _trackedDeals[i];
+            total += ArbiterRegistryFacet(address(diamond)).getDisputeBounty(deal);
+
+            // ---- the appeal deposit in flight (added 4 September 2026) ----
+            //
+            // ⚠️ `appealDeposit` is NOT a balance. It is never zeroed: neither
+            // branch of resolveAppeal clears it, so after the appeal is settled
+            // the field still holds what was paid while the money itself has
+            // gone — to the appellant on a win, into `vaultBalance` on a loss.
+            // Read it as a balance and this sum double-counts every resolved
+            // appeal in the fixture's life. The predicate for "still held" is
+            // therefore the pair of flags, not the number.
+            //
+            // The raw field, deliberately, and not `_depositOf`'s fallback to
+            // the constant: the fallback exists for appeals raised before the
+            // field existed, which cannot happen on a diamond this fixture
+            // builds from nothing. Reading raw means that a raiseAppeal which
+            // one day stops writing the field makes this sum too small, and
+            // too small goes red — the fallback would have hidden it.
+            ArbiterRegistryStorage.PendingVerdict memory v =
+                ArbiterRegistryFacet(address(diamond)).getPendingVerdict(deal);
+            if (v.appealed && !v.appealResolved) total += v.appealDeposit;
         }
     }
 
-    address[] internal _bountyAgreements;
-    function _trackBounty(address a) internal { _bountyAgreements.push(a); }
+    /// Deals whose per-agreement money the ledger should look at.
+    address[] internal _trackedDeals;
+    function _trackDeal(address a) internal { _trackedDeals.push(a); }
+
+    /// Addresses that can hold a per-address term. Seeded with the six the
+    /// fixture funds; a test that brings its own arbiter registers him here, or
+    /// his bond is money the sum does not know about.
+    address[] internal _ledgerActors;
+    function _trackActor(address a) internal { _ledgerActors.push(a); }
 
     function _assertDiamondBalances(string memory when) internal view {
+        uint256 held   = usdc.balanceOf(address(diamond));
+        uint256 booked = _diamondLedger();
+        if (held == booked) return;
+
+        // ⚠️ STRICT EQUALITY, not `held >= booked`, and the direction is named
+        // rather than left for the reader to work out of two bare numbers.
+        //
+        // Why strict: a surplus is the failure mode this lock exists for. Once
+        // the diamond holds money nobody comes for, `>=` is satisfied by any
+        // shortfall in any other term — the miscount is paid for out of the
+        // idle pot and the lock stays green through it. A lock that tolerates
+        // surplus stops being able to see the thing surplus hides.
+        //
+        // Its cost is that a gift from outside — anyone may transfer USDC to
+        // this address — reads as a break. On a diamond built from nothing in
+        // setUp that is not a false alarm but a true one: nobody gifts a test
+        // diamond by accident, so every surplus here was either put there on
+        // purpose or is a bug. On a live chain the same surplus would be a fact
+        // of life, which is why this is a test-time invariant and must never be
+        // copied into an on-chain `require`.
         assertEq(
-            usdc.balanceOf(address(diamond)),
-            _diamondLedger(),
-            string.concat("diamond USDC does not add up to its own books: ", when)
+            held,
+            booked,
+            string.concat(
+                held > booked
+                    ? "the diamond holds MORE USDC than it books, by "
+                    : "the diamond holds LESS USDC than it books, by ",
+                vm.toString(held > booked ? held - booked : booked - held),
+                " (6dp) -- ",
+                when
+            )
         );
     }
 

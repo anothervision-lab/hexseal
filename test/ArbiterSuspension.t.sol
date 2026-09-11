@@ -256,6 +256,15 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
 
         vm.warp(vm.getBlockTimestamp() + 72 hours);
 
+        // ⚠️ LEAVING NEVER NEEDS A BOND, and this bench proves it the hard way:
+        // it has no USDC contract at all, so a refund of a non-zero bond would
+        // revert on a call into address(0). The bond is dropped to zero first,
+        // which is exactly the state of a man who never paid — and he must still
+        // be able to walk out. `resignAsArbiter` is deliberately not gated by
+        // `_requireBonded` for this reason; gating it would lock an unbonded
+        // arbiter into a seat he cannot quit.
+        vm.store(address(reg), keccak256(abi.encode(arbiter, uint256(ARB_BASE) + 12)), bytes32(0));
+
         vm.prank(arbiter);
         reg.resignAsArbiter();
         assertFalse(reg.isRegisteredArbiter(arbiter), "after the window one may resign");
@@ -303,6 +312,11 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
 
     function _makeArbiterReg(address who) internal {
         vm.store(address(reg), keccak256(abi.encode(who, uint256(ARB_BASE))), bytes32(uint256(1)));
+        // The bond behind the seat (8 September 2026). Since the bond gate landed,
+        // a seated arbiter with a zero bond is refused by every arbiter door with
+        // `BondNotPosted`, so a rig that seats one has to fund him too. Slot 12 of
+        // the arbiter namespace is `arbiterBond`, pinned by test/StorageLayout.t.sol.
+        vm.store(address(reg), keccak256(abi.encode(who, uint256(ARB_BASE) + 12)), bytes32(uint256(50_000_000)));
     }
 
     /// The offset of suspendedUntil inside Data. Found by sweeping rather than
@@ -454,6 +468,11 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
 
     function _makeArbiter(ArbiterAccountabilityFacet f, address who) internal {
         vm.store(address(f), keccak256(abi.encode(who, uint256(ARB_BASE))), bytes32(uint256(1)));
+        // The bond behind the seat (8 September 2026). Since the bond gate landed,
+        // a seated arbiter with a zero bond is refused by every arbiter door with
+        // `BondNotPosted`, so a rig that seats one has to fund him too. Slot 12 of
+        // the arbiter namespace is `arbiterBond`, pinned by test/StorageLayout.t.sol.
+        vm.store(address(f), keccak256(abi.encode(who, uint256(ARB_BASE) + 12)), bytes32(uint256(50_000_000)));
     }
 
     /// Since 17 August 2026 a removal only runs through a proposal that has sat
@@ -597,7 +616,16 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         assertEq(xp, 0);
         assertEq(cleanStreak, 0);
         assertEq(mistakeStreak, 0);
-        assertEq(bond, 0, "a hand-picked arbiter has no bond, and that is visible");
+        assertEq(
+            bond, 50_000_000,
+            "the card must show the bond the seat actually carries"
+        );
+        // ⚠️ The literal is what this bench PUT there, not what a hand seating
+        // gives. `addArbiter` still takes nothing — that claim is held by
+        // test/ArbiterProvenance.t.sol and by
+        // ArbiterBondRequiredTest.test_AHandGivenSeatCarriesNoBondAndIsNotActive.
+        // What this line guards is that the standing card REPORTS the field
+        // rather than a zero of its own.
         assertEq(seatedBy, address(0));
         assertEq(suspendedUntil, vm.getBlockTimestamp() + 72 hours, "the suspension is visible right here");
         assertEq(openClaims, 0);

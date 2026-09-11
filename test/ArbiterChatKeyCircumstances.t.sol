@@ -38,6 +38,12 @@ contract ArbiterChatKeyCircumstancesTest is Test, ArbiterTwoFacetBench {
     function _makeArbiter(address who) internal {
         bytes32 pos = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
         vm.store(address(facet), keccak256(abi.encode(who, uint256(pos))), bytes32(uint256(1)));
+        // The bond behind the seat (8 September 2026): with a zero bond every
+        // arbiter door now refuses with `BondNotPosted`, and this rig's whole
+        // subject is what an arbiter can do. Slot 12 of the arbiter namespace is
+        // `arbiterBond`, pinned by test/StorageLayout.t.sol. No USDC moves —
+        // nothing here refunds or forfeits a bond.
+        vm.store(address(facet), keccak256(abi.encode(who, uint256(pos) + 12)), bytes32(uint256(50_000_000)));
         // The check is mandatory: with a wrong slot the seating silently fails to
         // take, all five measurements below would start failing on NotArbiter, and
         // they would read as "circumstances checked".

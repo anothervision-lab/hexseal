@@ -92,8 +92,47 @@ contract WorkHandInVisibleUpgradeTest is Test {
     /// 138 from the cut and exactly this line goes to zero.
     uint256 constant PENDING_FEE_CAP_ADDS = 1;
 
+    /// ⚠️ AND ONE MORE PENDING CUT SINCE 8 SEPTEMBER 2026, on a facet this one
+    /// does not touch: `ArbiterApplicationsFacet` gains the door a hand-seated
+    /// arbiter posts his own bond through, and the read that says whether he
+    /// has. Two selectors, `postArbiterBond()` and `isArbiterActive(address)`,
+    /// shipped by script/UpgradeArbiterBondRequired.s.sol.
+    ///
+    /// A constant of its OWN rather than a bigger number somewhere else: the
+    /// two ride in their own transaction and are their own decision, and a
+    /// number that covers several can no longer say which one drifted. Land
+    /// that cut and exactly this line goes to zero.
+    uint256 constant PENDING_ARBITER_BOND_ADDS = 2;
+
+    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
+    /// does not touch: `ArbiterApplicationsFacet` gains the door that takes back
+    /// a GRANTED SEAT NOTHING HAS BEEN EARNED IN —
+    /// `revokeUnprovenSeat(address,string)`, shipped by
+    /// script/UpgradeUnprovenSeatRevocationAndBondPermit.s.sol.
+    ///
+    /// One selector, and a constant of its OWN for the same reason the line
+    /// above has one: it rides in its own transaction and is its own decision,
+    /// and a number that covers several can no longer say which of them drifted.
+    /// Land that cut and exactly this line goes to zero.
+    uint256 constant PENDING_UNPROVEN_SEAT_ADDS = 1;
+
+    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
+    /// does not touch: `ArbiterApplicationsFacet` gains a SECOND bond door,
+    /// `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)`, which takes
+    /// the same 50 USDC on a signed EIP-2612 paper instead of on an allowance
+    /// granted beforehand. Granting an allowance is a transaction sent to USDC,
+    /// which does not trust our forwarder, so that step could never be made
+    /// gasless from our side — and the arbiter it is asked of has earned nothing
+    /// in the protocol yet to pay the gas with.
+    ///
+    /// It rides in the SAME transaction as the line above, and still gets a
+    /// constant of its OWN, for the reason every line here has one: they are two
+    /// decisions, and a number covering both can no longer say which of them
+    /// drifted. Land that cut and exactly this line goes to zero.
+    uint256 constant PENDING_BOND_PERMIT_ADDS = 1;
+
     uint256 constant EXTRA_BEYOND_CHAIN =
-        ADDED_SELECTORS + PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS;
+        ADDED_SELECTORS + PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS + PENDING_ARBITER_BOND_ADDS + PENDING_UNPROVEN_SEAT_ADDS + PENDING_BOND_PERMIT_ADDS;
 
     function setUp() public {
         upgrade = new UpgradeRegistryHandInSignal();

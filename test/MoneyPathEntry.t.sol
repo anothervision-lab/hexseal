@@ -29,7 +29,7 @@ contract MoneyPathEntryTest is MoneyPathBase {
 
         // Posting takes amount + fee up front and holds both on the diamond.
         assertEq(clientBefore - usdc.balanceOf(client), AMOUNT + AMOUNT_FEE, "posting cost");
-        assertEq(usdc.balanceOf(address(diamond)), AMOUNT + AMOUNT_FEE, "held on the diamond");
+        assertEq(usdc.balanceOf(address(diamond)), AMOUNT + AMOUNT_FEE + seatBondHeld, "held on the diamond");
         assertEq(usdc.balanceOf(feeRecipient), feeBefore, "nothing to the treasury yet");
         _assertJobFundsSlot(jobId, AMOUNT);
         assertEq(JobBoardFacet(address(diamond)).getJobFeeHeld(jobId), AMOUNT_FEE);
@@ -44,7 +44,7 @@ contract MoneyPathEntryTest is MoneyPathBase {
         // Hiring moves the body to the clone and the fee to the treasury.
         assertEq(usdc.balanceOf(address(a)), AMOUNT, "clone holds the deal body");
         assertEq(usdc.balanceOf(feeRecipient) - feeBefore, AMOUNT_FEE, "treasury got the fee");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "diamond keeps nothing");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond keeps nothing beyond the arbiter's bond");
         assertEq(clientBefore - usdc.balanceOf(client), AMOUNT + AMOUNT_FEE, "client paid once");
         assertEq(uint8(a.status()), uint8(Agreement.Status.FUNDED));
         _assertDiamondBalances("after acceptApplicant");
@@ -65,7 +65,7 @@ contract MoneyPathEntryTest is MoneyPathBase {
         // Listing costs the executor a flat floor, paid straight through.
         assertEq(execBefore - usdc.balanceOf(executor), FEE_FLOOR, "listing costs the floor");
         assertEq(usdc.balanceOf(feeRecipient) - feeBefore, FEE_FLOOR, "and goes straight out");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "listing money never sits on the diamond");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "listing money never sits on the diamond");
         _assertDiamondBalances("after mintService");
 
         vm.prank(client);
@@ -74,7 +74,7 @@ contract MoneyPathEntryTest is MoneyPathBase {
         );
 
         assertEq(clientBefore - usdc.balanceOf(client), AMOUNT + AMOUNT_FEE, "request cost");
-        assertEq(usdc.balanceOf(address(diamond)), AMOUNT + AMOUNT_FEE, "held pending the answer");
+        assertEq(usdc.balanceOf(address(diamond)), AMOUNT + AMOUNT_FEE + seatBondHeld, "held pending the answer");
         assertEq(ServiceBoardFacet(address(diamond)).getRequestFunds(reqId), AMOUNT);
         assertEq(ServiceBoardFacet(address(diamond)).getRequestFeeHeld(reqId), AMOUNT_FEE);
         _assertDiamondBalances("after requestService");
@@ -84,7 +84,7 @@ contract MoneyPathEntryTest is MoneyPathBase {
 
         assertEq(usdc.balanceOf(address(a)), AMOUNT, "clone holds the deal body");
         assertEq(usdc.balanceOf(feeRecipient) - feeBefore, FEE_FLOOR + AMOUNT_FEE, "listing + deal fee");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "diamond keeps nothing");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond keeps nothing beyond the arbiter's bond");
         _assertDiamondBalances("after acceptRequest");
     }
 
@@ -101,7 +101,7 @@ contract MoneyPathEntryTest is MoneyPathBase {
         assertEq(usdc.balanceOf(address(a)), AMOUNT, "clone funded");
         assertEq(usdc.balanceOf(feeRecipient) - feeBefore, AMOUNT_FEE, "fee delivered");
         assertEq(clientBefore - usdc.balanceOf(client), AMOUNT + AMOUNT_FEE, "client paid once");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "diamond is a pass-through here");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond is a pass-through here, beyond the arbiter's bond");
         assertEq(uint8(a.status()), uint8(Agreement.Status.FUNDED));
         _assertDiamondBalances("after deployAndFund");
     }

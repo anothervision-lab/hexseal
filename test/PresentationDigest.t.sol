@@ -506,6 +506,11 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
     /// Seats an arbiter straight into the facet's storage — as in the ArbiterChatKey suite.
     function _makeArbiter(address who) internal {
         vm.store(address(facet), keccak256(abi.encode(who, uint256(ARB_BASE))), bytes32(uint256(1)));
+        // The bond behind the seat (8 September 2026). Since the bond gate landed,
+        // a seated arbiter with a zero bond is refused by every arbiter door with
+        // `BondNotPosted`, so a rig that seats one has to fund him too. Slot 12 of
+        // the arbiter namespace is `arbiterBond`, pinned by test/StorageLayout.t.sol.
+        vm.store(address(facet), keccak256(abi.encode(who, uint256(ARB_BASE) + 12)), bytes32(uint256(50_000_000)));
         assertTrue(facet.isRegisteredArbiter(who), "failed to seat the arbiter");
     }
 

@@ -399,13 +399,29 @@ contract UpgradeArbiterApplications is Script {
         );
     }
 
-    /// Eleven selectors, taken from the type rather than typed as literals: a
+    /// ⚠️ ELEVEN WHEN THIS SCRIPT RAN, FIFTEEN NOW (8 and 11 September 2026).
+    /// The four added are `postArbiterBond`, `isArbiterActive`,
+    /// `revokeUnprovenSeat` and `postArbiterBondWithPermit`. This list is grown
+    /// rather than frozen at what the live chain received because the property
+    /// it guards is "deploy a facet, mount ALL of it" — a fresh diamond must not
+    /// get a facet with two dead functions. Re-running this against the live
+    /// diamond is refused by `assertAllUnmounted` before any money is spent, so
+    /// growing the list cannot turn into an `Add` on a mounted selector.
+    /// The live diamond took the first two through UpgradeArbiterBondRequired,
+    /// which is SIGNED AND LANDED — measured on Base Sepolia at block
+    /// 46 673 445: the applications facet at 0xF0E6E994 routes thirteen
+    /// selectors and `postArbiterBond()` is one of them. The last two are still
+    /// pending and reach the chain through
+    /// UpgradeUnprovenSeatRevocationAndBondPermit, which carries both of the
+    /// 11 September decisions in one transaction.
+    ///
+    /// Selectors taken from the type rather than typed as literals: a
     /// signature change is then picked up by the compiler instead of by whoever
     /// presses the button. Held against the build artifact in
     /// `assertAddListCoversTheWholeFacet` and against the live chain in
     /// `assertAllUnmounted`.
     function addSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](11);
+        sels = new bytes4[](15);
 
         // The applicant's own doors — both gasless (ERC-2771). Whoever is worth
         // seating has a record of deals, not necessarily a balance of ETH.
@@ -430,6 +446,29 @@ contract UpgradeArbiterApplications is Script {
         sels[8]  = ArbiterApplicationsFacet.getApplicants.selector;
         sels[9]  = ArbiterApplicationsFacet.getApplicantCount.selector;
         sels[10] = ArbiterApplicationsFacet.getApplicantsPage.selector;
+
+        // The bond a hand-seated arbiter posts for himself, and the read that
+        // lets a form tell "you owe a bond" from "you are not an arbiter"
+        // (8 September 2026). Unlike every other door here, `postArbiterBond`
+        // is NOT retired by the DAO ratchet: a man seated by hand before the
+        // handover must still be able to pay after it.
+        sels[11] = ArbiterApplicationsFacet.postArbiterBond.selector;
+        sels[12] = ArbiterApplicationsFacet.isArbiterActive.selector;
+
+        // Taking back a granted seat that nothing has been earned in
+        // (11 September 2026). Administrative, and retired by the same DAO
+        // ratchet as the two decision doors: after the handover arbiters seat
+        // themselves and removal belongs to the successor.
+        sels[13] = ArbiterApplicationsFacet.revokeUnprovenSeat.selector;
+
+        // The second bond door (11 September 2026): the same 50 USDC, carried
+        // in on a signed EIP-2612 paper rather than on an allowance granted in
+        // a transaction of its own. `approve` is sent to USDC, which does not
+        // trust our forwarder, so the allowance step could never be relayed —
+        // and the arbiter it is asked of has earned nothing in the protocol yet
+        // to pay that gas with. Not retired by the DAO ratchet, for the same
+        // reason `postArbiterBond` is not.
+        sels[14] = ArbiterApplicationsFacet.postArbiterBondWithPermit.selector;
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -447,7 +486,7 @@ contract UpgradeArbiterApplications is Script {
     }
 
     function _printSelectors(bytes4[] memory sels) internal pure {
-        console.log("  the 11 selectors:");
+        console.log("  the selectors:", sels.length);
         for (uint256 i = 0; i < sels.length; i++) {
             console.logBytes4(sels[i]);
         }

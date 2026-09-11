@@ -47,8 +47,8 @@ contract MoneyPathLeftoversTest is MoneyPathBase {
         _assertDiamondBalances("clean start");
         vm.prank(stranger);
         usdc.transfer(address(diamond), 3_000_000);
-        assertEq(usdc.balanceOf(address(diamond)), 3_000_000);
-        assertEq(_diamondLedger(), 0, "the books say nothing is held");
+        assertEq(usdc.balanceOf(address(diamond)), 3_000_000 + seatBondHeld);
+        assertEq(_diamondLedger(), seatBondHeld, "the books hold the arbiter's bond and nothing else");
     }
 
     /// deployAgreement charges nothing and funds nothing: it is the step a
@@ -132,7 +132,7 @@ contract MoneyPathLeftoversTest is MoneyPathBase {
             (AMOUNT + AMOUNT_FEE - FEE_FLOOR) * 4,
             "four refunded, each less its floor"
         );
-        assertEq(usdc.balanceOf(address(diamond)), 0, "diamond keeps nothing");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond keeps nothing beyond the arbiter's bond");
         _assertDiamondBalances("after a five-wide supersede");
     }
 }

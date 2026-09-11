@@ -44,6 +44,11 @@ contract ArbiterClaimCapTest is Test, ArbiterTwoFacetBench {
         (facet, accFacet) = _deployArbiterBench();
         arbiter = address(0xA1);
         vm.store(address(facet), keccak256(abi.encode(arbiter, uint256(ARB_BASE))), bytes32(uint256(1)));
+        // The bond behind the seat (8 September 2026). Since the bond gate landed,
+        // a seated arbiter with a zero bond is refused by every arbiter door with
+        // `BondNotPosted`, so a rig that seats one has to fund him too. Slot 12 of
+        // the arbiter namespace is `arbiterBond`, pinned by test/StorageLayout.t.sol.
+        vm.store(address(facet), keccak256(abi.encode(arbiter, uint256(ARB_BASE) + 12)), bytes32(uint256(50_000_000)));
     }
 
     /// The slot offset is not taken on trust: if the field moves, the test below

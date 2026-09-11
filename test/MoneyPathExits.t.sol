@@ -137,7 +137,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
         ArbiterRegistryFacet(address(diamond)).withdrawTreasurySlice();
         assertEq(usdc.balanceOf(arbiterAddr) - b.arb, toArbiter, "arbiter paid out");
         assertEq(usdc.balanceOf(feeRecipient) - b.fee, toTreasury, "treasury paid out");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "diamond back to nothing");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond back to nothing beyond the arbiter's bond");
         _assertDiamondBalances("after both withdrawals");
     }
 
@@ -250,7 +250,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
 
         assertEq(c0 - usdc.balanceOf(client), FEE_FLOOR, "the client is out exactly the floor");
         assertEq(usdc.balanceOf(feeRecipient) - f0, FEE_FLOOR, "and the floor is what the protocol kept");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "diamond keeps nothing");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond keeps nothing beyond the arbiter's bond");
         _assertDiamondBalances("after cancelJob");
     }
 
@@ -267,7 +267,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
 
         assertEq(c0 - usdc.balanceOf(client), FEE_FLOOR, "client out exactly the floor");
         assertEq(usdc.balanceOf(feeRecipient) - f0, FEE_FLOOR, "protocol kept the floor");
-        assertEq(usdc.balanceOf(address(diamond)), 0);
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld);
         _assertDiamondBalances("after rejectRequest");
     }
 

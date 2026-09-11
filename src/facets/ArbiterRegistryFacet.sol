@@ -723,6 +723,58 @@ library ArbiterRegistryStorage {
         /// vault's three dollars, and an unclaimed dispute would have become a
         /// way to milk the bank.
         mapping(address => uint256) disputeVaultSubsidy;
+
+        // ── What the diamond tells the treasury, 4 September 2026 ───────────
+        //
+        // ⚠️ APPENDED AT THE END. Do not touch the order or the types of the
+        // fields above: the layout is append-only, enforced by a build gate
+        // over the struct's fields, and this is the very class of bug that
+        // broke the live JobBoard in July 2026.
+        //
+        // Written and read by `TreasuryLinkFacet`, which shares this namespace
+        // and this POSITION exactly as `ArbiterAccountabilityFacet` and
+        // `ArbiterApplicationsFacet` do. Why they live here rather than in a
+        // namespace of their own is argued in the header of that file; the
+        // short of it is that everything the treasury already reads off the
+        // live diamond — `vaultBalance`, `daoAddress`, `daoActiveManual` — is
+        // in this namespace, and splitting one conversation across two would
+        // leave the next selector's author guessing which half it belongs to.
+        //
+        // ⚠️ ZERO IS THE STATE OF A DIAMOND THAT HAS JUST BEEN CUT, and for
+        // these five it is a legitimate, silent answer rather than "not set":
+        // no vault share, no payroll share, no foundation share, no target. The
+        // treasury then ladders everything into the reserve, and money laddered
+        // that way is never re-laddered. There is deliberately NO
+        // zero-means-default fallback of the kind `getArbiterFloor()` and
+        // `getDisputeDiscount()` carry — decision 65 forbids substituting an
+        // invented number for one that was never chosen, and decision 69 says
+        // in as many words that the payroll share has no value yet. What closes
+        // the window instead is the cut carrying `setTreasuryShares` and
+        // `setVaultTargetDisputes` in the same transaction.
+
+        /// The pot the arbiter payroll stream is paid into (decision 69).
+        /// A SIBLING of `vaultBalance`, not a share of it: the two are spent by
+        /// different rules, and this one has no spender at all yet.
+        uint256 arbiterPayrollBalance;
+
+        /// The vault's target, as a COUNT OF DISPUTES (decision 60). The dollar
+        /// sum is `count × getArbiterFloor()` and is computed on read, so that
+        /// the target follows what a dispute actually costs instead of going
+        /// stale the way the old treasury's frozen 500 USDC did.
+        uint256 vaultTargetDisputes;
+
+        /// The arbiter vault's share of treasury income, in basis points.
+        uint256 treasuryVaultBps;
+
+        /// The arbiter payroll stream's share of treasury income, in basis
+        /// points. Stays at zero until decision 69's payout exists — a share
+        /// above zero fills a pot that has no door.
+        uint256 treasuryPayrollBps;
+
+        /// The foundation's share of treasury income, in basis points. The
+        /// ceiling over it is frozen in the treasury and drops on the
+        /// governance handover; nothing here can lift it.
+        uint256 treasuryFoundationBps;
     }
 
     function data() internal pure returns (Data storage d) {
@@ -1293,6 +1345,14 @@ contract ArbiterRegistryFacet {
     error NotArbiter();
     error AlreadyArbiter();
     error NotAnArbiter();
+    /// The seat is held; the money that makes the seat forfeitable is not.
+    ///
+    /// A NAMED refusal rather than a generic one, and that is the whole point
+    /// of it (owner's requirement, 8 September 2026): a form that catches this
+    /// selector can say "post your bond" and offer the button. A bare revert
+    /// would reach the arbiter as an unexplained failure on a screen that had
+    /// just told him he is an arbiter.
+    error BondNotPosted();
     error AlreadyClaimed();
     error NotClaimed();
     error NotDisputed();
@@ -1685,6 +1745,39 @@ contract ArbiterRegistryFacet {
         emit ArbiterResigned(caller, bond);
     }
 
+    /// The seat alone is not the right to act.
+    ///
+    /// Owner's decision of 8 September 2026, variant A: the owner keeps seating
+    /// by hand and takes no money doing it, and the arbiter puts his own money
+    /// down before he may work. The halves are separate on purpose — an owner's
+    /// action must not break on a stranger's inaction, and an owner paying the
+    /// bond FOR him would burn the wrong man's coins, which deters nobody.
+    ///
+    /// Until this gate a hand-seated arbiter judged with nothing at stake:
+    /// `removeArbiterForCause` forfeits `arbiterBond[arbiter]`, and forfeiting
+    /// zero is a punishment on paper. The public document said so out loud —
+    /// "the forfeit is currently worth nothing".
+    ///
+    /// The door that lets a seated arbiter pay is `postArbiterBond`, and it
+    /// lives in ArbiterApplicationsFacet — with `_takeBond`, the machinery that
+    /// already moves a bond in, and with the room this facet does not have
+    /// (measured 8 September 2026: 209 bytes clear of the EIP-170 ceiling).
+    ///
+    /// ⚠️ WHAT THIS DELIBERATELY DOES NOT GUARD, each for its own reason:
+    ///   • `resignAsArbiter` and `releaseDisputeClaim` — LEAVING must never
+    ///     require a bond, or an unbonded arbiter would be locked into a seat
+    ///     he cannot quit and a claim he cannot let go of;
+    ///   • `withdrawArbiterReward` — money already earned is his, whatever his
+    ///     seat looks like today (that door has no role gate at all, by design);
+    ///   • `finalizeVerdict` — anyone at all may call it, arbiter or not;
+    ///   • `respondToRemoval` (ArbiterAccountabilityFacet) — answering a public
+    ///     accusation is due process, not arbiter work, and gating it would let
+    ///     an accusation silence the accused;
+    ///   • the seating doors themselves, which is where a bond is CREATED.
+    function _requireBonded(ArbiterRegistryStorage.Data storage d, address who) private view {
+        if (d.arbiterBond[who] == 0) revert BondNotPosted();
+    }
+
     // -------- ADMIN: MANAGE ARBITERS --------
 
     /// The chief's role is abolished together with governance activation (the
@@ -1838,6 +1931,10 @@ contract ArbiterRegistryFacet {
         address caller = _msgSender();
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (!d.isArbiter[caller]) revert NotArbiter();
+        // Gated at the COMMIT and not only at the reveal: a refusal an hour
+        // before the arbiter has arranged anything is kinder than one at the
+        // moment he reaches for the dispute, and it costs one SLOAD.
+        _requireBonded(d, caller);
         d.claimCommitments[commitment] = block.number;
         emit DisputeClaimCommitted(caller, commitment);
     }
@@ -1868,6 +1965,10 @@ contract ArbiterRegistryFacet {
         address caller = _msgSender();
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (!d.isArbiter[caller]) revert NotArbiter();
+        // Publishing the key a party seals a presentation to is arbiter work
+        // like any other. Nothing is stranded by gating it: an unbonded arbiter
+        // cannot hold a claim, so no party is ever left waiting on his key.
+        _requireBonded(d, caller);
         if (boxKey == bytes32(0) || signKey == bytes32(0)) revert ZeroChatKey();
 
         // The event fires only if at least one half actually changed. The write
@@ -1929,6 +2030,12 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
 
         if (!d.isArbiter[caller]) revert NotArbiter();
+        // ⚠️ THE SELECTION ITSELF. This is where a man becomes the judge of a
+        // real escrow, and after 8 September 2026 an unbonded seat cannot reach
+        // it. It is also the most visible effect of that cut on the live chain:
+        // the one arbiter seated there has a zero bond and stops being
+        // selectable the moment the cut lands, until he posts.
+        _requireBonded(d, caller);
 
         // The cap is checked before the staticcalls into Agreement: a refusal
         // must be cheap, not four reads of a foreign contract deep.
@@ -2094,6 +2201,10 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
 
         if (d.disputeClaims[agreement] != caller) revert NotClaimingArbiter();
+        // Writing a public record against a party is arbiter work, and the same
+        // reasoning as submitVerdict applies: the claim outlives the seat, so
+        // the bond is asked here too.
+        _requireBonded(d, caller);
 
         uint256 claimedAt = d.disputeClaimedAtBy[agreement][caller];
         // Zero means the dispute was claimed BEFORE this field existed: the chain
@@ -2174,6 +2285,13 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
 
         if (d.disputeClaims[agreement] != caller) revert NotTheClaimer();
+        // This door is gated by the CLAIM, never by the seat — which is why the
+        // bond is asked here in its own right and not left to claimDispute. A
+        // man removed for cause has his bond forfeited to zero by
+        // _performRemoval while his claims survive untouched; before this line
+        // he went on filing verdicts on every escrow he still held. Suspension
+        // covered that at finalization; this covers it at submission.
+        _requireBonded(d, caller);
         if (d.pendingVerdicts[agreement].submittedAt != 0) revert VerdictAlreadySubmitted();
 
         // Check that the agreement is still in dispute
@@ -2878,7 +2996,16 @@ contract ArbiterRegistryFacet {
         uint256 eligibleVoters;
         uint256 len = d.arbiterList.length;
         for (uint256 i = 0; i < len; i++) {
-            if (d.arbiterList[i] != v.arbiter) eligibleVoters++;
+            address seat = d.arbiterList[i];
+            // ⚠️ COUNTS WHO COULD ACTUALLY VOTE, NOT WHO HOLDS A SEAT (8
+            // September 2026). Before the bond gate the two were one set. They
+            // stopped being one the moment voteOnAppeal began refusing unbonded
+            // arbiters, and counting seats here would have turned this check
+            // into a lie the APPELLANT pays for: the quorum test passes on empty
+            // seats, APPEAL_DEPOSIT is taken a few lines below, and no eligible
+            // voter exists to cast the three votes. The appeal then fails by
+            // default at the window, and the money bought nothing.
+            if (seat != v.arbiter && d.arbiterBond[seat] != 0) eligibleVoters++;
         }
         if (eligibleVoters < APPEAL_MIN_VOTES) revert InsufficientArbitersForAppeal();
 
@@ -2905,6 +3032,10 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.PendingVerdict storage v = d.pendingVerdicts[agreement];
 
         if (!d.isArbiter[caller]) revert NotArbiter();
+        // Kept in step with the eligibility COUNT in raiseAppeal above: whoever
+        // is refused here must not have been counted there, or an appellant
+        // pays a deposit for a quorum that cannot assemble.
+        _requireBonded(d, caller);
         if (!v.appealed) revert NoAppeal();
         if (v.appealResolved) revert AppealAlreadyResolved();
         if (caller == v.arbiter) revert CannotVoteOnOwnVerdict();
@@ -3725,6 +3856,7 @@ contract ArbiterRegistryFacet {
 
     function getChiefArbiter()  external view returns (address) { return ArbiterRegistryStorage.data().chiefArbiter; }
     function isRegisteredArbiter(address addr) external view returns (bool) { return ArbiterRegistryStorage.data().isArbiter[addr]; }
+
     function getArbiters()      external view returns (address[] memory) { return ArbiterRegistryStorage.data().arbiterList; }
     function getDisputeClaimer(address agreement) external view returns (address) { return ArbiterRegistryStorage.data().disputeClaims[agreement]; }
 

@@ -832,11 +832,17 @@ contract DeployFull is Script {
     // with the same DAO activation that closes addArbiter.
     //
     // Why a separate facet rather than an addition to one of the two neighbours — see
-    // the header of src/facets/ArbiterApplicationsFacet.sol: the registry has 1 207
-    // bytes to spare, and the accountability facet has room but its name is already
+    // the header of src/facets/ArbiterApplicationsFacet.sol: the registry had little
+    // room to spare, and the accountability facet has room but its name is already
     // half untrue, and a second layer of that untruth is not worth introducing.
+    //
+    // ⚠️ THE ROOM ARGUMENT STOPPED BEING THEORETICAL ON 8 SEPTEMBER 2026. The
+    // figure that stood here ("1 207 bytes to spare") was a snapshot and had gone
+    // stale; measured that day the registry stood 209 bytes clear of the EIP-170
+    // ceiling before the bond work and 44 after it. `postArbiterBond` below is
+    // here BECAUSE it would not fit there — see its docstring.
     function arbiterApplicationsFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](11);
+        sels = new bytes4[](15);
 
         // The applicant's doors are BOTH gasless (ERC-2771): somebody worth seating
         // has a record of deals, not necessarily an ETH balance.
@@ -860,6 +866,42 @@ contract DeployFull is Script {
         sels[8]  = ArbiterApplicationsFacet.getApplicants.selector;
         sels[9]  = ArbiterApplicationsFacet.getApplicantCount.selector;
         sels[10] = ArbiterApplicationsFacet.getApplicantsPage.selector;
+
+        // The bond a hand-seated arbiter posts for himself, and the read that lets
+        // a form know he still owes it (8 September 2026). Gasless like the
+        // applicant's other doors and, unlike every other door of this facet,
+        // NOT retired by the DAO ratchet — a man seated before the handover must
+        // still be able to pay after it.
+        sels[11] = ArbiterApplicationsFacet.postArbiterBond.selector;
+        sels[12] = ArbiterApplicationsFacet.isArbiterActive.selector;
+
+        // Taking back a granted seat that nothing has been earned in
+        // (11 September 2026). Administrative, raw msg.sender, and retired by the
+        // same DAO ratchet as the two decision doors above — after the handover
+        // arbiters seat themselves and removal belongs to the successor.
+        //
+        // ⚠️ It is NOT a second removal door. It refuses every arbiter with a
+        // record, so the procedure — proposal, 48-hour pause, right of reply —
+        // still owns everyone it owned before. The bond comes back in full,
+        // which is the other half of why this is a filter and not a penalty.
+        //
+        // No companion read is mounted on purpose: a form decides whether to
+        // show the button by simulating THIS call and reading the named error it
+        // refuses with. A second function answering "may I" would be a second
+        // copy of the rule, and the copy that drifted would be the one saying
+        // yes.
+        sels[13] = ArbiterApplicationsFacet.revokeUnprovenSeat.selector;
+
+        // The same bond as sels[11], carried in on a signed EIP-2612 paper
+        // instead of an allowance granted beforehand (11 September 2026).
+        //
+        // ⚠️ IT IS A SECOND DOOR, NOT A REPLACEMENT. sels[11] stays mounted for
+        // everybody who has already approved the diamond. The reason the second
+        // door had to exist at all is that `approve` is a transaction sent to
+        // USDC, which does not trust our forwarder — so that step could never be
+        // made gasless from our side, and the arbiter it is asked of has earned
+        // nothing yet to pay the gas with.
+        sels[14] = ArbiterApplicationsFacet.postArbiterBondWithPermit.selector;
     }
 
     // DealMetadataFacet — 1 selector

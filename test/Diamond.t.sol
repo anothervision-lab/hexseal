@@ -295,6 +295,7 @@ contract DiamondTest is Test {
         RegistryFacet(address(diamond)).initRegistry(address(diamond));
         FactoryFacet(address(diamond)).initFactory(address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer));
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+        _bondSeat(arbiter);
     }
     
     
@@ -386,8 +387,11 @@ contract DiamondTest is Test {
         a3 = address(0x31);
         a4 = address(0x32);
         ArbiterRegistryFacet(address(diamond)).addArbiter(a2);
+        _bondSeat(a2);
         ArbiterRegistryFacet(address(diamond)).addArbiter(a3);
+        _bondSeat(a3);
         ArbiterRegistryFacet(address(diamond)).addArbiter(a4);
+        _bondSeat(a4);
     }
 
     // The new flow: the arbiter through the Diamond (submitVerdict → finalizeVerdict)
@@ -1052,6 +1056,7 @@ contract DiamondTest is Test {
     function testArbiterDemotedAfterThreeOverturns() public {
         address flakyArbiter = address(uint160(42000));
         ArbiterRegistryFacet(address(diamond)).addArbiter(flakyArbiter);
+        _bondSeat(flakyArbiter);
 
         _disputeAndOverturn(address(uint160(42100)), address(uint160(42200)), flakyArbiter);
         assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
@@ -1091,6 +1096,7 @@ contract DiamondTest is Test {
         uint256 xpBeforeDemotion = ReputationFacet(address(diamond)).getXP(veteranArbiter);
         assertGe(xpBeforeDemotion, 10_000);
         ArbiterRegistryFacet(address(diamond)).addArbiter(veteranArbiter);
+        _bondSeat(veteranArbiter);
 
         _disputeAndOverturn(address(uint160(43100)), address(uint160(43200)), veteranArbiter);
         _disputeAndOverturn(address(uint160(43101)), address(uint160(43201)), veteranArbiter);
@@ -1273,6 +1279,7 @@ contract DiamondTest is Test {
     function testArbiterTimeoutDecrementsOpenClaimCount() public {
         address flakyArbiter = address(uint160(46300));
         ArbiterRegistryFacet(address(diamond)).addArbiter(flakyArbiter);
+        _bondSeat(flakyArbiter);
 
         _disputeAndArbiterTimeout(address(uint160(46400)), address(uint160(46500)), flakyArbiter, 10_000_000);
 
@@ -1355,6 +1362,7 @@ contract DiamondTest is Test {
     function testFinalizedVerdictResetsMistakeStreak() public {
         address recoveringArbiter = address(uint160(44000));
         ArbiterRegistryFacet(address(diamond)).addArbiter(recoveringArbiter);
+        _bondSeat(recoveringArbiter);
 
         // One overturn — mistake streak becomes 1.
         address cli1 = address(uint160(44100));
@@ -1527,6 +1535,7 @@ contract DiamondTest is Test {
     function testThreeArbiterTimeoutsDemoteTheArbiter() public {
         address flakyArbiter = address(uint160(51000));
         ArbiterRegistryFacet(address(diamond)).addArbiter(flakyArbiter);
+        _bondSeat(flakyArbiter);
 
         _disputeAndArbiterTimeout(address(uint160(51100)), address(uint160(51200)), flakyArbiter, 10_000_000);
         _disputeAndArbiterTimeout(address(uint160(51101)), address(uint160(51201)), flakyArbiter, 20_000_000);
@@ -2074,6 +2083,7 @@ contract DiamondTest is Test {
     function testArbiterRegistryAddArbiter() public {
         address newArbiter = address(0x10);
         ArbiterRegistryFacet(address(diamond)).addArbiter(newArbiter);
+        _bondSeat(newArbiter);
         assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(newArbiter));
         address[] memory list = ArbiterRegistryFacet(address(diamond)).getArbiters();
         assertEq(list.length, 2); // arbiter from setUp + new
@@ -2082,6 +2092,7 @@ contract DiamondTest is Test {
     function testArbiterRegistryAddRevertIfAlreadyArbiter() public {
         vm.expectRevert(ArbiterRegistryFacet.AlreadyArbiter.selector);
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+        _bondSeat(arbiter);
     }
 
     function testArbiterRegistryAddRevertIfNotOwner() public {
@@ -2203,6 +2214,7 @@ contract DiamondTest is Test {
         // Second arbiter tries to claim the same dispute
         address arbiter2 = address(0x30);
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter2);
+        _bondSeat(arbiter2);
         bytes32 commitment2 = keccak256(abi.encodePacked(agreementAddr, arbiter2, DISPUTE_SALT));
         vm.prank(arbiter2);
         ArbiterRegistryFacet(address(diamond)).commitDisputeClaim(commitment2);
@@ -3692,6 +3704,7 @@ contract DiamondTest is Test {
     function test_AnArbiterTimeoutBooksAMistakeButNoOverturn() public {
         address flaky = address(uint160(51500));
         ArbiterRegistryFacet(address(diamond)).addArbiter(flaky);
+        _bondSeat(flaky);
 
         _disputeAndArbiterTimeout(address(0x7401), address(0x7402), flaky, block.timestamp + 30 days);
 
@@ -3860,6 +3873,7 @@ contract DiamondTest is Test {
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
         address a5 = address(0x33);
         ArbiterRegistryFacet(address(diamond)).addArbiter(a5);
+        _bondSeat(a5);
 
         address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
 
@@ -4050,4 +4064,28 @@ contract DiamondTest is Test {
         ArbiterRegistryStorage.PendingVerdict memory unfrozen = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
         assertFalse(unfrozen.frozen);
     }
+
+    /// The bond behind a hand-given seat (8 September 2026).
+    ///
+    /// `addArbiter` seats and takes no money, and since the bond gate landed a
+    /// seated arbiter with a zero bond is refused by every arbiter door with
+    /// `BondNotPosted`. The real door is `ArbiterApplicationsFacet.postArbiterBond`;
+    /// this rig does not mount that facet, so the field is written directly —
+    /// the same device this file already uses to seat.
+    ///
+    /// Slot 12 of the arbiter namespace is `arbiterBond`, pinned by
+    /// test/StorageLayout.t.sol. The value is the real bond, 50 USDC at six
+    /// decimals.
+    ///
+    /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
+    /// in this file refunds or forfeits a bond; a rig that does either must
+    /// move real money instead, or the diamond pays out what it never took.
+    function _bondSeat(address who) internal {
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(who, uint256(ARB_STORAGE_BASE) + 12)),
+            bytes32(uint256(50_000_000))
+        );
+    }
+
 }

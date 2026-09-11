@@ -1623,13 +1623,11 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // decision 76, 6 September 2026. A dispute does not have to begin with
         // the deal; it can begin with the top-up. When it does, the arbiter
         // opens the case and sees money moved with nothing at all saying what
-        // it was moved for, and there is nothing to judge by. The owner put it
-        // this way, and the wording here is a translation of his -- the Russian
-        // original is quoted in full in docs/DECISIONS.md, 76: the top-up is
-        // one more puzzle for the arbiter, so let it come commented, otherwise
-        // it is blind; and a top-up that carries no evidence at all, in a case
-        // where everything else looks tidy, asks two people to sink themselves
-        // over it.
+        // it was moved for, and there is nothing to judge by. A top-up is one
+        // more puzzle for the arbiter, so it comes commented or the hearing is
+        // blind; and a top-up carrying no evidence at all, in a case where
+        // everything else looks tidy, asks two people to sink themselves over
+        // it.
         //
         // `initialize` has refused empty terms with this same error since the
         // beginning (decision 37); proposeExtra never inherited it. Its
