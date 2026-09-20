@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "../src/Treasury.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract MockUSDCT {
     mapping(address => uint256) public balanceOf;
@@ -195,7 +196,7 @@ contract ReentrantDiamondT {
 
 /// A diamond that takes LESS than requested in fundVault (it does not revert, it
 /// simply pulls actuallyTake instead of amount) but credits itself THE REQUESTED
-/// amount — mirroring the arithmetic of the real ArbiterRegistryFacet.fundVault,
+/// amount — mirroring the arithmetic of the real ArbiterVaultFacet.fundVault,
 /// where `d.vaultBalance += amount;` uses the call's parameter and not what
 /// actually arrived by transferFrom. The mock used to credit `+= take` (what it
 /// really pulled), which made getVaultBalance() a mirror of spent, so the mutation

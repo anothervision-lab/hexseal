@@ -12,6 +12,20 @@ pragma solidity ^0.8.20;
 //   3. Anyone calls finalizeVerdict(agreement) → the Diamond executes resolveDispute
 //   4. Owner/DAO may overturnVerdict before finalization → the arbiter's XP is slashed, no payout
 //
+// ⚠️ THE MONEY AND THE PLAIN READS LIVE NEXT DOOR (16 September 2026).
+//   This facet was 24 532 bytes of the 24 576 EIP-170 allows — forty-four free —
+//   and the approved appeal economics did not fit. Twenty-eight selectors moved
+//   to `ArbiterVaultFacet`: every door that only moves money (fundVault,
+//   creditDisputeFee, withdrawTreasurySlice, withdrawArbiterReward, fundDispute,
+//   withdrawDisputeBounty, the floor and discount setters, quoteDisputeTopUp)
+//   and every door that only reads a number (getArbiters, getPendingVerdict,
+//   getAppealVotes and the rest). Measured: 24 532 → 19 205 here, the new facet
+//   6 619; the diamond's selector total did not change, because a selector moved
+//   to another address is still the same selector at the same proxy.
+//   The paragraph below therefore DESCRIBES THE MONEY, IT DOES NOT HOLD IT —
+//   the rules it states are still true, they are just enforced in the file next
+//   to this one.
+//
 // FeeVault: topped up by hand (fundVault) and holds a buffer against future
 //   needs of the arbiter vault (Treasury.distribute()), but it no longer pays
 //   for an individual dispute — the flat rewardPerDispute payout was rejected
@@ -22,6 +36,11 @@ pragma solidity ^0.8.20;
 //   top-up to reach arbiterFloor on a small pot (fundDispute), which goes to
 //   the arbiter on finalization inside finalizeVerdict. The arbiter collects
 //   what has piled up through withdrawArbiterReward().
+//
+// Appeal panel: since 17 September 2026 the arbiters who vote on an appeal are
+//   paid out of its deposit, equally, on every outcome that reached a quorum,
+//   and pull their share through withdrawAppealShare(). A won appeal is paid
+//   back by the arbiter who was wrong — see resolveAppeal.
 //
 // DAO mode: ONLY after owner.activateDAO() — which does not go through before
 //   uniqueActiveUsers >= DAO_THRESHOLD (10 000) and the successor has confirmed
@@ -43,6 +62,7 @@ import "../RegistryFacet.sol";                // RegistryStorage — verifying n
 // and Solidity resolves it: neither side inherits from the other, both references
 // are to types. Measured by building, not assumed.
 import {ArbiterAccountabilityFacet} from "./ArbiterAccountabilityFacet.sol";
+import {MarketPresence} from "./MarketPresence.sol"; // "an arbiter is not a party"
 
 // ---------- INTERFACES ----------
 
@@ -197,6 +217,86 @@ library ArbiterRegistryStorage {
         uint64  submittedAt;
         uint64  decidedAt;
         address decidedBy;
+    }
+
+    /// Where one settled appeal's money went, per agreement (17 September
+    /// 2026). Written by `resolveAppeal`, consumed by `creditDisputeFee` and
+    /// `withdrawAppealShare`.
+    ///
+    /// ⚠️ NOT A FIELD OF `PendingVerdict`, deliberately. `getPendingVerdict()`
+    /// returns that struct whole, and its shape is pinned outside this
+    /// repository's Solidity — the frontend, the relayer and the ABI tuple
+    /// census all decode it field by field, and a tail appended there has
+    /// already been lost once. A mapping of its own changes no return type.
+    ///
+    /// ⚠️ ONLY TWO OF THE FOUR ARE BALANCES, and neither is a balance by itself.
+    ///   • `voterShare` is what EACH voter may pull. The money behind it is
+    ///     `voterShare × voters who have not pulled yet`, which is why the
+    ///     per-voter read `getAppealShareOwed` exists — a sum over voters is
+    ///     the balance, this field alone is not.
+    ///   • `advanceFromBond` and `advanceFromVault` are NOT money held: they
+    ///     are what the appellant was already PAID out of the ruling
+    ///     arbiter's bond and out of the bank, and what his forfeited fee
+    ///     share still has to give back to them when it arrives.
+    ///   • `debt` is owed to the appellant with NOTHING behind it. It is kept
+    ///     here and not in `refundableBounty` on purpose: every entry there is
+    ///     backed by USDC on the diamond, and `withdrawDisputeBounty` pays it
+    ///     out of the diamond's whole balance — booking an unbacked debt there
+    ///     would pay the appellant with somebody else's escrow. It moves into
+    ///     `refundableBounty` only as real money arrives.
+    ///
+    /// Four uint64 fill one slot. The bound is structural rather than hoped
+    /// for: every amount here is at most one appeal deposit, and a deposit is
+    /// capped at APPEAL_DEPOSIT_CAP (200 USDC = 2e8 base units), eleven orders
+    /// of magnitude under 2^64.
+    ///
+    /// `appellant` is the second slot and is written ONLY when a debt is
+    /// created. The verdict record also names him, but that record can be
+    /// deleted after the deal ends (`clearStuckVerdict`), while a debt can
+    /// outlive the deal — it is paid later by the arbiter's top-up or out of
+    /// the bank, and whoever pays it needs to know to whom.
+    struct AppealLedger {
+        uint64 voterShare;
+        uint64 advanceFromBond;
+        uint64 advanceFromVault;
+        uint64 debt;
+        address appellant;
+    }
+
+    // ── Appeal pricing, 17 September 2026 ───────────────────────────────────
+    //
+    // Declared in the LIBRARY, like SUSPENSION_WINDOW above, because two facets
+    // apply it: `raiseAppeal` charges it and `quoteAppealDeposit` in
+    // ArbiterVaultFacet tells a screen what will be charged. One declaration,
+    // one function, so the quote and the charge cannot disagree.
+
+    /// The least an appeal costs: 20 USDC.
+    uint256 internal constant APPEAL_DEPOSIT_FLOOR = 20_000_000;
+    /// The most an appeal costs: 200 USDC.
+    uint256 internal constant APPEAL_DEPOSIT_CAP = 200_000_000;
+
+    /// What an appeal on `agreement` costs right now: the deal's own dispute
+    /// fee (`Agreement.disputeFee()`, 3% of the pot with its own ceiling),
+    /// held between the floor and the cap — the same "whichever is larger, the
+    /// floor or the percentage" shape the boards use for their fee.
+    ///
+    /// The percentage is READ, not recomputed: a second copy of "3% of amount
+    /// plus extras" here would drift from the clone's on the first edit, and
+    /// the clone's is the one the fee is actually taken by.
+    ///
+    /// ⚠️ A CLONE THAT CANNOT ANSWER PAYS THE FLOOR, it is not refused. Clones
+    /// are pinned to the implementation they were made from; one made before
+    /// `disputeFee()` existed would otherwise have no appeal at all, and a
+    /// refused appeal strands nothing but takes away the only check on a
+    /// verdict. The response length is checked before decoding for the same
+    /// reason as `_softTransfer`: a short reply must not become a panic.
+    function appealDepositFor(address agreement) internal view returns (uint256 deposit) {
+        deposit = APPEAL_DEPOSIT_FLOOR;
+        (bool ok, bytes memory ret) = agreement.staticcall(abi.encodeWithSignature("disputeFee()"));
+        if (ok && ret.length >= 32) {
+            uint256 fee = abi.decode(ret, (uint256));
+            if (fee > deposit) deposit = fee > APPEAL_DEPOSIT_CAP ? APPEAL_DEPOSIT_CAP : fee;
+        }
     }
 
     struct Data {
@@ -520,8 +620,10 @@ library ArbiterRegistryStorage {
 
         /// The cause of the last removal, ENCODED (see REMOVAL_CAUSE_SHIFT and
         /// AUTO_REMOVAL_BASE next to the writing functions): 0 — never removed,
-        /// 1..6 — the Cause code plus one, 252..255 — auto-demotion (there is no
+        /// 1..6 — the Cause code plus one, 240..255 — auto-demotion (there is no
         /// cause at all, but the path is named: AUTO_REMOVAL_BASE + DemotionPath).
+        /// Between the two, 7..239, is nothing: a code no writer produces, which
+        /// a reader must show as unknown rather than guess at.
         ///
         /// The type is uint8 and not the enum: that enum is declared in
         /// ArbiterAccountabilityFacet, and tying a storage layout to a type
@@ -693,7 +795,7 @@ library ArbiterRegistryStorage {
         ///
         /// Zero here means "never set" and reads back as
         /// DEFAULT_DISPUTE_DISCOUNT — the same shape as `arbiterFloor` /
-        /// `getArbiterFloor()` two functions apart in this file. The cost of
+        /// `getArbiterFloor()`, both applied in ArbiterVaultFacet. The cost of
         /// that shape is named out loud: the owner cannot express "no discount
         /// at all" by writing 0, he writes 1 (a millionth of a dollar). The
         /// alternative — 0 meaning off — would have shipped the cut dead until
@@ -775,6 +877,133 @@ library ArbiterRegistryStorage {
         /// ceiling over it is frozen in the treasury and drops on the
         /// governance handover; nothing here can lift it.
         uint256 treasuryFoundationBps;
+
+        // ── Appeal economics, 17 September 2026 ─────────────────────────────
+        //
+        // ⚠️ APPENDED AT THE END. Do not touch the order or the types of the
+        // fields above: the layout is append-only, enforced by a build gate
+        // over the struct's fields, and this is the very class of bug that
+        // broke the live JobBoard in July 2026.
+        //
+        // In `Data` and NOT in `PendingVerdict` — see `AppealLedger` for why.
+
+        /// Per agreement: the panel's share per voter, and what the appellant's
+        /// refund borrowed from the arbiter's bond, from the bank, and on
+        /// credit. See `AppealLedger`.
+        mapping(address => AppealLedger) appealLedgers;
+
+        /// Per agreement, per voter: the panel share has been pulled. A
+        /// separate flag rather than clearing `hasVotedAppeal`, which is a
+        /// public record of who voted and must outlive the payment.
+        mapping(address => mapping(address => bool)) appealShareTaken;
+
+        // ── The rest of the appeal economics, 17 September 2026 (second pass) ──
+        //
+        // All of these are new on this branch together with the two above;
+        // none of them is on the chain yet.
+
+        /// Per arbiter: an appeal refund has been advanced out of this seat's
+        /// bond at least once since it was last granted. Tells "the bond sagged,
+        /// possibly all the way to zero" apart from "no bond was ever posted" —
+        /// two different states with two different rights: a sagging seat
+        /// finishes the cases it already holds, a seat that never paid does no
+        /// arbiter work at all. Cleared when a seat is granted again
+        /// (`clearRemovalRecord`), so a fresh seat starts unposted.
+        mapping(address => bool) bondDrawnByAppeal;
+
+        /// Per arbiter: the agreements whose won appeal left a debt to the
+        /// appellant that this arbiter's bond could not advance. His top-up
+        /// pays them first, and so does his resignation, out of the bond it
+        /// returns. Entries whose debt was paid some other way are skipped and
+        /// the list is emptied once nothing on it is owed.
+        mapping(address => address[]) arbiterDebtCases;
+
+        /// Every agreement that has ever carried such a debt, in the order the
+        /// debts arose, and the first entry not yet known to be paid. The bank
+        /// pays them in this order (`settleAppealDebts`, anyone may press).
+        address[] appealDebtQueue;
+        uint256   appealDebtQueueHead;
+
+        /// The sum of every appeal debt still owed. The bank's money is spent
+        /// on anything else — a dispute top-up discount, a new appeal's advance
+        /// — only above this line, so whatever enters the bank while debts
+        /// stand is theirs first.
+        uint256 appealDebtTotal;
+
+        // ── appended 18 September 2026: the quorum of an appeal became
+        //    movable (the owner's decision of the same day) ──
+        //
+        /// Per agreement: how many votes THIS appeal needs, written when it was
+        /// raised. `min(APPEAL_VOTES_CAP, eligible voters)`, never under
+        /// APPEAL_VOTES_FLOOR — see the constants in ArbiterRegistryFacet.
+        ///
+        /// ⚠️ A MAPPING OF ITS OWN AND NOT A FIELD OF `PendingVerdict`, for the
+        /// reason written out at `AppealLedger` above: `getPendingVerdict()`
+        /// returns that struct whole, its shape is pinned outside this
+        /// repository's Solidity (the frontend, the relayer and the ABI tuple
+        /// census all decode it field by field), and a tail appended there has
+        /// already been lost once.
+        ///
+        /// ⚠️ ZERO MEANS "RAISED BEFORE THIS FIELD EXISTED", not "no votes
+        /// needed". The single reader falls back to the flat three those
+        /// appeals were raised under. Appended at the end; no field above it
+        /// moves.
+        mapping(address => uint8) appealVotesRequired;
+    }
+
+    /// What `arbiter` still owes appellants across his debt cases.
+    function arbiterDebtOf(Data storage d, address arbiter) internal view returns (uint256 total) {
+        address[] storage cases = d.arbiterDebtCases[arbiter];
+        uint256 n = cases.length;
+        for (uint256 i = 0; i < n; i++) total += d.appealLedgers[cases[i]].debt;
+    }
+
+    /// Pays `arbiter`'s appeal debts, oldest first, out of money he is putting
+    /// in or taking out right now, up to `budget`. Called by the two bond
+    /// doors (a top-up pays his debts before it tops the bond up) and by
+    /// `resignAsArbiter` (the bond he takes home pays them first).
+    ///
+    /// The payment is booked the way an advance out of the bond is booked —
+    /// the debt shrinks and `advanceFromBond` grows by the same amount — so a
+    /// forfeited fee share that arrives later gives it back to the bond exactly
+    /// as it would have given back an advance made at `resolveAppeal`. The
+    /// appellant is paid into `refundableBounty`: the money is on the diamond
+    /// the moment this runs (the caller has just taken it in, or is about to
+    /// hand it out), so the booking is backed.
+    ///
+    /// The list is emptied only when nothing on it is owed any more.
+    function payArbiterDebts(Data storage d, address arbiter, uint256 budget)
+        internal returns (uint256 paid)
+    {
+        address[] storage cases = d.arbiterDebtCases[arbiter];
+        uint256 n = cases.length;
+        bool cleared = true;
+        for (uint256 i = 0; i < n; i++) {
+            address agreement = cases[i];
+            AppealLedger storage l = d.appealLedgers[agreement];
+            uint256 debt = l.debt;
+            if (debt == 0) continue;
+            uint256 pay = budget - paid;
+            if (pay > debt) pay = debt;
+            if (pay == 0) { cleared = false; break; }
+            // uint64 cannot truncate: debt + advances never exceed one deposit.
+            l.debt = uint64(debt - pay);
+            l.advanceFromBond = uint64(l.advanceFromBond + pay);
+            d.refundableBounty[l.appellant] += pay;
+            paid += pay;
+            emit ArbiterRegistryFacet.DisputeBountyRefundable(agreement, l.appellant, pay);
+            if (pay < debt) { cleared = false; break; }
+        }
+        if (paid != 0) d.appealDebtTotal -= paid;
+        if (cleared) delete d.arbiterDebtCases[arbiter];
+    }
+
+    /// The bank above the appeal debts it owes — the only part of it any other
+    /// spend may touch.
+    function bankAboveDebts(Data storage d) internal view returns (uint256) {
+        uint256 bank = d.vaultBalance;
+        uint256 owed = d.appealDebtTotal;
+        return bank > owed ? bank - owed : 0;
     }
 
     function data() internal pure returns (Data storage d) {
@@ -837,20 +1066,47 @@ library ArbiterRegistryStorage {
     /// number zero. The range sits at the far end so no future Cause reaches it.
     ///
     /// ⚠️ This is a BASE, not a single value (16 August 2026). Automatic
-    /// removal has exactly three paths, and ArbiterRegistryFacet.DemotionPath
+    /// removal has several paths, and ArbiterRegistryFacet.DemotionPath
     /// already tells them apart — but only in the event feed, that is, exactly
     /// where nobody reads. The getArbiterStanding card is the only readable
     /// place, and one shared code would lose in it a distinction that was
     /// introduced there on purpose.
     ///
     /// Encoding: `AUTO_REMOVAL_BASE + uint8(DemotionPath)`, that is
-    ///   252 — Unspecified (the path is not named; no caller sends it),
-    ///   253 — OwnerOverturn, 254 — AgreementTimeout, 255 — AppealVote.
-    /// The base is 252 and not 255 because the enum holds four values and the
-    /// top end of uint8 must stay reachable without overflow. A new path has to
-    /// be seated BELOW the base (or the base moves) — and that is good: a fifth
-    /// one cannot be added silently.
-    uint8 internal constant AUTO_REMOVAL_BASE = 252;
+    ///   240 — Unspecified (the path is not named; no caller sends it),
+    ///   241 — OwnerOverturn, 242 — AgreementTimeout, 243 — AppealVote,
+    ///   244 — ClaimAbandoned.
+    /// The range is 240..255: SIXTEEN places, five of them taken today.
+    ///
+    /// ⚠️ THE BASE WAS 252 AND THE PROMISE IT CARRIED WAS BROKEN (moved to 240
+    /// on 18 September 2026). The old text here said "a fifth one cannot be
+    /// added silently" — and on 18 September 2026 a fifth one
+    /// (DemotionPath.ClaimAbandoned, value 4) was added silently, in the same
+    /// hour, by the same hands that read this paragraph. 252 + 4 is 256, which
+    /// a uint8 does not hold: recordAutomaticRemoval below would have stopped
+    /// with Panic 0x11, and stopped executeChainRemoval with it. An arbiter
+    /// whose third mistake in a row was booked by abandonClaim could never have
+    /// been unseated by the chain at all, and his bond would have stayed frozen
+    /// under a charge nobody could execute. Nothing on the chain had recorded a
+    /// cause yet, so moving the base re-meant no record that exists — a freedom
+    /// this constant will NOT have again once the first automatic removal is
+    /// written down.
+    ///
+    /// ⚠️ A DOCSTRING IS NOT A LOCK, AND THAT IS THE ACTUAL LESSON. The warning
+    /// above was correct, prominent and ignored, because nothing went red. What
+    /// replaces it is test/ArbiterDemotionPathCodes.t.sol, which does not
+    /// reason about the arithmetic: it walks EVERY member of DemotionPath —
+    /// the enum itself, through `type(DemotionPath).max`, so a member added
+    /// tomorrow is walked without anyone remembering to add it — pushes each
+    /// one through this very function, and reads the card back. A path that
+    /// does not fit stops that sweep with the same Panic the live door would
+    /// have hit, by name and with the number printed.
+    ///
+    /// So: a new path may be added freely while the range has room, and the day
+    /// it has none the sweep goes red BEFORE the chain does. What must not
+    /// happen is this constant moving UPWARD, or a path being added past the
+    /// ceiling, on the strength of a comment nobody had to satisfy.
+    uint8 internal constant AUTO_REMOVAL_BASE = 240;
 
     /// Removal for cause. `rawCause` is the numeric value of
     /// ArbiterAccountabilityFacet.Cause as-is; the library applies the shift.
@@ -969,6 +1225,11 @@ library ArbiterRegistryStorage {
     /// of the function: there are still no copies, and the difference between
     /// the doors is visible AT THE CALL SITE, not hidden in the body.
     function clearRemovalRecord(Data storage d, address arbiterAddr, bool liftSuspension) internal {
+        // A seat granted again starts unposted, not sagging (17 September 2026):
+        // an appeal that drew the PREVIOUS seat's bond does not give the new
+        // seat the right to finish cases without paying. Every seating door
+        // passes through here, which is why the line lives here.
+        delete d.bondDrawnByAppeal[arbiterAddr];
         delete d.removedAt[arbiterAddr];
         delete d.removalReply[arbiterAddr];
         if (liftSuspension) delete d.suspendedUntil[arbiterAddr];
@@ -1014,7 +1275,7 @@ contract ArbiterRegistryFacet {
     uint256 private constant OVERTURN_XP_SLASH  = 200;       // XP penalty on an overturn
     // DEFAULT_REWARD (5 USDC) was deleted on 31 July: no call read it, while the
     // comment above it called it "the floor of the formula" — even though the real
-    // floor of an arbiter's payout is DEFAULT_ARBITER_FLOOR below. Two constants
+    // floor of an arbiter's payout is DEFAULT_ARBITER_FLOOR (ArbiterVaultFacet). Two constants
     // sharing one word in their description, one of them dead, are a false trail
     // and not documentation.
     uint256 private constant FINALIZE_DELAY      = 24 hours;  // window for owner/DAO/appeal before finalization (was 1 hour — not enough for an ordinary user)
@@ -1039,32 +1300,81 @@ contract ArbiterRegistryFacet {
     uint256 private constant ARBITER_BOND                 = 50_000_000; // 50 USDC (6 decimals) — forfeited on demotion, returned on resignAsArbiter()
 
     uint256 private constant APPEAL_REVIEW_WINDOW = 4 days;     // the same span DISPUTE_WINDOW gives the arbiter
-    uint256 private constant APPEAL_MIN_VOTES     = 3;          // quorum of other arbiters
-    uint256 private constant APPEAL_DEPOSIT       = 20_000_000; // 20 USDC (6 decimals) — flat, NOT a % of the deal amount
 
-    /// How many votes DECIDE an appeal when turnout is exactly the quorum
-    /// (16 August 2026).
+    /// ── THE QUORUM OF AN APPEAL IS NOT A NUMBER ANY MORE (18 September 2026,
+    ///    the owner's decision) ──
     ///
-    /// resolveAppeal settles the matter by a simple majority of the votes CAST
-    /// as soon as APPEAL_MIN_VOTES of them exist, and anyone may call it. With
-    /// three cast, two decide — so the guarded property "the chief does not
-    /// decide an appeal" requires a block of STRICTLY FEWER THAN two, not fewer
-    /// than three as the earlier version of the cap assumed.
+    /// It used to be one: `APPEAL_MIN_VOTES = 3`, flat, whatever the corps
+    /// looked like. With four seats the eligible panel is exactly three — the
+    /// ruling arbiter is out, the two parties are out, an unbonded seat is out
+    /// — so any one of them being suspended, drained by a won appeal or sitting
+    /// on his own deal took the corps under the bar and `raiseAppeal` refused
+    /// ALTOGETHER. A verdict then had no second reader at all, which is the
+    /// opposite of what a quorum is for.
     ///
-    /// DERIVED from the quorum rather than written as a number: two values
-    /// about one rule would drift apart silently — the same class as
-    /// MISTAKE_THRESHOLD in ArbiterAccountabilityFacet, declared as a
-    /// subtraction rather than a literal. The quorum does NOT change: 3 stays 3.
-    uint256 private constant APPEAL_DECIDING_VOTES = APPEAL_MIN_VOTES / 2 + 1;
+    /// The number is now `min(APPEAL_VOTES_CAP, eligible)`, never below
+    /// `APPEAL_VOTES_FLOOR`, and it RISES BY ITSELF as seats are filled. There
+    /// is deliberately no second lever for the owner to set it with: a hand on
+    /// this number is a hand on who reviews a verdict.
+    ///
+    /// Why three was never the defence against collusion, and why two is not a
+    /// weakening: at three votes an appeal is decided by TWO, so three never
+    /// stopped a pair that agreed in advance. What three stops is a single
+    /// arbiter overturning a colleague on his own. Two votes stop that too, and
+    /// they stop it harder — at a panel of two both must agree, so the bar for
+    /// overturning is unanimity rather than two out of three. Collusion is
+    /// answered by the bond, by the mistake streak and by every vote being
+    /// public, not by the size of the panel.
+    uint256 private constant APPEAL_VOTES_CAP   = 3;
+    /// Below this an appeal cannot be raised at all, and the deposit is NOT
+    /// taken — the eligibility count stands above the transfer in `raiseAppeal`
+    /// and must stay there. One eligible voter is not a panel: it is the single
+    /// overturn the cap above exists to prevent, and charging a man for it
+    /// would be selling him one.
+    uint256 private constant APPEAL_VOTES_FLOOR = 2;
 
-    uint256 private constant ARBITER_SHARE_BPS = 8_000; // 80% of the fee to the arbiter, the rest to the treasury
+    /// What an appeal cost before its price was written next to it — the
+    /// flat 20 USDC in force until 26 August 2026. Read by `_depositOf` and by
+    /// nothing else.
+    ///
+    /// ⚠️ NOT THE FLOOR OF TODAY'S PRICE, although the two are equal today.
+    /// Since 17 September 2026 an appeal is priced by
+    /// `ArbiterRegistryStorage.appealDepositFor` (floor 20, 3% of the pot, cap
+    /// 200). Reading that floor here instead would bring back the defect the
+    /// receipt field was written to kill: the day the floor moves, a man who
+    /// paid twenty under the old rule would be refunded the new number.
+    uint256 private constant APPEAL_DEPOSIT_BEFORE_RECEIPT = 20_000_000;
 
-    uint256 private constant DEFAULT_ARBITER_FLOOR = 10_000_000; // 10 USDC (6 decimals)
+    /// The FEWEST votes that can ever decide an appeal — the number the cap on
+    /// the chief's bloc is measured against (16 August 2026).
+    ///
+    /// resolveAppeal settles the matter by a strict majority of the votes CAST
+    /// once the quorum of them exists, and anyone may call it. With three cast,
+    /// two decide — so the guarded property "the chief does not decide an
+    /// appeal" requires a block of STRICTLY FEWER THAN two, not fewer than
+    /// three as the earliest version of the cap assumed.
+    ///
+    /// DERIVED, not written as a number: two values about one rule would drift
+    /// apart silently — the same class as MISTAKE_THRESHOLD in
+    /// ArbiterAccountabilityFacet, declared as a subtraction rather than a
+    /// literal.
+    ///
+    /// ⚠️ DERIVED FROM THE FLOOR AND NOT FROM THE CAP since the quorum became
+    /// movable (18 September 2026). The two happen to give the same 2 today
+    /// (2/2+1 and 3/2+1), so nothing about the cap on the chief changes with
+    /// this edit — but they are the same number by arithmetic, not by meaning,
+    /// and this constant means "the smallest panel that can still decide". A
+    /// cap raised to five would leave the floor's 2 the safe answer and the
+    /// cap's 3 a hole.
+    uint256 private constant APPEAL_DECIDING_VOTES = APPEAL_VOTES_FLOOR / 2 + 1;
 
-    /// Starting size of the vault's discount on a dispute top-up.
-    /// Only the default: the live number is `disputeVaultDiscount` in storage
-    /// and moves with `setDisputeDiscount`.
-    uint256 private constant DEFAULT_DISPUTE_DISCOUNT = 3_000_000; // 3 USDC
+    // ARBITER_SHARE_BPS, DEFAULT_ARBITER_FLOOR and DEFAULT_DISPUTE_DISCOUNT are
+    // declared in ArbiterVaultFacet, beside the only code that applies them.
+    // Until 17 September 2026 a second declaration of each stayed here after the
+    // split with no reader in this file, and front-end locks pinned the share
+    // to that dead copy: a mutation setting the applied share to 7 000 turned
+    // none of three of them red. Deleted rather than kept "in sync" — an unread
+    // copy is a mirror.
 
     // ── Cap on disputes held at once ──
     /// How many disputes an arbiter holds at once. It limits fee farming — an
@@ -1105,7 +1415,35 @@ contract ArbiterRegistryFacet {
     ///                      VOTES decide, not whoever pressed "settle". `by` is
     ///                      zero, and the voters are in the AppealVoteCast feed
     ///                      for the same agreement.
-    enum DemotionPath { Unspecified, OwnerOverturn, AgreementTimeout, AppealVote }
+    ///   ClaimAbandoned   — abandonClaim (18 September 2026, item D1). The same
+    ///                      missed window as AgreementTimeout, reached from the
+    ///                      other side: there the deal announced it, here a
+    ///                      stranger took the dead claim off the arbiter because
+    ///                      neither party ever came. Told apart from
+    ///                      AgreementTimeout and not folded into it, because the
+    ///                      permanent record is asked "how did this come about"
+    ///                      and "nobody pressed the timeout for four days" is a
+    ///                      different answer from "a party pressed it". `by` is
+    ///                      zero for the same reason as on the two paths above:
+    ///                      whoever pressed neither judged nor accused. The log
+    ///                      that names the arbiter is DisputeClaimAbandoned.
+    ///
+    /// ⚠️ APPENDED AT THE END. The numeric value of every path above is
+    /// unchanged: `chainProposalPath` keeps this enum as a raw uint8 in storage
+    /// and the ArbiterDemoted feed carries it as an indexed topic, so inserting
+    /// a value would rewrite history already on the chain.
+    ///
+    /// ⚠️ EVERY VALUE HERE ALSO HAS TO FIT THE PERMANENT RECORD, which encodes
+    /// it as `ArbiterRegistryStorage.AUTO_REMOVAL_BASE + uint8(path)` inside a
+    /// uint8 — a range with a ceiling and therefore a finite number of places
+    /// (240..255 today: sixteen, five taken). Appending past the ceiling does
+    /// not truncate, it makes recordAutomaticRemoval revert with Panic 0x11 and
+    /// takes the chain's own removal door down with it. This was not caught
+    /// when ClaimAbandoned was added, because a docstring was all that stood
+    /// here; test/ArbiterDemotionPathCodes.t.sol now walks this enum and pushes
+    /// every member through the real encoder, so the day the range runs out is
+    /// a red test and not a stuck arbiter.
+    enum DemotionPath { Unspecified, OwnerOverturn, AgreementTimeout, AppealVote, ClaimAbandoned }
 
     // -------- EVENTS --------
 
@@ -1189,6 +1527,17 @@ contract ArbiterRegistryFacet {
     event DisputeClaimCommitted(address indexed arbiter, bytes32 indexed commitment);
     event DisputeClaimed(address indexed agreement, address indexed arbiter);
     event DisputeReleased(address indexed agreement, address indexed prevArbiter);
+    /// A dead claim taken off an arbiter after his window ran out
+    /// (18 September 2026, item D1). Separate from DisputeReleased, which is a
+    /// voluntary hand-back INSIDE the window and carries no fault: this one is
+    /// always a missed window and always books a judicial mistake. `by` is
+    /// whoever pressed — he chooses nothing, the money is untouched, and the
+    /// deal's own timeout rule pays out later exactly as written.
+    event DisputeClaimAbandoned(
+        address indexed agreement,
+        address indexed arbiter,
+        address indexed by
+    );
     /// The arbiter recorded on chain: asked a party for the chat log — no answer.
     /// The event carries the same as storage and exists for the appeal feed:
     /// storage shows only the record of the CURRENT claimer, while an appeal
@@ -1236,6 +1585,33 @@ contract ArbiterRegistryFacet {
     event AppealRaised(address indexed agreement, address indexed appellant);
     event AppealVoteCast(address indexed agreement, address indexed arbiter, bool overturn);
     event AppealResolved(address indexed agreement, address indexed appellant, bool overturned);
+
+    // ── Appeal economics, 17 September 2026 ──────────────────────────────────
+    // Emitted beside AppealResolved, never instead of it: that event's topic is
+    // read by the subgraph and the screens, and its shape does not move.
+
+    /// The window closed without a quorum and the whole deposit went back to
+    /// the appellant — nobody reviewed anything, so nothing was bought.
+    event AppealDepositReturned(address indexed agreement, address indexed appellant, uint256 amount);
+    /// A quorum voted: each voter may pull `perVoter`, whatever the outcome;
+    /// `toVault` is the remainder of the division.
+    event AppealPanelPaid(address indexed agreement, uint256 perVoter, uint256 voters, uint256 toVault);
+    /// A won appeal refunded before the ruling arbiter's forfeited fee share
+    /// exists: `fromBond` out of his bond, `fromVault` out of the bank, `debt`
+    /// owed with nothing behind it yet.
+    event AppealRefundAdvanced(
+        address indexed agreement, address indexed appellant, uint256 fromBond, uint256 fromVault, uint256 debt
+    );
+    /// The forfeited fee share arrived and was spent in the fixed order: the
+    /// unpaid debt to the appellant, the bank's advance, the bond's advance
+    /// (back into the bond only while the seat is still held), the rest to the
+    /// bank. `fromTreasury` is what the treasury's 20% of the same fee covered
+    /// of the debt and the bank's advance after that; it keeps the rest.
+    event ForfeitedShareSpent(
+        address indexed agreement, uint256 toAppellant, uint256 toBond, uint256 toVault, uint256 fromTreasury
+    );
+    /// A voter pulled his share of a panel's pay.
+    event AppealShareWithdrawn(address indexed agreement, address indexed voter, uint256 amount);
     /// Removal over a streak of judicial mistakes.
     ///
     /// ⚠️ FOUR FIELDS INSTEAD OF ONE (16 August 2026). The earlier version —
@@ -1353,6 +1729,11 @@ contract ArbiterRegistryFacet {
     /// would reach the arbiter as an unexplained failure on a screen that had
     /// just told him he is an arbiter.
     error BondNotPosted();
+    /// The seat has posted a bond and an appeal refund has drawn it below the
+    /// norm (17 September 2026). It may finish the cases it holds; new work
+    /// waits for the top-up, which takes only what is missing plus the seat's
+    /// unpaid appeal debts.
+    error BondBelowNorm(uint256 bond, uint256 norm);
     error AlreadyClaimed();
     error NotClaimed();
     error NotDisputed();
@@ -1365,6 +1746,9 @@ contract ArbiterRegistryFacet {
     error InsufficientXP(uint256 have, uint256 need);
     error NoVerdict();
     error DisputeWindowPassed();
+    /// `abandonClaim` before the arbiter's window has run out — his four days
+    /// are his, and nobody takes a live case off him.
+    error DisputeWindowNotPassed();
     error NotLosingParty();
     error AlreadyAppealed();
     error AppealWindowClosed();
@@ -1372,6 +1756,12 @@ contract ArbiterRegistryFacet {
     error NoAppeal();
     error AlreadyVoted();
     error CannotVoteOnOwnVerdict();
+    /// A party to the deal voting on the appeal against its own verdict
+    /// (17 September 2026, journal item 199).
+    error CannotVoteOnOwnDeal();
+    /// Nothing to pull: no quorum was paid on this appeal, the caller did not
+    /// vote on it, or he has already pulled his share.
+    error NoAppealShare();
     error AppealAlreadyResolved();
     error AppealWindowNotClosed();
     error AlreadyFinalized();
@@ -1683,6 +2073,13 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (d.isArbiter[caller]) revert AlreadyArbiter();
 
+        // Rule A (the owner's decision of 17 September 2026): the corps is
+        // entered clean. This door seats AND takes the bond in one press, so it
+        // is both halves of the entrance at once and the check belongs before
+        // the money moves — a refusal after the transfer would leave his 50
+        // USDC on the diamond with no seat behind it.
+        _requireMarketClean(caller);
+
         address usdc = FactoryStorage.store().usdc;
         bool bondOk = IUSDCFull(usdc).transferFrom(caller, address(this), ARBITER_BOND);
         require(bondOk, "ArbiterRegistry: bond transfer failed");
@@ -1734,15 +2131,23 @@ contract ArbiterRegistryFacet {
 
         uint256 bond = d.arbiterBond[caller];
         d.arbiterBond[caller] = 0;
-        if (bond > 0) {
+        // ⚠️ HIS UNPAID APPEAL DEBTS COME OUT OF THE BOND FIRST (17 September
+        // 2026). A won appeal his bond could not advance left an appellant
+        // owed; walking away with the bond while that stands would hand the
+        // loss to the bank. Whatever the bond does not cover stays on the
+        // bank's queue. Leaving still needs no money: an empty bond pays
+        // nothing and resigns all the same.
+        uint256 refund = bond;
+        if (bond > 0) refund = bond - ArbiterRegistryStorage.payArbiterDebts(d, caller, bond);
+        if (refund > 0) {
             address usdc = FactoryStorage.store().usdc;
-            bool ok = IUSDCFull(usdc).transfer(caller, bond);
+            bool ok = IUSDCFull(usdc).transfer(caller, refund);
             require(ok, "ArbiterRegistry: bond refund failed");
         }
 
         ArbiterRegistryStorage.clearSeat(d, caller);
 
-        emit ArbiterResigned(caller, bond);
+        emit ArbiterResigned(caller, refund);
     }
 
     /// The seat alone is not the right to act.
@@ -1774,8 +2179,61 @@ contract ArbiterRegistryFacet {
     ///     accusation is due process, not arbiter work, and gating it would let
     ///     an accusation silence the accused;
     ///   • the seating doors themselves, which is where a bond is CREATED.
-    function _requireBonded(ArbiterRegistryStorage.Data storage d, address who) private view {
-        if (d.arbiterBond[who] == 0) revert BondNotPosted();
+    ///
+    /// ⚠️ "BONDED" MEANS "THE BOND IS WHOLE", NOT "SOME BOND IS THERE"
+    /// (17 September 2026). Until then this read `arbiterBond == 0`. Since the
+    /// appeal economics a won appeal is refunded partly OUT OF the ruling
+    /// arbiter's bond, so a seat can now carry 1 to 49 USDC — and a seat that
+    /// has already paid for one wrong verdict and still judges, with less at
+    /// stake than the rule promises, is exactly the seat the owner decided must
+    /// not work until it is topped up. The same comparison stands, against the
+    /// same norm, at every other place a bond is asked about: the voter count
+    /// in `raiseAppeal`, and `isArbiterActive` / `_requireSeatStillOwesItsBond`
+    /// in ArbiterApplicationsFacet — so a seat refused here is never counted
+    /// there, and never told there that it owes nothing.
+    ///
+    /// The error keeps its name. For a seat that never paid it is literally
+    /// true; for a sagging one the remedy is the same door, which since the
+    /// same day takes only the missing part.
+    ///
+    /// ⚠️ SPLIT IN TWO ON THE SAME DAY, by the owner's second decision: a
+    /// sagging seat is not dropped from the cases it already holds — nobody is
+    /// abandoned and nobody is reassigned, the arbiter finishes what he took.
+    /// So the question every arbiter door asks is now one of two:
+    ///
+    ///   • `_requireBondWhole` — NEW work: committing to a claim, claiming,
+    ///     voting on an appeal (and, by the same comparison, being counted as
+    ///     a voter in `raiseAppeal`). A whole bond, nothing less.
+    ///   • `_requireBondToFinish` — FINISHING a case already held: submitting
+    ///     its verdict, recording the party's silence on it, publishing the
+    ///     chat key the parties seal their presentations to (the only reason
+    ///     that door exists apart from a claim is an arbiter who lost his key
+    ///     AFTER claiming). A seat that has posted a bond and holds the seat,
+    ///     even if an appeal has drawn that bond down to zero.
+    ///
+    /// A seat that never posted is refused both, as before: that is not a
+    /// sagging seat, it is a seat that never started. A removed arbiter is
+    /// refused both too — the finishing gate asks `isArbiter`, because removal
+    /// takes the seat and forfeits the bond but leaves his claims in place.
+    /// Rule A, once, for both doors of this facet.
+    ///
+    /// A wrapper and not two call sites of the library directly: this facet
+    /// stood 2 658 bytes clear of the EIP-170 ceiling when the rule was written
+    /// (measured 17 September 2026, `forge build --sizes`), and the check reads
+    /// six counters and walks one index — a body worth carrying once.
+    function _requireMarketClean(address who) private view {
+        MarketPresence.requireNothingOpen(who);
+    }
+
+    function _requireBondWhole(ArbiterRegistryStorage.Data storage d, address who) private view {
+        uint256 bond = d.arbiterBond[who];
+        if (bond >= ARBITER_BOND) return;
+        if (bond == 0 && !d.bondDrawnByAppeal[who]) revert BondNotPosted();
+        revert BondBelowNorm(bond, ARBITER_BOND);
+    }
+
+    function _requireBondToFinish(ArbiterRegistryStorage.Data storage d, address who) private view {
+        if (!d.isArbiter[who] || (d.arbiterBond[who] == 0 && !d.bondDrawnByAppeal[who])) revert BondNotPosted();
     }
 
     // -------- ADMIN: MANAGE ARBITERS --------
@@ -1897,6 +2355,15 @@ contract ArbiterRegistryFacet {
             }
         }
 
+        // Rule A, and it binds the OWNER too — the one limit in this file that
+        // is not about who presses. Hand seating is the door the four sitting
+        // arbiters came through, and a seat given to a man with a live deal
+        // would put him in the corps with the conflict already in place; the
+        // owner cannot see his counterparty's side of that any better than the
+        // chain can. The refusal names what is open, so whoever is seating him
+        // can say what to close.
+        _requireMarketClean(arbiter);
+
         d.isArbiter[arbiter] = true;
         d.arbiterList.push(arbiter);
 
@@ -1934,7 +2401,8 @@ contract ArbiterRegistryFacet {
         // Gated at the COMMIT and not only at the reveal: a refusal an hour
         // before the arbiter has arranged anything is kinder than one at the
         // moment he reaches for the dispute, and it costs one SLOAD.
-        _requireBonded(d, caller);
+        // New work: a whole bond.
+        _requireBondWhole(d, caller);
         d.claimCommitments[commitment] = block.number;
         emit DisputeClaimCommitted(caller, commitment);
     }
@@ -1968,7 +2436,14 @@ contract ArbiterRegistryFacet {
         // Publishing the key a party seals a presentation to is arbiter work
         // like any other. Nothing is stranded by gating it: an unbonded arbiter
         // cannot hold a claim, so no party is ever left waiting on his key.
-        _requireBonded(d, caller);
+        //
+        // ⚠️ FINISHING, NOT NEW WORK (17 September 2026). A seat whose bond a
+        // won appeal has drawn down still holds claims, and this door is how
+        // an arbiter who lost his key after claiming gets back to them. Gating
+        // it on a whole bond would strand exactly the parties the owner decided
+        // must not be abandoned. It opens no new case: claiming needs a whole
+        // bond and writes the keys itself.
+        _requireBondToFinish(d, caller);
         if (boxKey == bytes32(0) || signKey == bytes32(0)) revert ZeroChatKey();
 
         // The event fires only if at least one half actually changed. The write
@@ -2035,7 +2510,8 @@ contract ArbiterRegistryFacet {
         // it. It is also the most visible effect of that cut on the live chain:
         // the one arbiter seated there has a zero bond and stops being
         // selectable the moment the cut lands, until he posts.
-        _requireBonded(d, caller);
+        // New work: a whole bond.
+        _requireBondWhole(d, caller);
 
         // The cap is checked before the staticcalls into Agreement: a refusal
         // must be cheap, not four reads of a foreign contract deep.
@@ -2189,6 +2665,125 @@ contract ArbiterRegistryFacet {
         emit DisputeReleased(agreement, current);
     }
 
+    /// @notice Takes a dispute off an arbiter who let his window run out.
+    ///         ANYONE may press it, and pressing it decides nothing.
+    ///
+    /// ── WHAT WAS STUCK (item D1 of the mainnet list, closed here) ──────────
+    /// An arbiter claimed a dispute and never ruled. Four days later:
+    /// `submitVerdict` refuses (past the window), `releaseDisputeClaim` refuses
+    /// (`DisputeWindowPassed`, for a reason still written out above),
+    /// `resignAsArbiter` refuses (`HasOpenDisputeClaims`) and since 17 September
+    /// the boards refuse him too. The only key was `triggerArbiterTimeout`, and
+    /// the clone lets none but the two parties press THAT. So a client who
+    /// simply never came back locked 50 USDC of somebody else's money with no
+    /// door at all — an arbiter's own mistake turned into a life sentence by
+    /// a stranger's silence.
+    ///
+    /// This is the `abandonClaim` the note in `releaseDisputeClaim` promised.
+    ///
+    /// ── WHY IT IS SAFE TO GIVE IT TO EVERYBODY ────────────────────────────
+    /// Because it touches no money and chooses no outcome. It clears the claim,
+    /// frees the seat's counter and books the missed window against the arbiter.
+    /// It deliberately does NOT call `setArbiter(0)` on the clone — that one
+    /// call is what would switch the timeout branch from "everything back to the
+    /// client" to "the pot in half", i.e. it would let whoever pressed pick how
+    /// the money is split. `Agreement.arbiter` stays set, so when a party does
+    /// come and presses `triggerArbiterTimeout`, the rule that was already
+    /// written pays out, unchanged and unchosen.
+    ///
+    /// The parties' money therefore stays inside the deal until one of them
+    /// presses. That is the freeze the owner allowed: an escrow nobody claims
+    /// waits, a bond nobody owes does not.
+    ///
+    /// ── AND WHY THE MISTAKE IS STILL HIS ──────────────────────────────────
+    /// A door that only freed the bond would turn a missed window into a
+    /// no-cost exit — press it yourself and walk away clean. So this books a
+    /// judicial mistake through the same helper every other path uses, with a
+    /// path of its own (`DemotionPath.ClaimAbandoned`) so the permanent record
+    /// says how it came about. At the third mistake in a row the corps stops
+    /// him on the spot and the chain accuses him, exactly as a party-pressed
+    /// timeout would have.
+    ///
+    /// A later `triggerArbiterTimeout` cannot book it twice:
+    /// `notifyArbiterTimeout` reads `disputeClaims`, which this function has
+    /// just emptied, and returns in silence on an empty key.
+    ///
+    /// Junk presses cost the presser gas and change nothing: with no claim on
+    /// the deal it refuses `NotClaimed`, inside the window
+    /// `DisputeWindowNotPassed`, and after a verdict `VerdictAlreadySubmitted`.
+    /// A second press finds the claim already gone.
+    function abandonClaim(address agreement) external {
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+
+        address held = d.disputeClaims[agreement];
+        if (held == address(0)) revert NotClaimed();
+
+        // A verdict came in, so nothing was missed: `submitVerdict` itself
+        // refuses past the window, so a submitted verdict is by construction an
+        // arbiter who did his work inside it. Whatever is wrong with that
+        // verdict is the appeal's business, not this door's.
+        if (d.pendingVerdicts[agreement].submittedAt != 0) revert VerdictAlreadySubmitted();
+
+        // The clone's own clock, read the same way `claimDispute` and
+        // `releaseDisputeClaim` read it — the window belongs to the deal, not to
+        // this facet, and a clone that cannot answer is not guessed about.
+        (bool dOk, bytes memory dData) = agreement.staticcall(abi.encodeWithSignature("disputedAt()"));
+        require(dOk, "ArbiterRegistry: disputedAt read failed");
+        (bool wOk, bytes memory wData) = agreement.staticcall(abi.encodeWithSignature("DISPUTE_WINDOW()"));
+        require(wOk, "ArbiterRegistry: DISPUTE_WINDOW read failed");
+        uint256 disputedAt = abi.decode(dData, (uint256));
+        if (disputedAt == 0) revert NotDisputed();
+        // Strictly the mirror of the gate in `releaseDisputeClaim`: that one
+        // refuses AFTER `disputedAt + DISPUTE_WINDOW`, this one refuses up to
+        // and including it. Between them there is no moment when a claim can be
+        // neither released nor abandoned, and none when it can be both.
+        if (block.timestamp <= disputedAt + abi.decode(wData, (uint256))) {
+            revert DisputeWindowNotPassed();
+        }
+
+        // The claim anchor and the no-response record are left alone, for the
+        // reason spelled out in `releaseDisputeClaim`: they are keyed by the
+        // pair (deal, arbiter), and erasing them would hand the arbiter the
+        // right to move his own clock.
+        delete d.disputeClaims[agreement];
+        if (d.openClaimCount[held] > 0) d.openClaimCount[held]--;
+
+        _recordArbiterMistake(
+            d,
+            ReputationStorage.data(),
+            held,
+            address(0),
+            DemotionPath.ClaimAbandoned,
+            agreement
+        );
+
+        // ⚠️ THE SAME LOG THE TIMEOUT PATH EMITS, AND NOT A NEW NAME FOR THE
+        // SAME FACT. What happened here is what `ArbiterTimeoutRecorded` means
+        // wherever it appears: this arbiter took this dispute and let his window
+        // run out. A second event name would split one fact across two feeds,
+        // and every reader that knows only the first would come out a dispute
+        // short on the mistake run — which is exactly how the timeout path was
+        // found silent for two days in August 2026. The pair (deal, arbiter) is
+        // what a reader needs, and this is the log that carries it and is
+        // already indexed. The register of this rule is
+        // script/arbiter-mistake-paths.allow.
+        emit ArbiterTimeoutRecorded(held, agreement);
+
+        // And the half that is NOT a mark against anybody: who pressed, and
+        // that the seat's counter is free again. `by` comes through the
+        // forwarder like everywhere else — he is not the accuser and decides
+        // nothing, he is just who paid the gas. The two logs together also tell
+        // a stranger's press apart from a party's timeout, which the shared
+        // name above cannot.
+        //
+        // BOTH BELOW the booking, which is the ordering `notifyArbiterTimeout`
+        // and `overturnVerdict` already use: if this mistake is the third of a
+        // run, the chain's own accusation (`RemovalProposedByChain`, emitted
+        // from inside the booking) reaches a reader before the outer events, so
+        // every path puts them in the same relative position.
+        emit DisputeClaimAbandoned(agreement, held, _msgSender());
+    }
+
     /// @notice The arbiter records a fact on chain: asked for the chat log — no answer.
     /// @dev Fired only on the arbiter's word; nothing goes out on a timer.
     /// There are no consequences: no XP, no reputation, no shift of the verdict — the
@@ -2204,7 +2799,8 @@ contract ArbiterRegistryFacet {
         // Writing a public record against a party is arbiter work, and the same
         // reasoning as submitVerdict applies: the claim outlives the seat, so
         // the bond is asked here too.
-        _requireBonded(d, caller);
+        // Finishing a case already held (17 September 2026): see _requireBondWhole.
+        _requireBondToFinish(d, caller);
 
         uint256 claimedAt = d.disputeClaimedAtBy[agreement][caller];
         // Zero means the dispute was claimed BEFORE this field existed: the chain
@@ -2291,7 +2887,12 @@ contract ArbiterRegistryFacet {
         // _performRemoval while his claims survive untouched; before this line
         // he went on filing verdicts on every escrow he still held. Suspension
         // covered that at finalization; this covers it at submission.
-        _requireBonded(d, caller);
+        //
+        // ⚠️ FINISHING, NOT NEW WORK (17 September 2026, the owner's decision):
+        // an arbiter whose bond a won appeal drew down files the verdicts on
+        // the cases he already holds. The removed man above is still refused —
+        // the finishing gate asks for the seat.
+        _requireBondToFinish(d, caller);
         if (d.pendingVerdicts[agreement].submittedAt != 0) revert VerdictAlreadySubmitted();
 
         // Check that the agreement is still in dispute
@@ -2368,8 +2969,10 @@ contract ArbiterRegistryFacet {
             delete d.disputeVaultSubsidy[agreement];
 
             if (v.overturned) {
-                // An overturned verdict is not paid for: on an overturn 80% of
-                // the fee already goes to the treasury (creditDisputeFee), and the
+                // An overturned verdict is not paid for: on an overturn the
+                // arbiter's 80% of the fee is withheld from him (creditDisputeFee
+                // spends it on the appeal's refund and the arbiter bank — since
+                // 17 September 2026, and into the treasury before that), and the
                 // top-up must not be an exception — one mistake cannot cost one
                 // part of the payment and spare another. The money goes back to
                 // the payer: he bought a resolution of the dispute and did not get
@@ -2595,7 +3198,7 @@ contract ArbiterRegistryFacet {
         private view returns (uint256)
     {
         uint256 paid = v.appealDeposit;
-        return paid == 0 ? APPEAL_DEPOSIT : paid;
+        return paid == 0 ? APPEAL_DEPOSIT_BEFORE_RECEIPT : paid;
     }
 
     /// @dev A transfer that REPORTS failure instead of reverting on it. Used
@@ -2694,8 +3297,14 @@ contract ArbiterRegistryFacet {
     /// sent by no caller (see the enum's docstring); were it ever sent, the
     /// record would say OverturnedVerdicts, which is the cause the counter
     /// actually proves.
+    /// ⚠️ AN ALLOW-LIST OF THE TIMEOUT PATHS, not `!= AgreementTimeout`
+    /// (18 September 2026, when ClaimAbandoned became the fourth path). A
+    /// missed window is a missed window whichever door reported it, and the
+    /// cause code is what the accused answers to — reading "his verdicts get
+    /// overturned" for a man who never ruled would accuse him of the wrong
+    /// thing. A fifth path added later must name itself here.
     function _causeForPath(DemotionPath path) private pure returns (uint8) {
-        return path == DemotionPath.AgreementTimeout
+        return path == DemotionPath.AgreementTimeout || path == DemotionPath.ClaimAbandoned
             ? CAUSE_TIMEOUTS_MIRROR
             : CAUSE_OVERTURNED_VERDICTS_MIRROR;
     }
@@ -2966,8 +3575,29 @@ contract ArbiterRegistryFacet {
     // -------- APPEAL FLOW (user-initiated, pre-finalization only) --------
 
     /// @notice The losing party challenges a verdict before the money reaches executor/client.
-    /// Requires APPEAL_DEPOSIT — flat, not a % of the deal amount (the amount is chosen by the
-    /// parties and cannot be trusted as input to anything that can be won or lost).
+    ///
+    /// ⚠️ THE PRICE IS NO LONGER FLAT (17 September 2026), and both sides of
+    /// that argument are kept here rather than the losing one erased.
+    ///
+    /// The old argument: the deal amount is chosen by the parties, so it
+    /// cannot be trusted as the input to anything that can be won or lost —
+    /// hence a flat $20 on every deal.
+    ///
+    /// The argument that won: a flat $20 is a toll on a $100 deal and nothing
+    /// on a $10 000 one, where overturning a verdict moves thousands and the
+    /// appeal is the cheapest bet in the protocol. The panel is now paid out
+    /// of the deposit, so a deposit that does not grow with what is at stake
+    /// pays the same three arbiters the same six dollars to read a case of any
+    /// size. And the first argument is weaker than it looked: the amount is
+    /// the parties' own choice, but it is also the escrow itself — lowering it
+    /// to cheapen an appeal lowers the very money the appeal is about, and the
+    /// floor holds regardless.
+    ///
+    /// Decided by the owner: the price is the deal's own dispute fee (3% of
+    /// the pot), held between 20 and 200 USDC —
+    /// `ArbiterRegistryStorage.appealDepositFor`. What was actually paid is
+    /// written into `appealDeposit`, so later changes to the rule reach only
+    /// later appeals.
     function raiseAppeal(address agreement) external {
         if (agreement == address(0)) revert ArbiterZeroAddress();
         address caller = _msgSender();
@@ -2993,24 +3623,16 @@ contract ArbiterRegistryFacet {
         bool callerIsLosingExecutor = caller == agreementExecutor &&  v.clientWins;
         if (!callerIsLosingClient && !callerIsLosingExecutor) revert NotLosingParty();
 
-        uint256 eligibleVoters;
-        uint256 len = d.arbiterList.length;
-        for (uint256 i = 0; i < len; i++) {
-            address seat = d.arbiterList[i];
-            // ⚠️ COUNTS WHO COULD ACTUALLY VOTE, NOT WHO HOLDS A SEAT (8
-            // September 2026). Before the bond gate the two were one set. They
-            // stopped being one the moment voteOnAppeal began refusing unbonded
-            // arbiters, and counting seats here would have turned this check
-            // into a lie the APPELLANT pays for: the quorum test passes on empty
-            // seats, APPEAL_DEPOSIT is taken a few lines below, and no eligible
-            // voter exists to cast the three votes. The appeal then fails by
-            // default at the window, and the money bought nothing.
-            if (seat != v.arbiter && d.arbiterBond[seat] != 0) eligibleVoters++;
-        }
-        if (eligibleVoters < APPEAL_MIN_VOTES) revert InsufficientArbitersForAppeal();
+        uint256 eligibleVoters = _eligibleVoterCount(d, v.arbiter, agreementClient, agreementExecutor);
+        // ⚠️ ABOVE THE TRANSFER, AND THAT IS THE ORDER, NOT THE HABIT. Below it,
+        // a corps too small to review anything would still take the appellant's
+        // money — the whole class of defect the eligibility count was written
+        // for.
+        if (eligibleVoters < APPEAL_VOTES_FLOOR) revert InsufficientArbitersForAppeal();
 
+        uint256 deposit = ArbiterRegistryStorage.appealDepositFor(agreement);
         address usdc = FactoryStorage.store().usdc;
-        bool ok = IUSDCFull(usdc).transferFrom(caller, address(this), APPEAL_DEPOSIT);
+        bool ok = IUSDCFull(usdc).transferFrom(caller, address(this), deposit);
         require(ok, "ArbiterRegistry: deposit transfer failed");
 
         v.appealed       = true;
@@ -3018,14 +3640,120 @@ contract ArbiterRegistryFacet {
         v.appellant      = caller;
         v.appealDeadline = block.timestamp + APPEAL_REVIEW_WINDOW;
         // The money he put down, written next to the appeal it belongs to.
-        // Not for reading back the constant — for paying back
+        // Not for reading back the price rule — for paying back
         // THIS man. See PendingVerdict.appealDeposit.
-        v.appealDeposit  = APPEAL_DEPOSIT;
+        v.appealDeposit  = deposit;
+        // The bar THIS appeal has to clear, frozen at the moment it was paid
+        // for — the same device as the deposit one line up, and for the same
+        // reason. Two reasons it is frozen rather than recounted in
+        // `resolveAppeal`:
+        //
+        //   • the appellant pays for a review by a panel of a known size, and a
+        //     bar that moves after he paid is somebody else's rule applied to
+        //     his money;
+        //   • `resolveAppeal` is the ONLY door that unfreezes the escrow, and it
+        //     may not grow a loop over the corps — see the warning at that
+        //     function. Recounting here means walking `arbiterList` there.
+        //
+        // What freezing costs, said plainly: if the corps shrinks below the bar
+        // while the vote runs, the quorum cannot assemble, the window closes,
+        // the verdict stands and the deposit comes back whole. Nobody loses
+        // money and nothing hangs.
+        d.appealVotesRequired[agreement] = uint8(_votesRequiredFor(eligibleVoters));
 
         emit AppealRaised(agreement, caller);
     }
 
-    /// @notice Any registered arbiter except the one who ruled votes exactly once.
+    /// How many arbiters could cast a vote on this deal's appeal right now.
+    ///
+    /// ⚠️ COUNTS WHO COULD ACTUALLY VOTE, NOT WHO HOLDS A SEAT (8 September
+    /// 2026). Before the bond gate the two were one set. They stopped being one
+    /// the moment voteOnAppeal began refusing unbonded arbiters, and counting
+    /// seats here would have turned the quorum check into a lie the APPELLANT
+    /// pays for: the check passes on empty seats, the deposit is taken, and no
+    /// eligible voter exists to cast the votes. The appeal then fails by default
+    /// at the window, and the money bought nothing.
+    ///
+    /// ⚠️ AND THE TWO PARTIES ARE NOT VOTERS (17 September 2026, journal item
+    /// 199). voteOnAppeal refuses them, so counting them here would be the same
+    /// lie one seat over: a panel of three that includes the winner or the loser
+    /// of this very deal is a panel of two. Bonded means the WHOLE bond — see
+    /// `_requireBondWhole`.
+    ///
+    /// Every condition here must match a refusal in `voteOnAppeal` one for one:
+    /// whoever is refused there must not be counted here.
+    function _eligibleVoterCount(
+        ArbiterRegistryStorage.Data storage d,
+        address verdictArbiter,
+        address agreementClient,
+        address agreementExecutor
+    ) private view returns (uint256 eligibleVoters) {
+        uint256 len = d.arbiterList.length;
+        for (uint256 i = 0; i < len; i++) {
+            address seat = d.arbiterList[i];
+            if (
+                seat != verdictArbiter
+                && seat != agreementClient
+                && seat != agreementExecutor
+                && d.arbiterBond[seat] >= ARBITER_BOND
+            ) eligibleVoters++;
+        }
+    }
+
+    /// The quorum for a panel of `eligibleVoters`: as many votes as there are
+    /// arbiters who could cast one, and never more than APPEAL_VOTES_CAP.
+    ///
+    /// The floor is NOT applied here and must not be: a corps under the floor
+    /// gets a refusal, not a smaller quorum. This function is only ever reached
+    /// past that refusal, and returning `max(FLOOR, …)` would quietly hand a
+    /// one-man corps a quorum of two it can never reach — a paid appeal that
+    /// cannot be reviewed, which is the exact defect the refusal exists for.
+    function _votesRequiredFor(uint256 eligibleVoters) private pure returns (uint256) {
+        return eligibleVoters < APPEAL_VOTES_CAP ? eligibleVoters : APPEAL_VOTES_CAP;
+    }
+
+    /// The bar a raised appeal has to clear. Zero in storage means "raised
+    /// before this field existed" — those appeals were raised under the flat
+    /// quorum of three, so that is what they are held to.
+    function _appealVotesRequired(
+        ArbiterRegistryStorage.Data storage d,
+        address agreement
+    ) private view returns (uint256) {
+        uint256 stored = d.appealVotesRequired[agreement];
+        return stored == 0 ? APPEAL_VOTES_CAP : stored;
+    }
+
+    /// @notice What a verdict's appeal needs from the corps, for a screen that
+    /// has to say "two of three" without guessing either number.
+    /// @return eligible  arbiters who could vote on this deal right now
+    /// @return required  votes this appeal needs: the number frozen when it was
+    ///                   raised, or — if no appeal stands — what would be frozen
+    ///                   if one were raised this second
+    /// @return cast      votes already in
+    function getAppealPanel(address agreement)
+        external
+        view
+        returns (uint256 eligible, uint256 required, uint256 cast)
+    {
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+        ArbiterRegistryStorage.PendingVerdict storage v = d.pendingVerdicts[agreement];
+        RegistryStorage.AgreementRecord storage rec = RegistryStorage.store().agreements[agreement];
+
+        eligible = _eligibleVoterCount(d, v.arbiter, rec.client, rec.executor);
+        // Under the floor the honest answer is the FLOOR and not the count: no
+        // appeal can be raised at all there, and the number a screen has to
+        // print is "there are one of the two this needs", not "it needs one".
+        // `_votesRequiredFor` deliberately does not clamp — see its docstring —
+        // so the clamp belongs here, where the question is a quote rather than
+        // a bar being set.
+        required = v.appealed
+            ? _appealVotesRequired(d, agreement)
+            : (eligible < APPEAL_VOTES_FLOOR ? APPEAL_VOTES_FLOOR : _votesRequiredFor(eligible));
+        cast     = v.votesUphold + v.votesOverturn;
+    }
+
+    /// @notice Any registered arbiter with a whole bond votes exactly once — except the one
+    /// who ruled and the two parties to the deal.
     function voteOnAppeal(address agreement, bool overturn) external {
         address caller = _msgSender();
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
@@ -3035,10 +3763,19 @@ contract ArbiterRegistryFacet {
         // Kept in step with the eligibility COUNT in raiseAppeal above: whoever
         // is refused here must not have been counted there, or an appellant
         // pays a deposit for a quorum that cannot assemble.
-        _requireBonded(d, caller);
+        // New work: a whole bond.
+        _requireBondWhole(d, caller);
         if (!v.appealed) revert NoAppeal();
         if (v.appealResolved) revert AppealAlreadyResolved();
         if (caller == v.arbiter) revert CannotVoteOnOwnVerdict();
+        // ⚠️ NOR A PARTY TO THE DEAL (17 September 2026, journal item 199).
+        // claimDispute already refused a party as the JUDGE; the panel had no
+        // such check, so a party holding a bonded seat could cast one of the
+        // three votes that decide where its own escrow goes. Read from the
+        // registry's record of the deal rather than from the clone: the same
+        // two addresses, written once at creation, without an external call.
+        RegistryStorage.AgreementRecord storage rec = RegistryStorage.store().agreements[agreement];
+        if (caller == rec.client || caller == rec.executor) revert CannotVoteOnOwnDeal();
         if (block.timestamp >= v.appealDeadline) revert AppealWindowClosed();
         if (d.hasVotedAppeal[agreement][caller]) revert AlreadyVoted();
 
@@ -3052,9 +3789,50 @@ contract ArbiterRegistryFacet {
         emit AppealVoteCast(agreement, caller, overturn);
     }
 
-    /// @notice Settles the appeal vote. It may be called as soon as the quorum
-    /// (APPEAL_MIN_VOTES) is reached, without waiting for the window to end. If the window
-    /// closes without a quorum, the appeal is rejected by default (nothing hangs forever).
+    /// @notice Settles the appeal vote. It may be called as soon as this
+    /// appeal's own quorum is reached (`appealVotesRequired`, frozen when it was
+    /// raised), without waiting for the window to end. If the window closes
+    /// without a quorum, the appeal is rejected by default (nothing hangs
+    /// forever).
+    ///
+    /// ⚠️ THE OUTCOME IS A STRICT MAJORITY OF THE VOTES CAST, and it is read
+    /// off the votes rather than off the quorum on purpose (18 September 2026,
+    /// when the quorum became movable). The two agree wherever the rule can
+    /// actually take them — at two cast both must say overturn, at three cast
+    /// two do — and they part on ONE turnout: four cast, two each. There a
+    /// threshold taken from the quorum (2) would let both sides "decide" at
+    /// once, while a majority of the votes cast upholds, because a tie is not a
+    /// majority. Upholding on a tie is also what the flat quorum already did.
+    /// Nothing here can decide an appeal on fewer than APPEAL_DECIDING_VOTES
+    /// votes, which is what the cap on the chief's bloc is measured against.
+    ///
+    /// ⚠️ WHERE THE DEPOSIT GOES (17 September 2026, the owner's decision):
+    ///
+    ///   no quorum        → back to the appellant, whole. Nobody reviewed the
+    ///                      case, so the deposit bought nothing.
+    ///   quorum, any side → to the panel, equally per vote cast, the remainder
+    ///                      of the division to the bank. Paid on EVERY outcome,
+    ///                      and that is the point: a panel paid only when it
+    ///                      refuses the appeal is a panel paid to refuse.
+    ///   quorum, overturn → the appellant is ALSO made whole, at the cost of the
+    ///                      arbiter who was wrong: his forfeited share of the
+    ///                      dispute fee, then his bond, then the treasury's
+    ///                      share of the same fee, then the bank, then a debt.
+    ///                      Neither share exists yet at this line — both are
+    ///                      credited in `creditDisputeFee`, inside the
+    ///                      `finalizeVerdict` this very call unblocks (measured in
+    ///                      test/AppealFeeTimingSeam.t.sol) — so the refund is
+    ///                      ADVANCED out of the bond and the bank here, recorded
+    ///                      in `appealLedgers`, and the shares pay the advance
+    ///                      back when they land. A debt left standing is paid by
+    ///                      the arbiter's next top-up or out of his bond when he
+    ///                      resigns, or out of the bank by `settleAppealDebts`.
+    ///
+    /// ⚠️ NO LOOP OVER THE VOTERS, and none may be added. This is the only door
+    /// that unfreezes the escrow; a payout per voter inside it would give it a
+    /// cost that grows with turnout, and the day it ran out of gas the escrow
+    /// would be frozen for good. The panel's pay is written as ONE number per
+    /// voter and each voter pulls his own through `withdrawAppealShare`.
     function resolveAppeal(address agreement) external {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         ArbiterRegistryStorage.PendingVerdict storage v = d.pendingVerdicts[agreement];
@@ -3062,7 +3840,10 @@ contract ArbiterRegistryFacet {
         if (!v.appealed) revert NoAppeal();
         if (v.appealResolved) revert AppealAlreadyResolved();
 
-        bool quorumReached = v.votesUphold + v.votesOverturn >= APPEAL_MIN_VOTES;
+        uint256 votes = v.votesUphold + v.votesOverturn;
+        // The bar this appeal was raised under, not today's corps: see the
+        // write in `raiseAppeal` for why it is frozen and what that costs.
+        bool quorumReached = votes >= _appealVotesRequired(d, agreement);
         bool windowClosed  = block.timestamp >= v.appealDeadline;
         if (!quorumReached && !windowClosed) revert AppealWindowNotClosed();
 
@@ -3071,6 +3852,23 @@ contract ArbiterRegistryFacet {
 
         bool overturn = quorumReached && v.votesOverturn > v.votesUphold;
         address usdc  = FactoryStorage.store().usdc;
+        uint256 deposit = _depositOf(v);
+
+        if (quorumReached) {
+            // Integer division, the remainder to the bank: at most `votes - 1`
+            // base units, and never a unit invented or lost — share × votes +
+            // remainder is the deposit exactly.
+            uint256 perVoter = deposit / votes;
+            uint256 remainder = deposit - perVoter * votes;
+            // uint64 cannot truncate: perVoter <= deposit <= APPEAL_DEPOSIT_CAP.
+            d.appealLedgers[agreement].voterShare = uint64(perVoter);
+            if (remainder != 0) d.vaultBalance += remainder;
+            emit AppealPanelPaid(agreement, perVoter, votes, remainder);
+        } else {
+            // The window closed with nobody's review, so the deposit bought nothing.
+            _payAppellant(d, usdc, agreement, v.appellant, deposit);
+            emit AppealDepositReturned(agreement, v.appellant, deposit);
+        }
 
         if (overturn) {
             address slashedArbiter = v.arbiter;
@@ -3327,324 +4125,125 @@ contract ArbiterRegistryFacet {
                 _recordArbiterMistake(d, rep, slashedArbiter, address(0), DemotionPath.AppealVote, agreement);
             }
 
-            // Outside the branch: the appellant won the vote and gets his
-            // deposit back whether or not this verdict had already been
-            // overturned by hand. The deposit is the price of asking, not part
-            // of the arbiter's penalty.
-            // Soft, and for a heavier reason than in clearDisputeClaim. The two
-            // writes above are what unfreeze the verdict; a reverting refund
-            // takes them down with it, and every other door out is already shut
-            // (finalizeVerdict: VerdictFrozenError, unfreezeVerdict and
-            // overturnVerdict: AppealInProgress, raiseAppeal: AlreadyAppealed,
-            // Agreement.triggerArbiterTimeout: VerdictInFlight, forever, because
-            // hasSubmittedVerdict never goes back to false). A $20 deposit that
-            // cannot be delivered would therefore strand the WHOLE escrow, in
-            // the clone, where no rescue function exists — and it would strand
-            // it for the man who WON the appeal. Into the existing claimable, so
-            // this costs no storage field and no new selector.
-            uint256 deposit = _depositOf(v);
-            if (!_softTransfer(usdc, v.appellant, deposit)) {
-                d.refundableBounty[v.appellant] += deposit;
-                emit DisputeBountyRefundable(agreement, v.appellant, deposit);
-            }
-        } else {
-            // Forfeit reads the same record for the same reason: what the vault
-            // keeps is what came in, not what the constant says today.
-            d.vaultBalance += _depositOf(v);
+            // Outside the mistake branch: the appellant won the vote and is
+            // made whole whether or not this verdict had already been
+            // overturned by hand. His own deposit went to the panel above, so
+            // "made whole" is now paid by somebody else — see the function's
+            // header for who, and `_advanceAppealRefund` for how.
+            //
+            // A VINDICATED arbiter pays nothing: when `alreadyOverturned`, the
+            // panel has just restored HIS ruling against the owner's hand, and
+            // charging his bond for the hand's mistake would be the chain
+            // punishing the man it found right. The bank advances instead. The
+            // fee share `creditDisputeFee` withholds on every overturned verdict
+            // still pays the advance back — that withholding is older than this
+            // change and is a known gap of its own (the `overturned` flag holds
+            // two facts, see `overturnedVerdicts`); this line neither widens
+            // nor closes it.
+            _advanceAppealRefund(
+                d, usdc, agreement, v.appellant, alreadyOverturned ? address(0) : slashedArbiter, deposit
+            );
         }
 
         emit AppealResolved(agreement, v.appellant, overturn);
     }
 
-    // -------- REWARDS --------
-
-    /// @notice The arbiter withdraws the reward that has piled up.
-    function withdrawArbiterReward() external {
-        address caller = _msgSender();
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-
-        uint256 amount = d.arbiterRewards[caller];
-        if (amount == 0) revert NoRewardToClaim();
-
-        d.arbiterRewards[caller] = 0;
-
-        address usdc = FactoryStorage.store().usdc;
-        bool ok = IUSDCFull(usdc).transfer(caller, amount);
-        require(ok, "ArbiterRegistry: USDC transfer failed");
-
-        emit ArbiterRewardWithdrawn(caller, amount);
-    }
-
-    /// @notice Credit the dispute fee. The agreement (Agreement.resolveDispute) calls
-    /// this function BEFORE transferring `total` to the diamond and transfers only if
-    /// the call did not revert — so a failed credit never leaves money on the diamond
-    /// with no counter pointing at it (see Agreement.resolveDispute).
+    /// Pays a won appeal back before the ruling arbiter's forfeited fee share
+    /// exists: out of his bond, then out of the bank, and records the rest as a
+    /// debt. `arbiterAddr` zero means "nobody's bond" (a vindicated arbiter).
     ///
-    /// Why the diamond does not pull the money itself through transferFrom: the
-    /// agreement would then have to grant an allowance, and on a failed call that
-    /// allowance would stay hanging — exactly the defect that had to be fixed in the
-    /// treasury. A push transfer (the Agreement calls transfer() itself, the diamond
-    /// pulls nothing through transferFrom) leaves no allowance at all — independent of
-    /// which comes first, the credit or the transfer (today the credit does, see above).
+    /// ⚠️ THE DEBT IS WRITTEN IN `appealLedgers`, NOT IN `refundableBounty`.
+    /// Every entry of the second is USDC the diamond holds; a debt has nothing
+    /// behind it, and `withdrawDisputeBounty` would have paid it out of other
+    /// people's escrow. It becomes claimable only as `creditDisputeFee` brings
+    /// real money in.
     ///
-    /// The trust here is exactly that of updateStatus and notifyArbiterTimeout: the
-    /// caller must be a registered agreement, and registering one is possible
-    /// only for the factory.
+    /// The bond is drawn below the norm on purpose and not topped up here: from
+    /// this line the seat refuses NEW work (`_requireBondWhole`) until its
+    /// holder or his forfeited share restores it, and keeps finishing the cases
+    /// it holds (`_requireBondToFinish`).
     ///
-    /// There is NO arbiter-address argument (and accepting one would not be right):
-    /// claimDispute() always sets the diamond itself as the arbiter IN THE AGREEMENT
-    /// (setArbiter(address(this)), Diamond-as-arbiter), so Agreement.arbiter
-    /// is always either 0 or the diamond's address, never a person. Accepting it as
-    /// a parameter would mean burning 80% of every fee on an arbiter who has no way
-    /// to call withdrawArbiterReward() in his own name (that one reads _msgSender(),
-    /// and there is nothing that could make the diamond call itself).
+    /// ⚠️ THE BOND'S SHARE OF THE BURDEN IS FIXED HERE, at the moment the
+    /// verdict is overturned: whatever it holds now, up to the deposit. When
+    /// the fee arrives, the treasury's 20% of it covers only what the
+    /// arbiter's 80% and THIS advance left uncovered; a bond topped up in
+    /// between is not drawn a second time by the capped fee callback.
     ///
-    /// The source of the real arbiter is pendingVerdicts[msg.sender].arbiter, NOT
-    /// disputeClaims[msg.sender]. Both fields are written in step (submitVerdict
-    /// requires caller == disputeClaims[agreement]) and cannot diverge before
-    /// finalization — but at the moment the Agreement actually calls this function
-    /// (from inside finalizeVerdict → agreement.call(resolveDispute)), the guarantee
-    /// on pendingVerdicts is stronger: finalizeVerdict already requires
-    /// v.submittedAt != 0 (otherwise revert NoVerdict before the call) and holds
-    /// v.executing = true for the whole external call — it is executing==true that
-    /// stops clearDisputeClaim() deleting pendingVerdicts inside that window (this is
-    /// not the only place able to delete the record — clearStuckVerdict does the same
-    /// WITHOUT checking !v.executing; its gate
-    /// require(status != DISPUTED) is by itself no protection here — resolvedAt
-    /// is already set by this point (`Agreement.resolveDispute`, before the call), so
-    /// status() inside that window would already return RESOLVED rather than DISPUTED,
-    /// and the gate would LET IT THROUGH. Wedging in is impossible for another reason:
-    /// the whole window — from resolvedAt to this call — lies inside one atomic
-    /// transaction (finalizeVerdict → agreement.call(resolveDispute) →
-    /// creditDisputeFee), while clearStuckVerdict is a separate call from the owner,
-    /// which has nowhere to execute between the steps of another transaction).
-    /// disputeClaims has no such protection: clearDisputeClaim() clears it
-    /// unconditionally, so its integrity here would depend on the Agreement
-    /// transferring the fee and calling in strictly before _clearDisputeClaim() —
-    /// that is, on the order of code in another function, not an invariant here.
-    /// pendingVerdicts.arbiter never depends on that order under any arrangement.
-    function creditDisputeFee(uint256 total) external {
-        if (RegistryStorage.store().agreements[msg.sender].client == address(0))
-            revert NotRegisteredAgreement();
-        if (total == 0) revert ZeroAmount();
-
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        ArbiterRegistryStorage.PendingVerdict storage v = d.pendingVerdicts[msg.sender];
-
-        address arbiter_ = v.arbiter;
-        // Nobody carried the dispute through to a verdict (submitVerdict was never
-        // called) — there is nobody to credit, and staying silent is not an option:
-        // money with no addressee would hang in the contract with no counter on it.
-        if (arbiter_ == address(0)) revert NoVerdictSubmitted();
-
-        uint256 toArbiter;
-        uint256 toTreasury;
-        if (v.overturned) {
-            // The verdict was overturned (overturnVerdict/resolveAppeal) — the
-            // arbiter was wrong, there is no reward, the whole fee goes to the
-            // treasury. Symmetrical with finalizeVerdict, which on an overturn
-            // withholds the top-up too and returns it to the payer through
-            // refundableBounty (see the top-up refund block inside finalizeVerdict,
-            // earlier in this file). The earlier reference here pointed at the
-            // vault payout per dispute, which went away with the flat payout.
-            toTreasury = total;
-        } else {
-            toArbiter = (total * ARBITER_SHARE_BPS) / 10_000;
-            // By subtraction rather than a second share: that way no unit is lost
-            // to rounding and the parts always add back up to the whole.
-            toTreasury = total - toArbiter;
+    /// ⚠️ THE BANK IS SPENT ONLY ABOVE THE DEBTS IT ALREADY OWES
+    /// (`bankAboveDebts`), so an older appellant's debt is not overtaken by a
+    /// newer appeal. A debt created here goes onto the arbiter's own list
+    /// (paid first by his top-up or out of his bond when he resigns) and onto
+    /// the bank's queue (paid out of the bank by anyone's press, in order) —
+    /// the two ways out that do not depend on this deal's fee ever arriving.
+    function _advanceAppealRefund(
+        ArbiterRegistryStorage.Data storage d,
+        address usdc,
+        address agreement,
+        address appellant,
+        address arbiterAddr,
+        uint256 owed
+    ) private {
+        uint256 fromBond;
+        if (arbiterAddr != address(0)) {
+            uint256 bond = d.arbiterBond[arbiterAddr];
+            fromBond = owed < bond ? owed : bond;
+            if (fromBond != 0) {
+                d.arbiterBond[arbiterAddr] = bond - fromBond;
+                // "Sagging", as opposed to "never posted", even at zero.
+                d.bondDrawnByAppeal[arbiterAddr] = true;
+                owed -= fromBond;
+            }
         }
 
-        d.arbiterRewards[arbiter_] += toArbiter;
-        d.treasurySlice            += toTreasury;
-
-        emit DisputeFeeCredited(arbiter_, toArbiter, toTreasury);
-    }
-
-    /// @notice Send the accumulated treasury slice to the current fee recipient.
-    ///
-    /// Open on purpose: the money goes only to the address in
-    /// FactoryStorage.feeRecipient, so the right to call decides nothing, while
-    /// being open means the payout does not depend on the owner remembering it,
-    /// and a keeper can push it through.
-    function withdrawTreasurySlice() external {
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        uint256 slice = d.treasurySlice;
-        if (slice == 0) revert NothingToPush();
-
-        d.treasurySlice = 0;
-
-        FactoryStorage.Layout storage fs = FactoryStorage.store();
-        address recipient = fs.feeRecipient;
-        bool ok = IUSDCFull(fs.usdc).transfer(recipient, slice);
-        require(ok, "ArbiterRegistry: treasury slice transfer failed");
-
-        emit TreasurySlicePushed(recipient, slice);
-    }
-
-    function getTreasurySlice() external view returns (uint256) {
-        return ArbiterRegistryStorage.data().treasurySlice;
-    }
-
-    /// @notice Top up the arbiter vault. Besides the owner, this can be done by
-    /// the current fee recipient (`FactoryStorage.feeRecipient`) — which becomes
-    /// the treasury once it is installed by a `setFeeRecipient` call.
-    ///
-    /// There is deliberately no separate field for the treasury address: one
-    /// source of truth, and replacing the treasury carries this right over on its
-    /// own, with nothing to forget. If the fee recipient is an ordinary wallet (as
-    /// it was before the treasury), it may put its own money in. A donation, not a risk.
-    function fundVault(uint256 amount) external {
-        if (msg.sender != OwnershipLib.contractOwner()
-            && msg.sender != FactoryStorage.store().feeRecipient) revert NotOwnerOrFeeRecipient();
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        address usdc = FactoryStorage.store().usdc;
-        bool ok = IUSDCFull(usdc).transferFrom(msg.sender, address(this), amount);
-        require(ok, "ArbiterRegistry: USDC transfer failed");
-        d.vaultBalance += amount;
-        emit VaultFunded(msg.sender, amount);
-    }
-
-    /// @notice Disabled on 31 July 2026. The flat payout from the vault was
-    /// rejected by the design of 28 July (§7), but the code did not follow: the
-    /// accrual lived in parallel with the 80% of the fee and was switched on by a
-    /// single owner call. With the top-up added, there would be three sources.
-    ///
-    /// The function is not deleted but reverts: eight historical scripts in
-    /// script/ reference its selector in their mounting lists, forge build
-    /// compiles the whole folder, and deleting it would break the build. Those
-    /// scripts are records of upgrades that happened, and broadcast/ is
-    /// gitignored, so their sources are the only remaining record. A reverting
-    /// setter is more honest than a working one that writes a value nobody reads.
-    function setRewardPerDispute(uint256) external pure {
-        revert RewardPathRetired();
-    }
-
-    /// @notice How much the arbiter must receive for a dispute in total.
-    /// A stored field rather than a constant: the right price of human time
-    /// cannot be guessed in advance, and changing it later must cost one
-    /// transaction, not an upgrade. It starts at 10 USDC.
-    function setArbiterFloor(uint256 amount) external onlyOwner {
-        ArbiterRegistryStorage.data().arbiterFloor = amount;
-        emit ArbiterFloorUpdated(amount);
-    }
-
-    /// @notice How much the arbiter vault takes off a dispute top-up.
-    /// Stored, like the floor above, and for a stronger reason: the protocol
-    /// has never seen a dispute, so three dollars is a starting point and not
-    /// a conclusion. Changing it must cost one transaction, not a cut.
-    ///
-    /// Takes effect on the NEXT `fundDispute` only. Disputes already funded
-    /// keep the split they were funded with — both halves of it are in
-    /// storage, so nothing recomputes behind anyone's back.
-    function setDisputeDiscount(uint256 amount) external onlyOwner {
-        ArbiterRegistryStorage.data().disputeVaultDiscount = amount;
-        emit DisputeDiscountUpdated(amount);
-    }
-
-    // -------- PAID ARBITER CALL: PAYMENT AND REFUND --------
-
-    /// @notice Top up to the threshold so that an arbiter takes the dispute on.
-    ///
-    /// No separate "call an arbiter" mechanism is needed: the voluntary claim
-    /// already works, it simply does not fire on a small pot. Money on the table
-    /// is the only thing it lacks.
-    ///
-    /// The party that needs a judge pays, not the shared vault. That is the
-    /// protection against farming: planting one's own arbiter means paying oneself.
-    ///
-    /// The sender is taken through _msgSender() and not msg.sender: the web
-    /// client calls this function ONLY through the ERC-2771 forwarder, and on
-    /// that path msg.sender is the forwarder's address. With a raw msg.sender
-    /// the party check would reject
-    /// every payment, and the payer in storage and in the event would be the forwarder.
-    function fundDispute(address agreement) external {
-        address caller = _msgSender();
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-
-        RegistryStorage.AgreementRecord storage rec = RegistryStorage.store().agreements[agreement];
-        if (rec.client == address(0)) revert NotAuthorized();
-        if (caller != rec.client && caller != rec.executor) revert NotParty();
-
-        if (d.disputeClaims[agreement] != address(0)) revert DisputeAlreadyClaimed();
-        if (d.disputeBounty[agreement] != 0) revert BountyAlreadyFunded();
-
-        // gross is the whole top-up to the floor, subsidy is the vault's share of
-        // it. Both come from one place, the same one the screen reads.
-        (uint256 gross, uint256 subsidy) = _splitTopUp(agreement); // reverts NotDisputed
-
-        // The same gate as in claimDispute (the DisputeWindowPassed check after
-        // disputedAt()/DISPUTE_WINDOW()), and the same comparison:
-        // after disputedAt + DISPUTE_WINDOW a dispute can neither be claimed nor
-        // judged (submitVerdict also raises DisputeWindowPassed), and the status
-        // stays DISPUTED until somebody pulls the timeout. Taking money for a
-        // judge who can no longer physically exist is not allowed: it would not
-        // be lost (it comes back on the timeout) but would freeze until somebody
-        // else acts, while the service is never rendered at all.
-        (bool dOk, bytes memory dData) = agreement.staticcall(abi.encodeWithSignature("disputedAt()"));
-        require(dOk, "ArbiterRegistry: disputedAt read failed");
-        (bool wOk, bytes memory wData) = agreement.staticcall(abi.encodeWithSignature("DISPUTE_WINDOW()"));
-        require(wOk, "ArbiterRegistry: DISPUTE_WINDOW read failed");
-        if (block.timestamp > abi.decode(dData, (uint256)) + abi.decode(wData, (uint256))) {
-            revert DisputeWindowPassed();
+        uint256 bank = ArbiterRegistryStorage.bankAboveDebts(d);
+        uint256 fromVault = owed < bank ? owed : bank;
+        if (fromVault != 0) {
+            d.vaultBalance -= fromVault;
+            owed -= fromVault;
         }
 
-        // gross is read, not what the person pays: a top-up is needed whenever
-        // the arbiter falls short of the floor, regardless of how much of it the
-        // vault took on. Checking the person's share would shut this door exactly
-        // where the vault pays everything.
-        if (gross == 0) revert TopUpNotNeeded();
+        // One slot for three fields. uint64 cannot truncate: each is at most
+        // one deposit, and a deposit is at most APPEAL_DEPOSIT_CAP.
+        ArbiterRegistryStorage.AppealLedger storage l = d.appealLedgers[agreement];
+        l.advanceFromBond  = uint64(fromBond);
+        l.advanceFromVault = uint64(fromVault);
+        l.debt             = uint64(owed);
 
-        d.disputeBounty[agreement]      = gross;
-        d.disputeBountyPayer[agreement] = caller;
-
-        // ⚠️ RESERVED HERE, rather than checked at payout. Days pass between the
-        // promise and the payout: without a reservation two disputes would be
-        // promised the same three dollars, and the second arbiter would come up
-        // short at payout — receiving less than the floor through arithmetic here.
-        // Subtracting from the vault on this line makes such a shortfall
-        // impossible by construction: the money is no longer in the vault.
-        if (subsidy != 0) {
-            d.vaultBalance -= subsidy;
-            d.disputeVaultSubsidy[agreement] = subsidy;
+        if (owed != 0) {
+            l.appellant = appellant;
+            d.appealDebtTotal += owed;
+            d.appealDebtQueue.push(agreement);
+            if (arbiterAddr != address(0)) d.arbiterDebtCases[arbiterAddr].push(agreement);
         }
 
-        address usdc = FactoryStorage.store().usdc;
-        // Only his own half is taken from the person. There is nowhere and no
-        // need to transfer the vault's half: its USDC has sat on the diamond since
-        // fundVault, and only the record of whose it is has changed.
-        bool ok = IUSDCFull(usdc).transferFrom(caller, address(this), gross - subsidy);
-        require(ok, "ArbiterRegistry: bounty transfer failed");
-
-        emit DisputeBountyFunded(agreement, caller, gross - subsidy, subsidy);
+        if (fromBond + fromVault != 0) _payAppellant(d, usdc, agreement, appellant, fromBond + fromVault);
+        emit AppealRefundAdvanced(agreement, appellant, fromBond, fromVault, owed);
     }
 
-    function getDisputeBounty(address agreement) external view returns (uint256) {
-        return ArbiterRegistryStorage.data().disputeBounty[agreement];
+    /// Money to the appellant, SOFT. For a heavier reason than in
+    /// clearDisputeClaim: the writes in resolveAppeal are what unfreeze the
+    /// verdict; a reverting refund takes them down with it, and every other
+    /// door out is already shut (finalizeVerdict: VerdictFrozenError,
+    /// unfreezeVerdict and overturnVerdict: AppealInProgress, raiseAppeal:
+    /// AlreadyAppealed, Agreement.triggerArbiterTimeout: VerdictInFlight,
+    /// forever, because hasSubmittedVerdict never goes back to false). A
+    /// deposit that cannot be delivered would therefore strand the WHOLE
+    /// escrow, in the clone, where no rescue function exists. What does not
+    /// land goes into the existing claimable — real USDC stays on the diamond,
+    /// so the booking is backed.
+    function _payAppellant(
+        ArbiterRegistryStorage.Data storage d,
+        address usdc,
+        address agreement,
+        address appellant,
+        uint256 amount
+    ) private {
+        if (!_softTransfer(usdc, appellant, amount)) {
+            d.refundableBounty[appellant] += amount;
+            emit DisputeBountyRefundable(agreement, appellant, amount);
+        }
     }
 
-    /// @notice Collect a top-up that a push refund failed to deliver.
-    /// It exists because of USDC blacklists: the refund inside clearDisputeClaim
-    /// is deliberately soft, since that path is wrapped in a swallowing catch.
-    ///
-    /// _msgSender() and not msg.sender, for the same reason as in fundDispute:
-    /// the call arrives through the forwarder, and with a raw msg.sender a person
-    /// would collect not his own balance but the forwarder's (always zero) one.
-    function withdrawDisputeBounty() external {
-        address caller = _msgSender();
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        uint256 amount = d.refundableBounty[caller];
-        if (amount == 0) revert NoRefundableBounty();
-        d.refundableBounty[caller] = 0;
-        address usdc = FactoryStorage.store().usdc;
-        bool ok = IUSDCFull(usdc).transfer(caller, amount);
-        require(ok, "ArbiterRegistry: bounty withdrawal failed");
-        emit DisputeBountyWithdrawn(caller, amount);
-    }
-
-    function getRefundableBounty(address who) external view returns (uint256) {
-        return ArbiterRegistryStorage.data().refundableBounty[who];
-    }
 
     /// Before governance is live the owner appoints (naming a successor in
     /// advance — activateDAO() requires daoAddress to be non-zero already). After
@@ -3819,6 +4418,33 @@ contract ArbiterRegistryFacet {
     // quoteDisputeTopUp), quoteDisputeTopUp (from fundDispute). Plus getChiefBloc
     // — it calls the private _chiefBloc that addArbiter holds, and moving it
     // would cost a second copy of the body.
+    //
+    // ⚠️ THE SECOND BOUNDARY, WITH ArbiterVaultFacet (16 September 2026), and it
+    // moved two of the four paragraphs above. The ceiling was hit AGAIN — 24 532
+    // of 24 576, forty-four bytes — and the appeal economics could not be
+    // written into that. The new line is one sentence: THIS FACET KEEPS EVERY
+    // DOOR THAT DECIDES A DISPUTE OR CHANGES WHO IS AN ARBITER; ArbiterVaultFacet
+    // TAKES EVERY DOOR THAT ONLY MOVES MONEY AND EVERY DOOR THAT ONLY READS A
+    // NUMBER. Measured: 24 532 → 19 205 here, 28 selectors moved, the diamond's
+    // total unchanged.
+    //
+    // So the paragraph above that ends "the dispute and vault money" is now the
+    // history of the August split and not a description of today. Gone from here
+    // to ArbiterVaultFacet: getArbiters, isRegisteredArbiter, getChiefArbiter,
+    // getDisputeClaimer, getClaimCommitment, getPendingVerdict,
+    // hasSubmittedVerdict, getAppealVotes, hasVotedOnAppeal, getDAOAddress,
+    // getPendingDAOAddress — and all of the money, getArbiterFloor,
+    // getDisputeDiscount and quoteDisputeTopUp with it, together with the three
+    // constants no reader here uses any more (ARBITER_SHARE_BPS,
+    // DEFAULT_ARBITER_FLOOR, DEFAULT_DISPUTE_DISCOUNT). Their declarations
+    // stayed behind in this file, unread, until 17 September 2026 and were
+    // deleted then; see the CONSTANTS block above.
+    //
+    // What is left below is what the paragraph about the FIVE constant getters
+    // says it is — getMinXPToRegister, getDaoThreshold, getMaxArbiterMistakes,
+    // getNoResponseFloor, getMaxClaimsPerArbiter, each reading a private
+    // constant this file still applies — plus isDaoActive and getChiefBloc,
+    // which are called from inside. The same rule decided the same way twice.
 
     /// @notice Is governance live. ONE source: the flag a person set.
     ///
@@ -3854,11 +4480,7 @@ contract ArbiterRegistryFacet {
     /// earlier than the automaton. Both are checked by test_MistakeThresholdMatchesRegistry.
     function getMaxArbiterMistakes() external pure returns (uint256) { return MAX_ARBITER_MISTAKES; }
 
-    function getChiefArbiter()  external view returns (address) { return ArbiterRegistryStorage.data().chiefArbiter; }
-    function isRegisteredArbiter(address addr) external view returns (bool) { return ArbiterRegistryStorage.data().isArbiter[addr]; }
 
-    function getArbiters()      external view returns (address[] memory) { return ArbiterRegistryStorage.data().arbiterList; }
-    function getDisputeClaimer(address agreement) external view returns (address) { return ArbiterRegistryStorage.data().disputeClaims[agreement]; }
 
     // getDisputeClaimedAt / getNoResponseAt moved to ArbiterAccountabilityFacet
     // (16 August 2026) — evidence about an arbiter's behaviour. What stays here
@@ -3878,113 +4500,7 @@ contract ArbiterRegistryFacet {
     // file (recordPresentationDigest, setArbiterChatKey) stayed — only the
     // reads moved.
 
-    function getClaimCommitment(bytes32 c) external view returns (uint256) { return ArbiterRegistryStorage.data().claimCommitments[c]; }
 
-    function getPendingVerdict(address agreement) external view returns (ArbiterRegistryStorage.PendingVerdict memory) {
-        return ArbiterRegistryStorage.data().pendingVerdicts[agreement];
-    }
-
-    function getVaultBalance()  external view returns (uint256) { return ArbiterRegistryStorage.data().vaultBalance; }
-    /// @notice The path was retired on 31 July 2026 (see setRewardPerDispute) — the
-    /// field this function reads is written by nobody any more, the value is always 0.
-    function getRewardPerDispute() external view returns (uint256) { return ArbiterRegistryStorage.data().rewardPerDispute; }
-    function getDAOAddress()    external view returns (address) { return ArbiterRegistryStorage.data().daoAddress; }
-    /// @notice Who is named as successor and has not taken office. Zero means no proposal.
-    /// Without this read the second step would be visible only to someone who
-    /// scans raw logs: the named address cannot check that it is the one named,
-    /// and the owner cannot check that he did not mistype a letter.
-    function getPendingDAOAddress() external view returns (address) { return ArbiterRegistryStorage.data().pendingDaoAddress; }
-
-    /// @notice Public (not external) because quoteDisputeTopUp calls it
-    /// directly — the default at zero is substituted in one place, not two.
-    function getArbiterFloor() public view returns (uint256) {
-        uint256 f = ArbiterRegistryStorage.data().arbiterFloor;
-        return f == 0 ? DEFAULT_ARBITER_FLOOR : f;
-    }
-
-    /// @notice The discount the vault takes off a top-up, before it is capped
-    /// by what the vault actually holds. Public (not external) for the same
-    /// reason as the floor above: `_splitTopUp` calls it, so the default at
-    /// zero is substituted in one place instead of two.
-    function getDisputeDiscount() public view returns (uint256) {
-        uint256 v = ArbiterRegistryStorage.data().disputeVaultDiscount;
-        return v == 0 ? DEFAULT_DISPUTE_DISCOUNT : v;
-    }
-    function hasSubmittedVerdict(address agreement) external view returns (bool) {
-        return ArbiterRegistryStorage.data().pendingVerdicts[agreement].submittedAt != 0;
-    }
-    function getAppealVotes(address agreement) external view returns (uint256 uphold, uint256 overturnVotes) {
-        ArbiterRegistryStorage.PendingVerdict storage v = ArbiterRegistryStorage.data().pendingVerdicts[agreement];
-        return (v.votesUphold, v.votesOverturn);
-    }
-
-    function hasVotedOnAppeal(address agreement, address arbiterAddr) external view returns (bool) {
-        return ArbiterRegistryStorage.data().hasVotedAppeal[agreement][arbiterAddr];
-    }
-    /// @notice How much must be topped up for the arbiter to receive the floor in total.
-    /// Returns 0 when the pot is already large enough — the top-up button should
-    /// then not be shown at all.
-    ///
-    /// The fee is taken FROM THE DEAL by calling disputeFee(), not recomputed here.
-    /// The fee formula (3% with a cap) lives in Agreement, and a second copy in
-    /// the facet would drift from it on the very first edit — silently, because
-    /// the divergence is visible only to someone who compares the number shown
-    /// with the one that arrived in the wallet.
-    function quoteDisputeTopUp(address agreement) public view returns (uint256) {
-        (uint256 gross, uint256 subsidy) = _splitTopUp(agreement);
-        return gross - subsidy;
-    }
-
-    /// The whole top-up to the floor, and the vault's share of it — computed in
-    /// ONE place, read by `quoteDisputeTopUp`, `quoteDisputeSubsidy` and
-    /// `fundDispute`. The screen and the transfer therefore cannot disagree:
-    /// they are the same subtraction, not two subtractions that match today.
-    ///
-    /// `gross` is what the arbiter must additionally receive to reach the
-    /// floor; `subsidy` is what the bank puts in; the party pays the rest.
-    function _splitTopUp(address agreement) private view returns (uint256 gross, uint256 subsidy) {
-        (bool statusOk, bytes memory statusData) = agreement.staticcall(
-            abi.encodeWithSignature("status()")
-        );
-        require(statusOk, "ArbiterRegistry: failed to read status");
-        if (abi.decode(statusData, (uint8)) != 4) revert NotDisputed();
-
-        (bool feeOk, bytes memory feeData) = agreement.staticcall(
-            abi.encodeWithSignature("disputeFee()")
-        );
-        require(feeOk, "ArbiterRegistry: failed to read dispute fee");
-        uint256 fee = abi.decode(feeData, (uint256));
-
-        uint256 arbiterGets = (fee * ARBITER_SHARE_BPS) / 10_000;
-        uint256 floor_ = getArbiterFloor();
-        if (arbiterGets >= floor_) return (0, 0);
-        gross = floor_ - arbiterGets;
-
-        // An empty bank does not refuse the dispute, it simply gives nothing:
-        // the party in a dispute must never hit a revert because of somebody
-        // else's treasury. This is also the whole of the "vault is short"
-        // handling — there is no other branch anywhere, because the money is
-        // taken out of the vault here and now rather than promised for later.
-        subsidy = getDisputeDiscount();
-        uint256 bank = ArbiterRegistryStorage.data().vaultBalance;
-        if (subsidy > bank) subsidy = bank;
-
-        // The discount never swallows the top-up whole, even when it would
-        // cover it. Two reasons, and the second one alone would be enough:
-        //
-        //   * zero from `quoteDisputeTopUp` already MEANS something — "there is
-        //     nothing to pay", which `fundDispute` answers with TopUpNotNeeded
-        //     and the deal screen answers by hiding the button. A second
-        //     meaning for the same zero would hide the button on exactly the
-        //     pots where the bank pays for everything, and the dispute would
-        //     sit there with no judge and no way to buy one.
-        //   * the vault's share is a discount and not cover: an empty dispute that
-        //     costs the opener nothing is one that gets opened for nothing.
-        //
-        // Reachable only above a ~$292 pot, where the levy already leaves the
-        // arbiter more than $7 and the whole top-up is under three dollars.
-        if (subsidy >= gross) subsidy = gross - 1;
-    }
 
     // getSeatedBy / getSeatedCountBy moved to ArbiterAccountabilityFacet
     // (16 August 2026) — seating provenance. Writing the provenance
@@ -3997,16 +4513,16 @@ contract ArbiterRegistryFacet {
     /// too), voted together.
     ///
     /// The guarded property is "the chief does not DECIDE an appeal", not "does
-    /// not reach the quorum" (16 August 2026). resolveAppeal settles by a simple
-    /// majority of the votes cast as soon as APPEAL_MIN_VOTES of them exist:
-    /// with three cast, two decide. addArbiter does not let this number grow to
-    /// a deciding majority for the chief's own seatings, that is, it holds it
-    /// at one.
+    /// not reach the quorum" (16 August 2026). resolveAppeal settles by a strict
+    /// majority of the votes cast once the quorum of them exists: with three
+    /// cast, two decide. addArbiter does not let this number grow to a deciding
+    /// majority for the chief's own seatings, that is, it holds it at one.
     ///
-    /// ⚠️ What this does NOT give and does not promise: with a large corps the
-    /// quorum stays an ABSOLUTE three, and any three who collude decide
+    /// ⚠️ What this does NOT give and does not promise: the quorum is capped at
+    /// APPEAL_VOTES_CAP however large the corps grows (18 September 2026 made it
+    /// movable DOWNWARD, not upward), so any three who collude decide
     /// everything — the cap counts only the chief's people and does not touch
-    /// such a three. Tying the quorum to the corps size is separate work, not done here.
+    /// such a three.
     function getChiefBloc() external view returns (uint256) {
         return _chiefBloc(ArbiterRegistryStorage.data());
     }

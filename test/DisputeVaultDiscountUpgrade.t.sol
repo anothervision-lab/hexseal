@@ -54,11 +54,14 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ArbiterApplicationsFacet.sol";
 import "../src/facets/DealMetadataFacet.sol";
+import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {MockUSDCB} from "./BoardsFixture.sol";
 import {UpgradeDisputeVaultDiscount} from "../script/UpgradeDisputeVaultDiscount.s.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
 
 /// A registry facet whose discount is a DIFFERENT number — the shape the diamond
 /// would be in if the Add group landed on stale code. Nothing but a behavioural
@@ -67,7 +70,7 @@ contract StaleDiscountFacet {
     function getDisputeDiscount() external pure returns (uint256) { return 1; }
 }
 
-contract DisputeVaultDiscountUpgradeTest is Test {
+contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
     UpgradeDisputeVaultDiscount upgrade;
     DeployFull deploy;
     DiamondProxy diamond;
@@ -85,91 +88,12 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// that a facet which silently grows or loses a function stops here instead
     /// of at the signature.
     uint256 constant CHAIN_FACETS             = 13;
+
     uint256 constant CHAIN_ROUTED             = 218;
     uint256 constant REGISTRY_SELECTORS       = 57;
     uint256 constant ACCOUNTABILITY_SELECTORS = 35;
     uint256 constant ADDED_REGISTRY           = 2;
     uint256 constant ADDED_ACCOUNTABILITY     = 1;
-
-    /// Everything a fresh deploy carries that the live chain does not: this
-    /// cut's own two Add groups, plus whatever else is queued in the tree.
-    ///
-    /// ⚠️ THAT DAY CAME ON 31 AUGUST 2026, and the sentence that used to stand
-    /// here -- "no third cut is queued behind it in the tree" -- is why the
-    /// growth is named rather than folded in. RegistryFacet gains
-    /// `notifyWorkHandedIn()`, so that the diamond can see a hand-in at all:
-    /// `Agreement.markDone()` used to emit only on the clone, while the one
-    /// standing observer is pinned to the diamond, so the transition that
-    /// starts the two-day auto-approve clock was invisible from the only
-    /// address anybody watches. It ships with
-    /// script/UpgradeRegistryHandInSignal.s.sol, is not on the chain yet, and
-    /// belongs to neither facet this cut touches.
-    uint256 constant PENDING_HAND_IN_ADDS = 1;
-
-    /// ⚠️ A PENDING DELTA OF 3 SEPTEMBER 2026, named the same way and for the
-    /// same reason. The marketplace gets an emergency brake that lets go by
-    /// itself (decision 17): FactoryFacet gains `pauseNewDeals()`,
-    /// `resumeNewDeals()`, `newDealsPausedUntil()` and the
-    /// `NEW_DEALS_PAUSE_DURATION()` getter, and both boards' `whenNotPaused`
-    /// stops reading a `paused` bool that has had no writer since 24 June 2026.
-    /// No cut has been signed for it, so a from-scratch deploy now stands four
-    /// further selectors ahead of this census. Ships with
-    /// script/UpgradeEmergencyBrake.s.sol.
-    uint256 constant PENDING_BRAKE_ADDS = 4;
-
-    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
-    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
-    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
-    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
-    ///
-    /// It gets a constant of its OWN rather than turning the brake's four into
-    /// a five. The two ride in one transaction but they are two decisions, and
-    /// a number that covers both can no longer say which one drifted. Drop item
-    /// 138 from the cut and exactly this line goes to zero.
-    uint256 constant PENDING_FEE_CAP_ADDS = 1;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 8 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains the door a hand-seated
-    /// arbiter posts his own bond through, and the read that says whether he
-    /// has. Two selectors, `postArbiterBond()` and `isArbiterActive(address)`,
-    /// shipped by script/UpgradeArbiterBondRequired.s.sol.
-    ///
-    /// A constant of its OWN rather than a bigger number somewhere else: the
-    /// two ride in their own transaction and are their own decision, and a
-    /// number that covers several can no longer say which one drifted. Land
-    /// that cut and exactly this line goes to zero.
-    uint256 constant PENDING_ARBITER_BOND_ADDS = 2;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains the door that takes back
-    /// a GRANTED SEAT NOTHING HAS BEEN EARNED IN —
-    /// `revokeUnprovenSeat(address,string)`, shipped by
-    /// script/UpgradeUnprovenSeatRevocationAndBondPermit.s.sol.
-    ///
-    /// One selector, and a constant of its OWN for the same reason the line
-    /// above has one: it rides in its own transaction and is its own decision,
-    /// and a number that covers several can no longer say which of them drifted.
-    /// Land that cut and exactly this line goes to zero.
-    uint256 constant PENDING_UNPROVEN_SEAT_ADDS = 1;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains a SECOND bond door,
-    /// `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)`, which takes
-    /// the same 50 USDC on a signed EIP-2612 paper instead of on an allowance
-    /// granted beforehand. Granting an allowance is a transaction sent to USDC,
-    /// which does not trust our forwarder, so that step could never be made
-    /// gasless from our side — and the arbiter it is asked of has earned nothing
-    /// in the protocol yet to pay the gas with.
-    ///
-    /// It rides in the SAME transaction as the line above, and still gets a
-    /// constant of its OWN, for the reason every line here has one: they are two
-    /// decisions, and a number covering both can no longer say which of them
-    /// drifted. Land that cut and exactly this line goes to zero.
-    uint256 constant PENDING_BOND_PERMIT_ADDS = 1;
-
-    uint256 constant EXTRA_BEYOND_CHAIN =
-        ADDED_REGISTRY + ADDED_ACCOUNTABILITY + PENDING_HAND_IN_ADDS + PENDING_BRAKE_ADDS
-        + PENDING_FEE_CAP_ADDS + PENDING_ARBITER_BOND_ADDS + PENDING_UNPROVEN_SEAT_ADDS + PENDING_BOND_PERMIT_ADDS;
 
     /// What THIS cut alone puts on a diamond, as opposed to what a fresh deploy
     /// carries beyond the chain. The two used to be the same number and stopped
@@ -183,6 +107,47 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// A number from a recorded decision, copied here by a person and NOT
     /// read off the facet: the facet is the thing being checked.
     uint256 constant DISCOUNT_AFTER = 3_000_000;
+
+    /// ⚠️ WHAT THE PAIR GREW **AFTER** THIS CUT WAS SIGNED — written by hand, by
+    /// SIGNATURE TEXT, never taken from the script's own lists. The same device
+    /// as `_grownAfterThisCut` in test/GovernanceHandoverUpgrade.t.sol, and for
+    /// the same reason: this script ran on 29 August 2026 and its lists are a
+    /// record of that transaction, while the locks below compare them with
+    /// TODAY'S compiled ABI.
+    ///
+    ///   • withdrawAppealShare(address), getAppealShareOwed(address,address),
+    ///     getAppealLedger(address), quoteAppealDeposit(address) —
+    ///     17 September 2026, the appeal economics: the panel's pull, its read,
+    ///     a settled appeal's ledger and the price of an appeal — and, the same
+    ///     day, settleAppealDebts(uint256) and getAppealDebts(). All six on
+    ///     ArbiterVaultFacet.
+    ///
+    /// Held to "real, and covering nothing this cut mounted" by
+    /// test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted.
+    function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](8);
+        sels[0] = bytes4(keccak256("withdrawAppealShare(address)"));
+        sels[1] = bytes4(keccak256("getAppealShareOwed(address,address)"));
+        sels[2] = bytes4(keccak256("getAppealLedger(address)"));
+        sels[3] = bytes4(keccak256("quoteAppealDeposit(address)"));
+        sels[4] = bytes4(keccak256("settleAppealDebts(uint256)"));
+        sels[5] = bytes4(keccak256("getAppealDebts()"));
+        // And the two of 18 September 2026 on the arbiter registry: item D1's
+        // public door for a dead dispute claim, and the read a screen needs now
+        // that the appeal quorum moves with the corps.
+        sels[6] = bytes4(keccak256("abandonClaim(address)"));
+        sels[7] = bytes4(keccak256("getAppealPanel(address)"));
+    }
+
+    function test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted() public view {
+        bytes4[] memory grown = _grownAfterThisCut();
+        bytes4[] memory regAbi = upgrade.registryFacetAbi(); // the pair
+        for (uint256 i = 0; i < grown.length; i++) {
+            assertTrue(_contains(regAbi, grown[i]), "the allowance is stale: no such function in the registry pair's ABI");
+            assertFalse(_contains(upgrade.registryReplaceSelectors(), grown[i]), "the allowance covers a selector this cut REPLACED");
+            assertFalse(_contains(upgrade.registryAddSelectors(), grown[i]), "the allowance covers a selector this cut ADDED");
+        }
+    }
 
     function setUp() public {
         upgrade = new UpgradeDisputeVaultDiscount();
@@ -201,9 +166,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// present in the ABI, routed nowhere, discovered by the first person whose
     /// button did nothing.
     function test_ListsCoverExactlyTheCompiledFacets() public view {
+        // The Add group carries the growth queued behind this cut: the
+        // compiled pair has moved on and the script may not be edited, having run.
         upgrade.assertListsCoverTheCompiledFacets(
             upgrade.registryReplaceSelectors(),
-            upgrade.registryAddSelectors(),
+            _concat(upgrade.registryAddSelectors(), _grownAfterThisCut()),
             upgrade.accountabilityReplaceSelectors(),
             upgrade.accountabilityAddSelectors()
         );
@@ -272,11 +239,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     function test_TheCompiledFacetsGainExactlyWhatThisCutAdds() public view {
         assertEq(
             _unmountedCount(
-                upgrade.artifactSelectors("out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json"),
+                upgrade.registryFacetAbi(), // the pair, see the note on registryFacetAbi()
                 _censusAt(".selectors", ".count")
             ),
-            ADDED_REGISTRY,
-            "the compiled ArbiterRegistryFacet gains a different number of functions than this cut adds"
+            ADDED_REGISTRY + _grownAfterThisCut().length,
+            "the compiled ArbiterRegistryFacet gains a different number of functions than this cut adds plus what is queued behind it"
         );
         assertEq(
             _unmountedCount(
@@ -300,8 +267,13 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// file asks WHICH FACET an added selector belongs to. The census answers
     /// "mounted nowhere", which is true of it either way.
     function test_EachAddedSelectorIsImplementedByTheFacetItIsMountedOn() public view {
-        bytes4[] memory regAbi =
-            upgrade.artifactSelectors("out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json");
+        // ⚠️ THE PAIR, NOT ONE FILE (16 September 2026). The facet this signed
+        // cut mounted was split into ArbiterRegistryFacet and ArbiterVaultFacet
+        // with no signature touched, so "what the compiled registry exposes" is
+        // the union of the two — the same set the single facet had. Taught
+        // rather than frozen: this check exists to notice a function added
+        // later, and a frozen list would stop noticing.
+        bytes4[] memory regAbi = upgrade.registryFacetAbi();
         bytes4[] memory accAbi =
             upgrade.artifactSelectors("out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json");
 
@@ -352,9 +324,15 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// and the fresh deploy ever disagree about what a facet exposes, one of the
     /// two diamonds is wrong and nothing else would say which.
     function test_TheCutAndTheFreshDeployMountTheSameSets() public view {
+        // The growth queued behind this cut is added to THIS cut's side, not
+        // subtracted from DeployFull's: a fresh deploy mounts what the facets
+        // have today, this cut mounted what they had in August.
         _assertSameSet(
-            _concat(upgrade.registryReplaceSelectors(), upgrade.registryAddSelectors()),
-            deploy.arbiterRegistryFacetSelectors(),
+            _concat(
+                _concat(upgrade.registryReplaceSelectors(), upgrade.registryAddSelectors()),
+                _grownAfterThisCut()
+            ),
+            _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
             "ArbiterRegistry vs DeployFull"
         );
         _assertSameSet(
@@ -404,8 +382,10 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         bytes4[] memory accSels = upgrade.accountabilityReplaceSelectors();
         bytes4[] memory accAdd  = upgrade.accountabilityAddSelectors();
 
-        // Pre-flight, exactly as run() calls it.
-        upgrade.assertListsCoverTheCompiledFacets(regSels, regAdd, accSels, accAdd);
+        // Pre-flight, exactly as run() calls it — bar the growth queued behind
+        // this cut, which rides with the Add group for the reason given in
+        // test_ListsCoverExactlyTheCompiledFacets.
+        upgrade.assertListsCoverTheCompiledFacets(regSels, _concat(regAdd, _grownAfterThisCut()), accSels, accAdd);
         address previousRegistry = upgrade.assertAllMountedOnOneFacet(regSels, address(diamond));
         address previousAccountability = upgrade.assertAllMountedOnOneFacet(accSels, address(diamond));
         assertTrue(previousRegistry != previousAccountability, "the two groups sit on the same facet");
@@ -434,12 +414,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
             ""
         );
 
-        // Post-flight, exactly as run() calls it.
+        // ── Post-flight, part one: THE SHAPE, exactly as run() checks it, and
+        // checked BEFORE the later split is played out below. This is the
+        // diamond as Base Sepolia stood the day this cut was signed.
         upgrade.assertRouted(regSels, IDiamondLoupe(address(diamond)).facetAddress(regSels[0]), address(diamond));
         upgrade.assertRouted(accSels, IDiamondLoupe(address(diamond)).facetAddress(accSels[0]), address(diamond));
-        upgrade.assertStorageContinuity(before, upgrade.snapshotArbitration(address(diamond)));
-        upgrade.assertTheDiscountAnswers(address(diamond), DISCOUNT_AFTER);
-        upgrade.assertTheSubsidyDoorAnswersAndIsEmpty(address(diamond));
 
         assertEq(usdc.balanceOf(address(diamond)), heldBefore, "the diamond's USDC moved across a cut");
         assertEq(
@@ -454,19 +433,36 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         assertEq(IDiamondLoupe(address(diamond)).facetFunctionSelectors(previousRegistry).length, 0);
         assertEq(IDiamondLoupe(address(diamond)).facetFunctionSelectors(previousAccountability).length, 0);
 
+        // ⚠️ AND THEN THE SEPTEMBER SPLIT IS PLAYED OUT (16 September 2026).
+        // The cut above is the one that was SIGNED: it deploys one
+        // `new ArbiterRegistryFacet()` and mounts its whole group on it. It
+        // cannot know about a split made three weeks later, and it is not
+        // rewritten — it is the record of what went on chain. But the doors read
+        // below moved to ArbiterVaultFacet, so until the split lands they are
+        // routed at code that does not implement them. That is the chain's real
+        // state between the two cuts, and a test reading a moved door plays the
+        // move out first — as ArbiterTwoFacetBench._applyTask45MoveAfterLegacyCut
+        // does for the August split.
+        _replayArbiterVaultSplit(address(diamond));
+
+        // ── Post-flight, part two: THE ANSWERS.
+        upgrade.assertStorageContinuity(before, upgrade.snapshotArbitration(address(diamond)));
+        upgrade.assertTheDiscountAnswers(address(diamond), DISCOUNT_AFTER);
+        upgrade.assertTheSubsidyDoorAnswersAndIsEmpty(address(diamond));
+
         // And the door the cut is FOR actually works afterwards, which no
         // selector count can say: the owner can move the number, and the read
         // follows it.
-        ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(1_500_000);
+        ArbiterVaultFacet(address(diamond)).setDisputeDiscount(1_500_000);
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDisputeDiscount(), 1_500_000,
+            ArbiterVaultFacet(address(diamond)).getDisputeDiscount(), 1_500_000,
             "setDisputeDiscount did not move the number"
         );
         // Zero reads back as the default, which is the shape chosen for it
         // and the reason "no discount at all" has to be written as 1.
-        ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(0);
+        ArbiterVaultFacet(address(diamond)).setDisputeDiscount(0);
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDisputeDiscount(), DISCOUNT_AFTER,
+            ArbiterVaultFacet(address(diamond)).getDisputeDiscount(), DISCOUNT_AFTER,
             "a zeroed discount does not read back as the default"
         );
     }
@@ -476,7 +472,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// there: a facet that gained a function since the census was taken, or a
     /// selector filed in the wrong group.
     function test_PreFlightRefusesWhenAReplacedSelectorIsNotMounted() public {
-        _unmount(ArbiterRegistryFacet.getVaultBalance.selector);
+        _unmount(ArbiterVaultFacet.getVaultBalance.selector);
 
         // ⚠️ Fetched BEFORE the expectation is armed: `vm.expectRevert` arms the
         // NEXT call, and `upgrade.registryReplaceSelectors()` is itself an
@@ -502,7 +498,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
 
     /// The mirror refusal: an Add selector that is already routed.
     function test_PreFlightRefusesWhenAnAddedSelectorIsAlreadyMounted() public {
-        _mountOne(ArbiterRegistryFacet.getDisputeDiscount.selector, address(new ArbiterRegistryFacet()));
+        _mountOne(ArbiterVaultFacet.getDisputeDiscount.selector, address(new ArbiterRegistryFacet()));
 
         bytes4[] memory added = upgrade.registryAddSelectors();
         vm.expectRevert(
@@ -527,7 +523,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// mounted: the previous facet holds more selectors than the cut carries.
     function test_PreFlightRefusesWhenTheOldFacetHoldsSomethingTheCutDoesNotCarry() public {
         _mountOne(
-            ArbiterRegistryFacet.getDisputeDiscount.selector,
+            ArbiterVaultFacet.getDisputeDiscount.selector,
             _hostOf(ArbiterRegistryFacet.isDaoActive.selector)
         );
 
@@ -542,7 +538,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// The diamond itself refuses, with its own message — proof that the
     /// pre-flight guards a real failure rather than an imagined one.
     function test_ADiamondRejectsAReplaceOfAnUnmountedSelector() public {
-        _unmount(ArbiterRegistryFacet.getVaultBalance.selector);
+        _unmount(ArbiterVaultFacet.getVaultBalance.selector);
 
         // ⚠️ Built BEFORE the expectation is armed: `vm.expectRevert` arms the
         // NEXT call, and `buildCuts(...)` is itself an external call.
@@ -564,41 +560,27 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         vm.expectRevert(bytes("Diamond: selector exists"));
         IDiamondCut(address(diamond)).diamondCut(cuts, address(0), "");
     }
-
-    /// The shape of a diamond built the way the live one was built, against the
-    /// shape a person read off the live one. Neither number is computed from the
-    /// other. A fresh deploy is exactly this cut's three selectors ahead of the
-    /// chain, and they are checked by name so the allowance cannot absorb a
-    /// different drift of the same size.
-    function test_AFreshDeployIsExactlyThisCutAheadOfTheLiveChain() public {
-        DiamondProxy d = _deployFullShapedDiamond();  // NOT the pre-cut rig
-        assertEq(
-            IDiamondLoupe(address(d)).facetAddresses().length, CHAIN_FACETS,
-            "a from-scratch diamond has a different number of facets than the live one"
-        );
-
-        uint256 routed;
-        IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
-        for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
-        assertEq(
-            routed, CHAIN_ROUTED + EXTRA_BEYOND_CHAIN,
-            "a from-scratch diamond is not exactly this cut ahead of the live chain"
-        );
-
-        // Named by SIGNATURE TEXT, not taken from the script's lists.
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(bytes4(keccak256("setDisputeDiscount(uint256)"))) != address(0),
-            "setDisputeDiscount is not mounted by a fresh deploy"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(bytes4(keccak256("getDisputeDiscount()"))) != address(0),
-            "getDisputeDiscount is not mounted by a fresh deploy"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(bytes4(keccak256("getDisputeSubsidy(address)"))) != address(0),
-            "getDisputeSubsidy is not mounted by a fresh deploy"
-        );
-    }
+    // ⚠️ A TEST WAS REMOVED HERE ON 14 SEPTEMBER 2026, AND WHERE IT WENT
+    // MATTERS MORE THAN WHAT IT SAID.
+    //
+    // `test_AFreshDeployIsExactlyThisCutAheadOfTheLiveChain` asked whether a diamond built from
+    // script/DeployFull.s.sol still matches the live chain. That is a real
+    // question and it now has exactly one owner:
+    // test/DeployFullMatchesChain.t.sol, which asks it against the census read
+    // at the CURRENT block.
+    //
+    // It could never be answered here. This stand's census is a BEFORE picture
+    // of one past cut, so the only way to compare today's deploy script with it
+    // was "old census, plus a hand-kept allowance for every cut that has landed
+    // since". That sum is what turned the ratchet into a budget: on
+    // 14 September the sibling of this test in
+    // test/JobBoardApplicantGateUpgrade.t.sol was GREEN while a from-scratch
+    // deployment would have produced a diamond with no treasury link at all,
+    // because the stale census and the nine accumulated allowances added up to
+    // exactly what the script built.
+    //
+    // A stand rehearsing a PAST cut is the wrong place to ask a question about
+    // the PRESENT chain, and no amount of care with the allowance fixes that.
 
     // ══════════════════════════════════════════════════════════════════════
     // THE BEHAVIOURAL GUARDS
@@ -608,7 +590,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// the diamond rather than of the script's list.
     function test_TheDiscountAnswersOnlyAfterTheCut() public {
         (bool okBefore,) = address(diamond).staticcall(
-            abi.encodeWithSelector(ArbiterRegistryFacet.getDisputeDiscount.selector)
+            abi.encodeWithSelector(ArbiterVaultFacet.getDisputeDiscount.selector)
         );
         assertFalse(okBefore, "getDisputeDiscount already answers before the cut");
 
@@ -620,6 +602,18 @@ contract DisputeVaultDiscountUpgradeTest is Test {
             address(0),
             ""
         );
+
+        // ⚠️ AND THEN THE SEPTEMBER SPLIT IS PLAYED OUT (16 September 2026).
+        // The cut above is the one that was SIGNED: it deploys one
+        // `new ArbiterRegistryFacet()` and mounts its whole group on it. It
+        // cannot know about a split made three weeks later, and it is not
+        // rewritten — it is the record of what went on chain. But the doors read
+        // below moved to ArbiterVaultFacet, so until the split lands they are
+        // routed at code that does not implement them. That is the chain's real
+        // state between the two cuts, and a test reading a moved door plays the
+        // move out first — as ArbiterTwoFacetBench._applyTask45MoveAfterLegacyCut
+        // does for the August split.
+        _replayArbiterVaultSplit(address(diamond));
 
         upgrade.assertTheDiscountAnswers(address(diamond), DISCOUNT_AFTER);
         upgrade.assertTheSubsidyDoorAnswersAndIsEmpty(address(diamond));
@@ -638,12 +632,25 @@ contract DisputeVaultDiscountUpgradeTest is Test {
             address(0),
             ""
         );
+
+        // ⚠️ AND THEN THE SEPTEMBER SPLIT IS PLAYED OUT (16 September 2026).
+        // The cut above is the one that was SIGNED: it deploys one
+        // `new ArbiterRegistryFacet()` and mounts its whole group on it. It
+        // cannot know about a split made three weeks later, and it is not
+        // rewritten — it is the record of what went on chain. But the doors read
+        // below moved to ArbiterVaultFacet, so until the split lands they are
+        // routed at code that does not implement them. That is the chain's real
+        // state between the two cuts, and a test reading a moved door plays the
+        // move out first — as ArbiterTwoFacetBench._applyTask45MoveAfterLegacyCut
+        // does for the August split.
+        _replayArbiterVaultSplit(address(diamond));
+
         upgrade.assertTheDiscountAnswers(address(diamond), DISCOUNT_AFTER);
 
         // Now put a different number behind the same selector, and nothing else.
         // Shape unchanged, count unchanged, behaviour wrong.
         bytes4[] memory one = new bytes4[](1);
-        one[0] = ArbiterRegistryFacet.getDisputeDiscount.selector;
+        one[0] = ArbiterVaultFacet.getDisputeDiscount.selector;
         IDiamondCut.FacetCut[] memory stale = new IDiamondCut.FacetCut[](1);
         stale[0] = IDiamondCut.FacetCut(address(new StaleDiscountFacet()), IDiamondCut.FacetCutAction.Replace, one);
         IDiamondCut(address(diamond)).diamondCut(stale, address(0), "");
@@ -682,11 +689,24 @@ contract DisputeVaultDiscountUpgradeTest is Test {
             address(0),
             ""
         );
+
+        // ⚠️ AND THEN THE SEPTEMBER SPLIT IS PLAYED OUT (16 September 2026).
+        // The cut above is the one that was SIGNED: it deploys one
+        // `new ArbiterRegistryFacet()` and mounts its whole group on it. It
+        // cannot know about a split made three weeks later, and it is not
+        // rewritten — it is the record of what went on chain. But the doors read
+        // below moved to ArbiterVaultFacet, so until the split lands they are
+        // routed at code that does not implement them. That is the chain's real
+        // state between the two cuts, and a test reading a moved door plays the
+        // move out first — as ArbiterTwoFacetBench._applyTask45MoveAfterLegacyCut
+        // does for the August split.
+        _replayArbiterVaultSplit(address(diamond));
+
         // Unsabotaged, it passes.
         upgrade.assertStorageContinuity(before, upgrade.snapshotArbitration(address(diamond)));
 
         bytes4[] memory one = new bytes4[](1);
-        one[0] = ArbiterRegistryFacet.getVaultBalance.selector;
+        one[0] = ArbiterVaultFacet.getVaultBalance.selector;
         IDiamondCut.FacetCut[] memory moved = new IDiamondCut.FacetCut[](1);
         moved[0] = IDiamondCut.FacetCut(address(new MovedVaultFacet()), IDiamondCut.FacetCutAction.Replace, one);
         IDiamondCut(address(diamond)).diamondCut(moved, address(0), "");
@@ -719,7 +739,7 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         address previousRegistry = upgrade.assertAllMountedOnOneFacet(regSels, address(diamond));
         address previousAccountability = upgrade.assertAllMountedOnOneFacet(accSels, address(diamond));
         uint256 routedBefore = _routed();
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         IDiamondCut(address(diamond)).diamondCut(
             upgrade.buildCuts(
@@ -745,11 +765,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
         upgrade.assertAddGroupIsUnmountedAnywhere(accAdd, address(diamond));
         assertEq(_routed(), routedBefore, "the rollback did not restore the pre-cut shape");
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
             "the vault did not survive the rollback"
         );
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getArbiters().length, 1,
+            ArbiterVaultFacet(address(diamond)).getArbiters().length, 1,
             "the corps did not survive the rollback"
         );
     }
@@ -836,11 +856,11 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     function _seedArbitration() internal {
         ArbiterRegistryFacet(address(diamond)).addArbiter(ARBITER);
         ArbiterRegistryFacet(address(diamond)).setChiefArbiter(CHIEF);
-        ArbiterRegistryFacet(address(diamond)).setArbiterFloor(7_000_000);
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(7_000_000);
 
         usdc.mint(address(this), 11_000_000);
         usdc.approve(address(diamond), 11_000_000);
-        ArbiterRegistryFacet(address(diamond)).fundVault(11_000_000);
+        ArbiterVaultFacet(address(diamond)).fundVault(11_000_000);
     }
 
     /// The diamond as Base Sepolia stands TODAY — before this cut.
@@ -858,36 +878,12 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// without anybody noticing.
     function _deployPreCutDiamond() internal returns (DiamondProxy d) {
         d = _deployFullShapedDiamond();
+        // The census this rig is measured against predates the unmount; see the
+        // helper's own note for why the script cannot supply this any more.
+        _mountHistoricalDealMetadata(d);
 
         bytes4[] memory onChain = _censusAt(".selectors", ".count");
-        IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
-
-        bytes4[] memory extra = new bytes4[](EXTRA_BEYOND_CHAIN);
-        uint256 n;
-        for (uint256 i = 0; i < all.length; i++) {
-            for (uint256 j = 0; j < all[i].functionSelectors.length; j++) {
-                bytes4 sel = all[i].functionSelectors[j];
-                bool onLiveChain;
-                for (uint256 k = 0; k < onChain.length; k++) {
-                    if (sel == onChain[k]) { onLiveChain = true; break; }
-                }
-                if (!onLiveChain) {
-                    require(n < EXTRA_BEYOND_CHAIN, "the local rig has more selectors than the chain by more than this cut adds");
-                    extra[n++] = sel;
-                }
-            }
-        }
-        require(n == EXTRA_BEYOND_CHAIN, "the local rig does not differ from the chain by exactly this cut's additions");
-
-        IDiamondCut.FacetCut[] memory remove = new IDiamondCut.FacetCut[](1);
-        remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
-        IDiamondCut(address(d)).diamondCut(remove, address(0), "");
-
-        uint256 routed;
-        IDiamondLoupe.Facet[] memory after_ = IDiamondLoupe(address(d)).facets();
-        for (uint256 i = 0; i < after_.length; i++) routed += after_[i].functionSelectors.length;
-        require(routed == CHAIN_ROUTED, "the local pre-cut rig routes a different number of selectors than the live chain");
-        require(after_.length == CHAIN_FACETS, "the local pre-cut rig has a different number of facets than the live chain");
+        _conformToCensus(d, onChain);
     }
 
     /// Registry and factory, seeded so `fundVault` has a token to move.
@@ -904,6 +900,127 @@ contract DisputeVaultDiscountUpgradeTest is Test {
     /// run() builds the live one from. A private hand-written set would drift
     /// from the live layout in silence, and then the shape claim would be about
     /// a diamond that does not exist.
+    /// Every selector this checkout mounts that the census does not hold,
+    /// filled in by _conformToCensus. COMPUTED, never declared: this is the
+    /// surplus that used to be a hand-kept total.
+    bytes4[] internal rigSurplusOverCensus;
+
+    /// Cut the rig down to the census, and then prove it IS the census.
+    ///
+    /// ⚠️ THE SIZE OF THE DIFFERENCE IS COMPUTED, NEVER DECLARED. Whatever this
+    /// checkout mounts that the census does not hold comes off, however many
+    /// that is. The shape this helper replaced sized its array from a hand-kept
+    /// total and refused when the count disagreed, so every cut landing in the
+    /// tree reddened it and every red was answered by raising the total.
+    ///
+    /// The claim that takes the count's place is stronger, not weaker: after the
+    /// removal the rig's selector set must EQUAL the census's, both directions
+    /// checked. A count agrees with a swap; equality does not.
+    ///
+    /// The other direction deserves its own sentence. A selector the census
+    /// holds and this checkout can no longer build is the case that arrives when
+    /// a facet leaves the tree -- it reds HERE, naming the selector, instead of
+    /// leaving the rig one door short of the diamond it claims to be.
+    function _conformToCensus(DiamondProxy d, bytes4[] memory census) internal {
+        IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
+
+        uint256 routed;
+        for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
+
+        bytes4[] memory scratch = new bytes4[](routed);
+        uint256 n;
+        for (uint256 i = 0; i < all.length; i++) {
+            for (uint256 j = 0; j < all[i].functionSelectors.length; j++) {
+                bytes4 sel = all[i].functionSelectors[j];
+                if (!_contains(census, sel)) scratch[n++] = sel;
+            }
+        }
+
+        // Kept for the locks that ask what the surplus IS, now that nothing
+        // declares what it should be. Recorded before it is removed, because
+        // after the removal it is gone from the diamond.
+        delete rigSurplusOverCensus;
+        for (uint256 i = 0; i < n; i++) rigSurplusOverCensus.push(scratch[i]);
+
+        if (n > 0) {
+            bytes4[] memory extra = new bytes4[](n);
+            for (uint256 i = 0; i < n; i++) extra[i] = scratch[i];
+            IDiamondCut.FacetCut[] memory remove = new IDiamondCut.FacetCut[](1);
+            remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
+            IDiamondCut(address(d)).diamondCut(remove, address(0), "");
+        }
+
+        for (uint256 i = 0; i < census.length; i++) {
+            require(
+                IDiamondLoupe(address(d)).facetAddress(census[i]) != address(0),
+                string.concat(
+                    "the rig is MISSING a selector the chain routed at this census: ",
+                    vm.toString(census[i]),
+                    " - this checkout no longer builds it, and a stand rehearsing a past cut has to mount it itself"
+                )
+            );
+        }
+
+        IDiamondLoupe.Facet[] memory conformed = IDiamondLoupe(address(d)).facets();
+        uint256 routedAfter;
+        for (uint256 i = 0; i < conformed.length; i++) routedAfter += conformed[i].functionSelectors.length;
+        require(routedAfter == census.length, "the conformed rig routes a different number of selectors than the census holds");
+        // ⚠️ THE ARBITER FACET IS TWO CONTRACTS IN THIS CHECKOUT AND ONE ON THE
+        // CHAIN (16 September 2026). The split moved twenty-eight selectors to
+        // ArbiterVaultFacet without touching a signature, so the SET above is
+        // right either way — but the rig would carry one facet more than the
+        // chain, and the signed cut rehearsed here would then meet a Replace
+        // group spread over two addresses, which its pre-flight refuses and
+        // should go on refusing. So the rig is put back into the chain's shape
+        // instead of the check being loosened: one host for all fifty-nine.
+        //
+        // ⚠️ THIS CALL STAYS, and the line that stood here saying it would come
+        // out the day the split landed was wrong. The rig is conformed to THIS
+        // STAND'S census, read before the split, when one host routed all
+        // fifty-nine arbiter selectors; the split landing on Base Sepolia
+        // (17 September 2026, block 46 946 562) does not change that past.
+        // Measured 18 September 2026 on EmergencyBrakeUpgrade: without this
+        // call setUp reverts "the conformed rig has a different number of
+        // facets than the live chain had" and the suite does not run.
+        _mountArbiterAsOneHost(address(d));
+
+        IDiamondLoupe.Facet[] memory conformedNow = IDiamondLoupe(address(d)).facets();
+        require(
+            conformedNow.length == CHAIN_FACETS,
+            "the conformed rig has a different number of facets than the live chain had"
+        );
+    }
+
+    /// ⚠️ A FACET THE DEPLOY SCRIPT NO LONGER CARRIES, MOUNTED HERE ON PURPOSE.
+    ///
+    /// This rig has to look like the chain did at THIS STAND'S CENSUS, and at
+    /// that census DealMetadataFacet was mounted and answering 0xb6a03ff7. On
+    /// 14 September 2026 the owner signed the cut that unmounted it, and
+    /// script/DeployFull.s.sol stopped mounting it the same day.
+    ///
+    /// So the rig can no longer get it by borrowing the script's list, and that
+    /// is the lesson rather than an inconvenience: a stand that rehearses a PAST
+    /// cut must own the past itself. Borrowing the shape of the chain from a
+    /// script that tracks the PRESENT is what let this whole class of drift go
+    /// unnoticed for ten days.
+    function _mountHistoricalDealMetadata(DiamondProxy target) internal {
+        bytes4[] memory sels = new bytes4[](1);
+        sels[0] = DealMetadataFacet.getDealTokenURI.selector;
+        // ⚠️ ASKED OF THE CENSUS, NOT DECIDED HERE. Mount it only if the chain
+        // routed it at this census and this checkout no longer builds it. A
+        // standing "always mount" would be one more hand-kept fact about which
+        // cuts have landed -- the exact species this file just stopped keeping
+        // -- and it would revert as a duplicate Add the day DeployFull carries
+        // the facet again.
+        if (!_contains(_censusAt(".selectors", ".count"), sels[0])) return;
+        if (IDiamondLoupe(address(target)).facetAddress(sels[0]) != address(0)) return;
+        IDiamondCut.FacetCut[] memory c = new IDiamondCut.FacetCut[](1);
+        c[0] = IDiamondCut.FacetCut(
+            address(new DealMetadataFacet()), IDiamondCut.FacetCutAction.Add, sels
+        );
+        IDiamondCut(address(target)).diamondCut(c, address(0), "");
+    }
+
     function _deployFullShapedDiamond() internal returns (DiamondProxy d) {
         IDiamondCut.FacetCut[] memory initCuts = deploy.buildInitCuts(
             address(new DiamondCutFacet()),
@@ -919,9 +1036,10 @@ contract DisputeVaultDiscountUpgradeTest is Test {
                 address(new JobBoardFacet()),
                 address(new ServiceBoardFacet()),
                 address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
                 address(new ArbiterAccountabilityFacet()),
                 address(new ArbiterApplicationsFacet()),
-                address(new DealMetadataFacet()),
+                address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
                 address(new ReputationFacet())
             ),

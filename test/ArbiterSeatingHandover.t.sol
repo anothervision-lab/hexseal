@@ -60,9 +60,12 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 
-contract ArbiterSeatingHandoverTest is Test {
+contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench {
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
 
     address owner;
 
@@ -78,8 +81,16 @@ contract ArbiterSeatingHandoverTest is Test {
     /// each eating exactly one slot, with no packing.
     uint256 constant SLOT_UNIQUE_ACTIVE_USERS = 8;
 
+    /// ⚠️ ONE ADDRESS, THREE HANDLES (16 September 2026). This suite used to
+    /// deploy a bare `new ArbiterRegistryFacet()` and call it directly, which
+    /// stopped being possible when the reads it asserts on (isRegisteredArbiter,
+    /// getChiefArbiter, getDAOAddress, getPendingDAOAddress) moved into
+    /// ArbiterVaultFacet: two `new`s are two storages at one offset, and the
+    /// second would answer a clean zero. The shared bench mounts both facets
+    /// behind one proxy, exactly as production does, and every `vm.store(address(
+    /// facet), ...)` below keeps hitting the same slot it always did.
     function setUp() public {
-        facet = new ArbiterRegistryFacet();
+        (facet, , facetVault) = _deployArbiterBench();
         owner = address(this);
         vm.store(address(facet), OWNER_SLOT, bytes32(uint256(uint160(owner))));
     }
@@ -104,7 +115,7 @@ contract ArbiterSeatingHandoverTest is Test {
 
     function test_AddArbiterWorksBeforeDao() public {
         facet.addArbiter(address(0xA1));
-        assertTrue(facet.isRegisteredArbiter(address(0xA1)), "before the DAO the owner seats as before");
+        assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "before the DAO the owner seats as before");
     }
 
     function test_AddArbiterRevertsAfterDao() public {
@@ -117,7 +128,7 @@ contract ArbiterSeatingHandoverTest is Test {
 
     function test_SetChiefArbiterWorksBeforeDao() public {
         facet.setChiefArbiter(address(0xC4));
-        assertEq(facet.getChiefArbiter(), address(0xC4), "before the DAO the chief is appointed as before");
+        assertEq(facetVault.getChiefArbiter(), address(0xC4), "before the DAO the chief is appointed as before");
     }
 
     function test_SetChiefArbiterRevertsAfterDao() public {
@@ -165,9 +176,9 @@ contract ArbiterSeatingHandoverTest is Test {
         assertFalse(facet.isDaoActive(), "a counter of outsiders does not switch governance on");
 
         facet.addArbiter(address(0xA1));
-        assertTrue(facet.isRegisteredArbiter(address(0xA1)), "the owner still has seating");
+        assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "the owner still has seating");
         facet.setChiefArbiter(address(0xC4));
-        assertEq(facet.getChiefArbiter(), address(0xC4), "the chief is not abolished");
+        assertEq(facetVault.getChiefArbiter(), address(0xC4), "the chief is not abolished");
     }
 
     /// The lower boundary: one below the threshold refuses, and the refusal names
@@ -221,8 +232,8 @@ contract ArbiterSeatingHandoverTest is Test {
     /// precisely the right one.
     function test_ProposedSuccessorHasNoPowerUntilHeConfirms() public {
         facet.setDAOAddress(address(0xDA0));
-        assertEq(facet.getPendingDAOAddress(), address(0xDA0), "the proposal is recorded");
-        assertEq(facet.getDAOAddress(), address(0), "but the rights have not moved");
+        assertEq(facetVault.getPendingDAOAddress(), address(0xDA0), "the proposal is recorded");
+        assertEq(facetVault.getDAOAddress(), address(0), "but the rights have not moved");
 
         vm.prank(address(0xDA0));
         vm.expectRevert(ArbiterRegistryFacet.NotOwnerOrDAO.selector);
@@ -231,8 +242,8 @@ contract ArbiterSeatingHandoverTest is Test {
         vm.prank(address(0xDA0));
         facet.acceptDAOAddress();
 
-        assertEq(facet.getDAOAddress(), address(0xDA0), "the confirmation handed the right over");
-        assertEq(facet.getPendingDAOAddress(), address(0), "the proposal is spent");
+        assertEq(facetVault.getDAOAddress(), address(0xDA0), "the confirmation handed the right over");
+        assertEq(facetVault.getPendingDAOAddress(), address(0), "the proposal is spent");
 
         vm.prank(address(0xDA0));
         vm.expectRevert(ArbiterRegistryFacet.NoVerdict.selector);
@@ -248,7 +259,7 @@ contract ArbiterSeatingHandoverTest is Test {
         vm.expectRevert(ArbiterRegistryFacet.NotProposedDaoAddress.selector);
         facet.acceptDAOAddress();
 
-        assertEq(facet.getDAOAddress(), address(0), "a stranger's press moved nothing");
+        assertEq(facetVault.getDAOAddress(), address(0), "a stranger's press moved nothing");
     }
 
     /// And on an empty space there is nothing to confirm: no proposal means the same
@@ -266,13 +277,13 @@ contract ArbiterSeatingHandoverTest is Test {
     function test_ATypoIsSurvivableBecauseItNeverConfirms() public {
         address typo = address(0xDEAD);
         facet.setDAOAddress(typo);
-        assertEq(facet.getDAOAddress(), address(0), "the typo received no rights");
+        assertEq(facetVault.getDAOAddress(), address(0), "the typo received no rights");
 
         facet.setDAOAddress(address(0xDA0));
         vm.prank(address(0xDA0));
         facet.acceptDAOAddress();
 
-        assertEq(facet.getDAOAddress(), address(0xDA0), "the second attempt took the place of the first");
+        assertEq(facetVault.getDAOAddress(), address(0xDA0), "the second attempt took the place of the first");
         vm.prank(typo);
         vm.expectRevert(ArbiterRegistryFacet.NotProposedDaoAddress.selector);
         facet.acceptDAOAddress();
@@ -282,10 +293,10 @@ contract ArbiterSeatingHandoverTest is Test {
 
     function test_SetDaoAddressWorksBeforeDaoAsOwner() public {
         facet.setDAOAddress(address(0xDA0));
-        assertEq(facet.getPendingDAOAddress(), address(0xDA0), "before the DAO the owner names a successor as before");
+        assertEq(facetVault.getPendingDAOAddress(), address(0xDA0), "before the DAO the owner names a successor as before");
         vm.prank(address(0xDA0));
         facet.acceptDAOAddress();
-        assertEq(facet.getDAOAddress(), address(0xDA0), "and the successor takes office in their own transaction");
+        assertEq(facetVault.getDAOAddress(), address(0xDA0), "and the successor takes office in their own transaction");
     }
 
     /// Exactly the hole a review found: after activating the DAO the owner tries to
@@ -306,12 +317,12 @@ contract ArbiterSeatingHandoverTest is Test {
         vm.prank(address(0xDA0));
         facet.setDAOAddress(address(0xBEEF));
         assertEq(
-            facet.getDAOAddress(), address(0xDA0),
+            facetVault.getDAOAddress(), address(0xDA0),
             "until the successor's successor confirms, the right stays with the previous holder: the migration is not seamless and must not be"
         );
         vm.prank(address(0xBEEF));
         facet.acceptDAOAddress();
-        assertEq(facet.getDAOAddress(), address(0xBEEF), "the current daoAddress migrates itself");
+        assertEq(facetVault.getDAOAddress(), address(0xBEEF), "the current daoAddress migrates itself");
     }
 
     // ---------- an earned DAO with a zero successor ----------
@@ -337,7 +348,7 @@ contract ArbiterSeatingHandoverTest is Test {
         facet.setDAOAddress(address(0xBEEF)); // the acting daoAddress names its own
         vm.prank(address(0xBEEF));
         facet.acceptDAOAddress();
-        assertEq(facet.getDAOAddress(), address(0xBEEF));
+        assertEq(facetVault.getDAOAddress(), address(0xBEEF));
     }
 
     // ============================================================
@@ -379,12 +390,12 @@ contract ArbiterSeatingHandoverTest is Test {
     function test_AddArbiterStillWorksWhenTheThresholdIsPastButNobodyPressed() public {
         _setUniqueActiveUsers(facet.getDaoThreshold() * 10);
         assertFalse(facet.isDaoActive(), "the counter is over the line and governance is not on");
-        assertEq(facet.getDAOAddress(), address(0), "setup: there is no successor yet");
+        assertEq(facetVault.getDAOAddress(), address(0), "setup: there is no successor yet");
 
         facet.addArbiter(address(0xA1));
 
         assertTrue(
-            facet.isRegisteredArbiter(address(0xA1)),
+            facetVault.isRegisteredArbiter(address(0xA1)),
             "until the owner presses, there is nobody to seat but them, and they must be able to"
         );
     }
@@ -417,7 +428,7 @@ contract ArbiterSeatingHandoverTest is Test {
 
         facet.setChiefArbiter(address(0xC4));
 
-        assertEq(facet.getChiefArbiter(), address(0xC4), "the chief's role is alive until the press");
+        assertEq(facetVault.getChiefArbiter(), address(0xC4), "the chief's role is alive until the press");
     }
 
     /// The symmetrical half of both: as soon as governance is on, both doors close
@@ -454,7 +465,7 @@ contract ArbiterSeatingHandoverTest is Test {
         facet.setChiefArbiter(address(0xC4));
         vm.prank(address(0xC4));
         facet.addArbiter(address(0xA1));
-        assertTrue(facet.isRegisteredArbiter(address(0xA1)), "before the DAO the chief seats as before");
+        assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "before the DAO the chief seats as before");
     }
 
     /// The refusal has to be NotOwnerOrChief and not SeatingHandedOver: the modifier

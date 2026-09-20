@@ -76,10 +76,14 @@ import {ArbiterAccountabilityFacet} from "./ArbiterAccountabilityFacet.sol";
 import {ReputationStorage} from "./ReputationFacet.sol";
 import {OwnershipLib} from "../DiamondProxy.sol";
 import {FactoryStorage} from "../FactoryFacet.sol";
+import {MarketPresence} from "./MarketPresence.sol"; // "an arbiter is not a party"
 
 /// The three calls this facet makes on the bond token. `IUSDCFull` in the
 /// registry declares only the two transfers; the two reads below are what turn
-/// a raw token revert into a named refusal the approver can act on.
+/// a raw token revert into a named refusal the ARBITER POSTING HIS BOND can act
+/// on. It used to be the approver who met them, until seating and paying were
+/// pulled apart on 13 September 2026 and the only doors left that move a bond
+/// in are the two the arbiter presses himself.
 interface IBondToken {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     /// The outbound half, needed since 11 September 2026 by `revokeUnprovenSeat`.
@@ -214,15 +218,24 @@ contract ArbiterApplicationsFacet {
 
     // ── The bond, and why its failures are named ──────────────────────────
     //
-    // The bond is taken AT APPROVAL, not at submission (owner's decision of
-    // 24 August 2026): the decision is made by a person, by hand, and if he
-    // never gets to it then somebody else's money would have sat locked in
-    // this contract for an unknown length of time.
+    // The bond is taken BY THE ARBITER HIMSELF, in a transaction of his own,
+    // and by neither of the doors that seat him. Owner's decision of
+    // 13 September 2026: seating is decoupled from paying.
     //
-    // The consequence is that by the time the button is pressed the allowance
-    // may be gone and the money may be gone. That is a NAMED refusal, not a
-    // silent failure: the approver has to be able to see that the thing that
-    // went wrong is not his, and tell the applicant which of the two to fix.
+    // It was not always so, and the history is the argument. From 24 August
+    // 2026 the bond was taken AT APPROVAL — the approver's press both seated
+    // the applicant and pulled his 50 USDC. That put a stranger's allowance in
+    // the way of the approver's own decision: no allowance, no seat, and the
+    // refusal took the whole transaction with it. Worse, it made the state the
+    // rest of this facet is built on — seated, still owing — unreachable for
+    // everyone admitted this way.
+    //
+    // So the refusals below are now met by the man they are about, on
+    // `postArbiterBond` and `postArbiterBondWithPermit`, and they are still
+    // NAMED rather than silent for the same reason as before: "you have not
+    // approved the diamond" and "you have spent your USDC" are two different
+    // sentences to show a person, and neither of them is "your transaction
+    // failed".
 
     /// The applicant never approved the diamond, or approved less, or spent
     /// the allowance elsewhere in the meantime.
@@ -247,11 +260,16 @@ contract ArbiterApplicationsFacet {
     error BondTokenNotSet();
     /// The seat already carries a bond, so `postArbiterBond` has nothing to do.
     ///
-    /// This is what stops the money being taken twice: an arbiter admitted
-    /// through `approveArbiterApplication` already paid at approval, and this
-    /// refusal is what the second charge runs into. `arbiterBond` is ONE number
-    /// per address, not a ledger of deposits — a second transfer would be
-    /// unrefundable, since `resignAsArbiter` returns that one number.
+    /// This is what stops the money being taken twice: the two bond doors are
+    /// interchangeable and an arbiter may reach for either, so whichever he
+    /// presses second runs into this. `arbiterBond` is ONE number per address,
+    /// not a ledger of deposits — a second transfer would be unrefundable,
+    /// since `resignAsArbiter` returns that one number.
+    ///
+    /// ⚠️ Since 13 September 2026 NO SEATING DOOR CAN RAISE THIS, and that is
+    /// the change rather than an oversight: neither `addArbiter` nor
+    /// `approveArbiterApplication` writes a bond any more, so every seat they
+    /// make arrives here owing one.
     error BondAlreadyPosted();
 
     /// The signed paper is older than its own deadline.
@@ -384,9 +402,18 @@ contract ArbiterApplicationsFacet {
     );
 
     /// `bondPosted` is in the log for the same reason `bondForfeited` is in
-    /// `ArbiterRemovedForCause`: the money moved in this transaction, and a
-    /// reader who has to go and ask the token separately will one day ask it
+    /// `ArbiterRemovedForCause`: it reports what moved IN THIS TRANSACTION, and
+    /// a reader who has to go and ask the token separately will one day ask it
     /// about a different block.
+    ///
+    /// ⚠️ SINCE 13 SEPTEMBER 2026 IT IS ALWAYS ZERO, and the field stays all the
+    /// same. Two reasons, and the second is the load-bearing one:
+    ///   • zero is the honest answer to the question the field asks. Approval
+    ///     moves no money now; a reader who sees zero here and a later
+    ///     `ArbiterBondPosted` has the true sequence of events;
+    ///   • the signature is indexed by a live subgraph. Dropping the argument
+    ///     changes the topic, costs a resync, and would buy nothing — the
+    ///     field would have to be re-added the day approval ever charges again.
     event ArbiterApplicationApproved(
         address indexed applicant,
         address indexed by,
@@ -662,9 +689,12 @@ contract ArbiterApplicationsFacet {
 
     // -------- APPLICANT: SUBMIT / WITHDRAW --------
 
-    /// Put yourself forward. Costs nothing and locks nothing: the bond is
-    /// taken at approval, so an application that is never answered leaves the
-    /// applicant's money where it was.
+    /// Put yourself forward. Costs nothing and locks nothing — and since
+    /// 13 September 2026 that is true of the APPROVAL as well, not just of this
+    /// press. No allowance is needed before applying and none is needed before
+    /// being seated; the bond is posted afterwards, by the arbiter, through
+    /// `postArbiterBond` or `postArbiterBondWithPermit`, and the seat does
+    /// nothing until he does.
     ///
     /// Gasless (ERC-2771): whoever is worth seating has a record of deals, not
     /// necessarily a balance of ETH.
@@ -693,6 +723,20 @@ contract ArbiterApplicationsFacet {
         // asking "is he already in the array", and `None` is the only value
         // that means he is not. `Expired` is a Pending record seen late, and
         // that record was listed when it was filed.
+        // Rule A: nothing of his own may be hanging on the boards. Asked HERE,
+        // at the submission, and again at the approval a week later — the same
+        // argument `_requireEligible` is asked twice for: a man may post a job
+        // the day after he applies, and a seat measured at a moment nobody
+        // cares about is not measured at all.
+        //
+        // Every kind it counts has an exit that belongs to him alone (withdraw
+        // the application, cancel the job, remove the service, reject the
+        // request) or to a clock (a deal's timeouts), so a refusal here is
+        // never a dead end: the list of what is in the way is in the error, and
+        // `JobBoardFacet.getOpenMarketItems` reads it without pressing
+        // anything.
+        MarketPresence.requireNothingOpen(caller);
+
         if (a.state == uint8(ApplicationState.None)) {
             d.arbiterApplicants.push(caller);
         }
@@ -739,7 +783,26 @@ contract ArbiterApplicationsFacet {
 
     // -------- OWNER / CHIEF: APPROVE / REJECT --------
 
-    /// Seat the applicant and take his bond, in that order.
+    /// Seat the applicant. Take nothing.
+    ///
+    /// ⚠️ SEATING AND PAYING ARE TWO TRANSACTIONS BY TWO DIFFERENT PEOPLE —
+    /// the owner's decision of 13 September 2026. Until it, this door did both
+    /// at once: it seated the applicant and charged him the 50 USDC bond in the
+    /// same call, through `_takeBond`. `_takeBond` refuses without an allowance
+    /// granted beforehand, and a refusal HERE unwound the whole transaction —
+    /// so an applicant who had not approved the diamond could not be seated at
+    /// all. The approver's own decision broke on a stranger's inaction, and the
+    /// state the rest of this facet is built around — SEATED AND STILL OWING —
+    /// was unreachable for anyone coming through this door. Only seats made by
+    /// `addArbiter` could ever be in it.
+    ///
+    /// Now the seat is created UNPAID, exactly like `addArbiter`'s. That is not
+    /// a lesser seat, it is an INACTIVE one: `arbiterBond` stays zero, so
+    /// `isArbiterActive` answers false and every arbiter door in the registry
+    /// refuses him `BondNotPosted` until he posts the bond himself, through
+    /// `postArbiterBond` or `postArbiterBondWithPermit`. He may catch up
+    /// whenever he likes: neither door expires, and neither needs this facet's
+    /// manual-admission ratchet to still be open.
     ///
     /// ⚠️ THIS DOOR CARRIES THE TWO LIMITS `addArbiter` CARRIES, and it has to:
     /// it reaches the same result — a new arbiter, seated by a named person —
@@ -800,12 +863,19 @@ contract ArbiterApplicationsFacet {
             }
         }
 
-        // ── Effects before the token call ────────────────────────────────
-        // The bond transfer is a call into a contract this facet does not
-        // own. Everything that describes the new state is written first, so a
-        // token that calls back finds the application already decided and this
-        // same function refusing with NoPendingApplication. If the transfer
-        // then fails, the whole transaction unwinds and none of it happened.
+        // Rule A, checked again a week later against today's boards — and this
+        // is the half that cannot be left to the submission. Between the two
+        // presses the applicant is an ordinary user: he may post a job, apply
+        // for one, or be hired. Seating him then would put a man with an open
+        // deal in the corps, and the deal's counterparty never agreed to be
+        // judged by his own client.
+        MarketPresence.requireNothingOpen(applicant);
+
+        // ── Effects, and nothing else ────────────────────────────────────
+        // No external call is left in this function. The bond is not taken
+        // here any more, so there is no token to call back into and no
+        // ordering hazard to write around — the grouping below is kept for
+        // the reader, not for reentrancy.
         a.state     = uint8(ApplicationState.Approved);
         a.decidedAt = uint64(block.timestamp);
         a.decidedBy = msg.sender;
@@ -814,12 +884,35 @@ contract ArbiterApplicationsFacet {
         d.arbiterList.push(applicant);
         d.seatedBy[applicant] = msg.sender;
         d.seatedCountBy[msg.sender]++;
-        d.arbiterBond[applicant] = ARBITER_BOND_MIRROR;
         ArbiterRegistryStorage.clearRemovalRecord(d, applicant, false);
 
-        _takeBond(applicant);
+        // ⚠️ `arbiterBond[applicant]` IS DELIBERATELY NOT WRITTEN. The absence
+        // is the change, not an omission in it. Dropping `_takeBond` while
+        // leaving the assignment would record a bond NOBODY PAID:
+        // `isArbiterActive` would answer true, every gated registry door would
+        // open, and `resignAsArbiter` would then pay 50 USDC of other people's
+        // money out to a man who never posted any. Zero is not a placeholder
+        // here — it is the true worth of a seat that has not been paid for,
+        // and it is what `postArbiterBond` refuses to overwrite twice.
+        //
+        // Nothing stale can survive into a new seat either: all three exits
+        // (`resignAsArbiter`, `revokeUnprovenSeat`,
+        // `ArbiterAccountabilityFacet._performRemoval`) zero this field, so a
+        // re-approved address cannot arrive here still carrying the bond of an
+        // earlier seat.
+        //
+        // `script/check-arbiter-bond-writers.sh` is what holds this: the
+        // moment this function assigns a non-zero bond again it re-enters the
+        // writer set, the gate goes red by name, and the count in
+        // docs/DECENTRALIZATION.md has to be answered for.
 
-        emit ArbiterApplicationApproved(applicant, msg.sender, ARBITER_BOND_MIRROR);
+        // Zero, and it is a fact rather than a formality: this transaction
+        // moved no money. The field stays in the signature — a live subgraph
+        // indexes it, and changing an indexed event's shape costs a resync —
+        // and the reason it exists (what moved in THIS transaction, so that no
+        // reader has to go and ask the token about some other block) is the
+        // same reason it must now read zero.
+        emit ArbiterApplicationApproved(applicant, msg.sender, 0);
         // The registry's own events, declared once and emitted from here so the
         // accountability feed sees a seating with an origin instead of an
         // arbiter who appeared from nowhere. `selfService` is false: a person
@@ -945,11 +1038,16 @@ contract ArbiterApplicationsFacet {
         _requireReason(reason);
 
         // ── Effects before the token call ────────────────────────────────
-        // Same order and same argument as `approveArbiterApplication` above: a
+        // This door still refunds, so it still calls the token and still needs
+        // the order. Everything describing the exit is written first, so a
         // token that calls back finds the seat already gone and this function
-        // refusing `NotAnArbiter`, so the bond cannot be paid out twice. If the
+        // refusing `NotAnArbiter` — the bond cannot be paid out twice. If the
         // transfer then fails the whole transaction unwinds and none of it
         // happened.
+        //
+        // ⚠️ `approveArbiterApplication` above no longer has a token call to
+        // order against; this comment used to point at it as the precedent and
+        // would have gone on pointing at nothing.
         uint256 bond = d.arbiterBond[arbiter];
         d.arbiterBond[arbiter] = 0;
         d.isArbiter[arbiter]   = false;
@@ -984,21 +1082,35 @@ contract ArbiterApplicationsFacet {
 
     /// Named refusals first, then the move.
     ///
-    /// The two reads cost one staticcall each and buy the approver the
-    /// difference between "the applicant has not approved the diamond" and
-    /// "the applicant has spent his USDC" — two different messages to send him,
-    /// and neither of them is "your transaction failed".
-    function _takeBond(address applicant) private {
+    /// The two reads cost one staticcall each and buy the CALLER the difference
+    /// between "you have not approved the diamond" and "you have spent your
+    /// USDC" — two different messages to show a person, and neither of them is
+    /// "your transaction failed".
+    ///
+    /// Both callers are now bond doors the arbiter presses himself
+    /// (`postArbiterBond`, `postArbiterBondWithPermit`), so the man who reads
+    /// the refusal is the man who can fix it. Until 13 September 2026 the third
+    /// caller was `approveArbiterApplication`, where the refusal landed on
+    /// somebody who could do nothing about it at all.
+    ///
+    /// ⚠️ `amount` IS WHAT THE SEAT IS SHORT, not the whole bond (17 September
+    /// 2026). A won appeal is now refunded partly out of the ruling arbiter's
+    /// bond, so a seat can be short by any sum from one base unit to the whole
+    /// norm, and the man topping it up is asked for exactly the gap — asking a
+    /// sagging seat for the full 50 USDC again would lock money nobody decided
+    /// to lock. For a seat that never paid, the gap IS the whole bond, so both
+    /// refusals still name the number a first-time payer needs.
+    function _takeBond(address applicant, uint256 amount) private {
         address token = FactoryStorage.store().usdc;
         if (token == address(0)) revert BondTokenNotSet();
 
         uint256 allowed = IBondToken(token).allowance(applicant, address(this));
-        if (allowed < ARBITER_BOND_MIRROR) revert BondNotApproved(allowed, ARBITER_BOND_MIRROR);
+        if (allowed < amount) revert BondNotApproved(allowed, amount);
 
         uint256 balance = IBondToken(token).balanceOf(applicant);
-        if (balance < ARBITER_BOND_MIRROR) revert BondBalanceTooLow(balance, ARBITER_BOND_MIRROR);
+        if (balance < amount) revert BondBalanceTooLow(balance, amount);
 
-        bool ok = IBondToken(token).transferFrom(applicant, address(this), ARBITER_BOND_MIRROR);
+        bool ok = IBondToken(token).transferFrom(applicant, address(this), amount);
         if (!ok) revert BondTransferFailed();
     }
 
@@ -1018,15 +1130,71 @@ contract ArbiterApplicationsFacet {
     ///
     /// What is shared is everything that could drift into a DIFFERENT answer:
     /// the refusals, their names, and `_takeBond`.
+    ///
+    /// ⚠️ "ALREADY POSTED" MEANS "WHOLE" (17 September 2026), the same norm
+    /// `ArbiterRegistryFacet._requireBonded` and `isArbiterActive` apply. A seat
+    /// that has paid for a won appeal out of its bond is not "posted" any more:
+    /// every arbiter door refuses it, and this door is where it comes back.
+    /// Returns what the seat is short, so both doors charge the same gap.
+    ///
+    /// ⚠️ AND WHAT IS OWED INCLUDES THE SEAT'S APPEAL DEBTS (second decision,
+    /// same day). A won appeal the bond could not advance leaves an appellant
+    /// owed; the top-up pays that FIRST and only then fills the bond. A seat
+    /// cannot take new work without the top-up, so the debt is either paid or
+    /// the arbiter stops working. `owed` is the gap to the norm plus those
+    /// debts; zero of both is the only thing refused as "already posted".
+    /// ⚠️ AND RULE A IS ASKED ON EXACTLY ONE OF THE TWO TRANSITIONS THIS DOOR
+    /// SERVES (18 September 2026). The door is pressed in two different
+    /// situations, and only the first is an ENTRANCE:
+    ///
+    ///   * a seat that never paid (`BOND_STATE_UNPOSTED`) becomes an arbiter
+    ///     here, because the rule's definition of an arbiter is a seat AND a
+    ///     posted bond. Until he presses this he trades like anybody else, so
+    ///     this is the moment the boards have to be empty, and it is asked;
+    ///   * a seat a won appeal drew below the norm (`BOND_STATE_SAGGING`) tops
+    ///     itself back up. That seat is ALREADY an arbiter and already forbidden
+    ///     to trade, so it can have opened nothing since — and asking would
+    ///     only punish the man whose open items predate the rule, by locking
+    ///     him out of the top-up his own appeal debt is paid with. Refusing a
+    ///     restoration does not keep anybody out of the market; it keeps a
+    ///     half-bonded judge in it.
+    ///
+    /// ⚠️ THE DISCRIMINATOR IS `bondDrawnByAppeal` ALONE, NOT "is the bond
+    /// zero". That is deliberate and it closes a hole a bond-based test would
+    /// leave open. There is a third way for a seat to hold money it never
+    /// posted: `ArbiterVaultFacet._settleForfeitedShare` pays an arbiter's
+    /// forfeited fee share back INTO his bond when a verdict finally executes,
+    /// and it does so for whoever holds the seat at that moment. A man who
+    /// resigned and was seated again in between gets a fresh, unpaid seat
+    /// (`clearRemovalRecord` erases the flag) with a few dollars in its bond —
+    /// so "bond == 0" would read that seat as sagging and wave the rule
+    /// through, letting him top up to the norm while holding open deals. The
+    /// flag cannot be reached that way: only `resolveAppeal` sets it, and every
+    /// seating erases it. A seat that never paid therefore always asks the
+    /// rule, whatever its balance.
     function _requireSeatStillOwesItsBond(ArbiterRegistryStorage.Data storage d, address caller)
         private
         view
+        returns (uint256 owed)
     {
         if (!d.isArbiter[caller]) revert ArbiterRegistryFacet.NotAnArbiter();
-        if (d.arbiterBond[caller] != 0) revert BondAlreadyPosted();
+        owed = _owedOnTopUp(d, caller);
+        if (owed == 0) revert BondAlreadyPosted();
+        if (!d.bondDrawnByAppeal[caller]) {
+            MarketPresence.requireNothingOpen(caller);
+        }
     }
 
-    /// @notice A seated arbiter puts his own 50 USDC behind his seat.
+    /// The gap between the seat's bond and the norm, plus its unpaid appeal
+    /// debts — what either bond door takes, and what `getBondState` shows.
+    function _owedOnTopUp(ArbiterRegistryStorage.Data storage d, address who) private view returns (uint256) {
+        uint256 bond = d.arbiterBond[who];
+        uint256 gap = bond >= ARBITER_BOND_MIRROR ? 0 : ARBITER_BOND_MIRROR - bond;
+        return gap + ArbiterRegistryStorage.arbiterDebtOf(d, who);
+    }
+
+    /// @notice A seated arbiter puts his own 50 USDC behind his seat — or, after a
+    /// won appeal was refunded out of it, tops it back up by exactly what is missing.
     ///
     /// The door the owner's decision of 8 September 2026 needs and the protocol
     /// did not have. `ArbiterRegistryFacet.addArbiter` seats without money, and
@@ -1075,17 +1243,23 @@ contract ArbiterApplicationsFacet {
     function postArbiterBond() external {
         address caller = _msgSender();
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        _requireSeatStillOwesItsBond(d, caller);
+        uint256 owed = _requireSeatStillOwesItsBond(d, caller);
 
         // Effects before the token call, the same order and for the same reason
-        // as approveArbiterApplication above: a token that calls back finds the
-        // bond already recorded and this function refusing BondAlreadyPosted,
-        // so the money cannot be taken twice. If the transfer then fails the
-        // whole transaction unwinds and none of it happened.
-        d.arbiterBond[caller] = ARBITER_BOND_MIRROR;
-        _takeBond(caller);
+        // as `revokeUnprovenSeat` above: a token that calls back finds the bond
+        // already recorded and the debts already paid, and this function
+        // refusing BondAlreadyPosted, so the money cannot be taken twice. If the
+        // transfer then fails the whole transaction unwinds and none of it
+        // happened.
+        //
+        // His appeal debts first, then the bond to the norm; only the sum of
+        // the two is taken: a seat short by $20 after a lost appeal pays $20,
+        // not $50 on top of $30.
+        uint256 debts = ArbiterRegistryStorage.payArbiterDebts(d, caller, owed);
+        if (d.arbiterBond[caller] < ARBITER_BOND_MIRROR) d.arbiterBond[caller] = ARBITER_BOND_MIRROR;
+        _takeBond(caller, owed);
 
-        emit ArbiterBondPosted(caller, ARBITER_BOND_MIRROR);
+        emit ArbiterBondPosted(caller, owed - debts);
     }
 
     /// @notice The same bond, carried in on a signature instead of an allowance.
@@ -1123,14 +1297,22 @@ contract ArbiterApplicationsFacet {
     /// anybody else. Neither refusal rests on a check written here, which is
     /// why neither can be edited away here.
     ///
-    /// ⚠️ THE AMOUNT IS OURS, NOT THE CALLER'S. `ARBITER_BOND_MIRROR` is what
-    /// goes into the permit, so a paper signed for any other number simply does
+    /// ⚠️ THE AMOUNT IS OURS, NOT THE CALLER'S. What goes into the permit is
+    /// the gap between this seat's bond and `ARBITER_BOND_MIRROR`, computed
+    /// here from storage, so a paper signed for any other number simply does
     /// not verify. There is no argument by which a caller could ask this door to
-    /// pull more than the bond, and a form learns the number to sign from
-    /// `getApplicationRequirements()` rather than keeping a copy.
+    /// pull more than the gap.
+    ///
+    /// ⚠️ THE GAP IS NOT ALWAYS THE WHOLE BOND (17 September 2026). For a seat
+    /// that never paid it is `getApplicationRequirements()`'s bond; for a seat
+    /// that paid a won appeal out of its bond it is less, and a form reads it as
+    /// the norm minus `getArbiterBond`. A paper signed for the old gap stops
+    /// verifying if the gap moves before it is presented — for instance when
+    /// the arbiter's forfeited fee share restores part of the bond — and the
+    /// arbiter signs again; nothing is taken in the meantime.
     ///
     /// ⚠️ NOTHING IS LEFT STANDING AFTERWARDS. The paper grants exactly the
-    /// bond and `_takeBond` spends exactly the bond, so the allowance is back at
+    /// gap and `_takeBond` spends exactly the gap, so the allowance is back at
     /// zero when this returns — the diamond is not left holding a standing
     /// claim on an arbiter's wallet.
     ///
@@ -1167,24 +1349,39 @@ contract ArbiterApplicationsFacet {
         address token = FactoryStorage.store().usdc;
         if (token == address(0)) revert BondTokenNotSet();
 
+        // What the paper must grant: the gap between the seat's bond and the
+        // norm, read here BEFORE the permit so the amount stays ours and not
+        // the caller's. A seat that owes nothing yields zero, and the rules
+        // below refuse it after the paper — the order this door has always had.
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+        uint256 gap = _owedOnTopUp(d, caller);
+        // A whole seat owes nothing, and there is no paper worth presenting for
+        // nothing: it is refused BY NAME here, before the token is called,
+        // rather than by the token as a signature that does not match a
+        // zero-value permit. Nothing external has run yet, so the order argument
+        // below does not apply to this branch; the rule is still the one
+        // function, not a copy of it.
+        if (gap == 0) _requireSeatStillOwesItsBond(d, caller);
+
         // The allowance, granted by the signature rather than by a transaction
         // he cannot afford to send. Replay is the token's nonce and nothing of
         // ours: a paper already spent recovers to a different address inside
         // USDC and is refused there.
         IBondPermitToken(token).permit(
-            caller, address(this), ARBITER_BOND_MIRROR, permitDeadline, v, r, s
+            caller, address(this), gap, permitDeadline, v, r, s
         );
 
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        _requireSeatStillOwesItsBond(d, caller);
+        uint256 owed = _requireSeatStillOwesItsBond(d, caller);
 
         // Effects before the token call, the same order and for the same reason
-        // as the door above. The write is repeated here rather than shared with
-        // it on purpose — see `_requireSeatStillOwesItsBond`.
-        d.arbiterBond[caller] = ARBITER_BOND_MIRROR;
-        _takeBond(caller);
+        // as the door above — debts first, then the bond. The write is repeated
+        // here rather than shared with it on purpose — see
+        // `_requireSeatStillOwesItsBond`.
+        uint256 debts = ArbiterRegistryStorage.payArbiterDebts(d, caller, owed);
+        if (d.arbiterBond[caller] < ARBITER_BOND_MIRROR) d.arbiterBond[caller] = ARBITER_BOND_MIRROR;
+        _takeBond(caller, owed);
 
-        emit ArbiterBondPosted(caller, ARBITER_BOND_MIRROR);
+        emit ArbiterBondPosted(caller, owed - debts);
     }
 
     // -------- VIEWS --------
@@ -1253,7 +1450,43 @@ contract ArbiterApplicationsFacet {
     /// the same number this facet charges, so a form need keep no copy of it.
     function isArbiterActive(address addr) external view returns (bool) {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        return d.isArbiter[addr] && d.arbiterBond[addr] != 0;
+        // WHOLE, not merely non-zero (17 September 2026) — the norm every
+        // arbiter door applies through `ArbiterRegistryFacet._requireBonded`.
+        return d.isArbiter[addr] && d.arbiterBond[addr] >= ARBITER_BOND_MIRROR;
+    }
+
+    /// Not an arbiter at all.
+    uint8 internal constant BOND_STATE_NONE      = 0;
+    /// Holds a seat and has never posted a bond for it: no arbiter work at all.
+    uint8 internal constant BOND_STATE_UNPOSTED  = 1;
+    /// Posted a bond and a won appeal drew it below the norm (possibly to
+    /// zero): finishes the cases it holds, takes no new work until topped up.
+    uint8 internal constant BOND_STATE_SAGGING   = 2;
+    /// A whole bond: may take new work.
+    uint8 internal constant BOND_STATE_WHOLE     = 3;
+
+    /// @notice Where a seat's bond stands, as the arbiter doors read it
+    /// (17 September 2026, the owner's decision that a sagging seat be marked
+    /// and not confused with one that never paid).
+    ///
+    /// `bond` is what the seat holds; `toPost` is what either bond door would
+    /// take right now — the gap to the norm plus the seat's unpaid appeal
+    /// debts, which the top-up pays first. A form signs a permit for exactly
+    /// `toPost`.
+    ///
+    /// ⚠️ WHY THE BOND ALONE DOES NOT ANSWER THIS. A won appeal may draw a
+    /// bond all the way to zero, and zero is also what a seat that never paid
+    /// holds. The two have different rights — the first finishes its cases,
+    /// the second does nothing — so the chain keeps the fact that tells them
+    /// apart (`bondDrawnByAppeal`), and this read is where it is seen.
+    function getBondState(address addr) external view returns (uint8 state, uint256 bond, uint256 toPost) {
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+        bond = d.arbiterBond[addr];
+        if (!d.isArbiter[addr]) return (BOND_STATE_NONE, bond, 0);
+        toPost = _owedOnTopUp(d, addr);
+        if (bond >= ARBITER_BOND_MIRROR) state = BOND_STATE_WHOLE;
+        else if (bond == 0 && !d.bondDrawnByAppeal[addr]) state = BOND_STATE_UNPOSTED;
+        else state = BOND_STATE_SAGGING;
     }
 
     /// Which door is open right now. False means this facet is finished and

@@ -105,6 +105,7 @@ import "forge-std/Script.sol";
 import "forge-std/console.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract UpgradeAppealDepositSoftRefund is Script {
 
@@ -112,6 +113,11 @@ contract UpgradeAppealDepositSoftRefund is Script {
     /// Read through `vm.readFile`; `./out` is already in `fs_permissions`.
     string internal constant ARTIFACT_PATH =
         "out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json";
+
+    /// The second half of the arbiter registry facet since the 16 September 2026
+    /// split — see artifactSelectors() below for why there are two.
+    string internal constant VAULT_ARTIFACT_PATH =
+        "out/ArbiterVaultFacet.sol/ArbiterVaultFacet.json";
 
     /// EIP-170. Written here as a literal by a person rather than derived from
     /// anything in the tree: it is the chain's rule and not this project's, and
@@ -411,8 +417,25 @@ contract UpgradeAppealDepositSoftRefund is Script {
     /// solc's own answer to "what does this facet expose", straight out of the
     /// build artifact. `methodIdentifiers` maps the signature to the four-byte
     /// selector as text, so nothing has to be hashed here.
+    ///
+    /// ⚠️ TWO ARTIFACTS SINCE 16 SEPTEMBER 2026, AND THE SAME SET. The facet
+    /// this cut mounted was split into ArbiterRegistryFacet and
+    /// ArbiterVaultFacet — twenty-eight selectors moved, not one signature
+    /// changed. THIS CUT IS ALREADY SIGNED and its Replace list is the record of
+    /// what went on chain that day; the list is not touched. Only the question
+    /// "what does that facet implement" has two files to read now, and their
+    /// union is byte for byte what the single facet exposed.
+    ///
+    /// Read from the artifacts rather than frozen as a literal on purpose: this
+    /// answer is what `assertTheCompiledFacetNeedsNoAddGroup` measures against,
+    /// and a frozen list would stop noticing a function added before the split
+    /// cut lands — which is the whole job of that check.
     function artifactSelectors() public view returns (bytes4[] memory out) {
-        return selectorsIn(artifactJson());
+        bytes4[] memory reg = selectorsIn(artifactJson());
+        bytes4[] memory vault = selectorsIn(vm.readFile(VAULT_ARTIFACT_PATH));
+        out = new bytes4[](reg.length + vault.length);
+        for (uint256 i = 0; i < reg.length; i++) out[i] = reg[i];
+        for (uint256 i = 0; i < vault.length; i++) out[reg.length + i] = vault[i];
     }
 
     /// Every selector must be routed TODAY, and all of them to the same
@@ -671,18 +694,19 @@ contract UpgradeAppealDepositSoftRefund is Script {
     /// somewhere else or as something else.
     function snapshotArbiterStorage(address diamond) public view returns (StorageSnapshot memory s) {
         ArbiterRegistryFacet f = ArbiterRegistryFacet(diamond);
-        address[] memory arbiters = f.getArbiters();
+        ArbiterVaultFacet f_v = ArbiterVaultFacet(diamond);
+        address[] memory arbiters = f_v.getArbiters();
         s.arbiterCount     = arbiters.length;
         s.firstArbiter     = arbiters.length > 0 ? arbiters[0] : address(0);
-        s.chiefArbiter     = f.getChiefArbiter();
-        s.daoAddress       = f.getDAOAddress();
+        s.chiefArbiter     = f_v.getChiefArbiter();
+        s.daoAddress       = f_v.getDAOAddress();
         s.daoActive        = f.isDaoActive();
-        s.vaultBalance     = f.getVaultBalance();
-        s.arbiterFloor     = f.getArbiterFloor();
+        s.vaultBalance     = f_v.getVaultBalance();
+        s.arbiterFloor     = f_v.getArbiterFloor();
         s.daoThreshold     = f.getDaoThreshold();
-        s.disputeDiscount  = f.getDisputeDiscount();
-        s.rewardPerDispute = f.getRewardPerDispute();
-        s.treasurySlice    = f.getTreasurySlice();
+        s.disputeDiscount  = f_v.getDisputeDiscount();
+        s.rewardPerDispute = f_v.getRewardPerDispute();
+        s.treasurySlice    = f_v.getTreasurySlice();
     }
 
     function assertStorageContinuity(
@@ -772,24 +796,24 @@ contract UpgradeAppealDepositSoftRefund is Script {
         sels[i++] = ArbiterRegistryFacet.addArbiter.selector;
         sels[i++] = ArbiterRegistryFacet.applyAsArbiter.selector;
         sels[i++] = ArbiterRegistryFacet.resignAsArbiter.selector;
-        sels[i++] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        sels[i++] = ArbiterRegistryFacet.getArbiters.selector;
-        sels[i++] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        sels[i++] = ArbiterRegistryFacet.setArbiterFloor.selector;
+        sels[i++] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[i++] = ArbiterVaultFacet.getArbiters.selector;
+        sels[i++] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[i++] = ArbiterVaultFacet.setArbiterFloor.selector;
         sels[i++] = ArbiterRegistryFacet.getMinXPToRegister.selector;
         sels[i++] = ArbiterRegistryFacet.getNoResponseFloor.selector;
         sels[i++] = ArbiterRegistryFacet.recordNoResponse.selector;
 
         // ── the chief ──
-        sels[i++] = ArbiterRegistryFacet.getChiefArbiter.selector;
+        sels[i++] = ArbiterVaultFacet.getChiefArbiter.selector;
         sels[i++] = ArbiterRegistryFacet.setChiefArbiter.selector;
         sels[i++] = ArbiterRegistryFacet.getChiefBloc.selector;
 
         // ── governance ──
-        sels[i++] = ArbiterRegistryFacet.getDAOAddress.selector;
+        sels[i++] = ArbiterVaultFacet.getDAOAddress.selector;
         sels[i++] = ArbiterRegistryFacet.setDAOAddress.selector;
         sels[i++] = ArbiterRegistryFacet.acceptDAOAddress.selector;
-        sels[i++] = ArbiterRegistryFacet.getPendingDAOAddress.selector;
+        sels[i++] = ArbiterVaultFacet.getPendingDAOAddress.selector;
         sels[i++] = ArbiterRegistryFacet.activateDAO.selector;
         sels[i++] = ArbiterRegistryFacet.isDaoActive.selector;
         sels[i++] = ArbiterRegistryFacet.getDaoThreshold.selector;
@@ -798,17 +822,17 @@ contract UpgradeAppealDepositSoftRefund is Script {
         // ── claims ──
         sels[i++] = ArbiterRegistryFacet.claimDispute.selector;
         sels[i++] = ArbiterRegistryFacet.commitDisputeClaim.selector;
-        sels[i++] = ArbiterRegistryFacet.getClaimCommitment.selector;
+        sels[i++] = ArbiterVaultFacet.getClaimCommitment.selector;
         sels[i++] = ArbiterRegistryFacet.clearDisputeClaim.selector;
         sels[i++] = ArbiterRegistryFacet.releaseDisputeClaim.selector;
-        sels[i++] = ArbiterRegistryFacet.getDisputeClaimer.selector;
+        sels[i++] = ArbiterVaultFacet.getDisputeClaimer.selector;
         sels[i++] = ArbiterRegistryFacet.getMaxClaimsPerArbiter.selector;
 
         // ── verdicts ──
         sels[i++] = ArbiterRegistryFacet.submitVerdict.selector;
         sels[i++] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        sels[i++] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        sels[i++] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
+        sels[i++] = ArbiterVaultFacet.getPendingVerdict.selector;
+        sels[i++] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
         sels[i++] = ArbiterRegistryFacet.freezeVerdict.selector;
         sels[i++] = ArbiterRegistryFacet.unfreezeVerdict.selector;
         sels[i++] = ArbiterRegistryFacet.overturnVerdict.selector;
@@ -819,28 +843,28 @@ contract UpgradeAppealDepositSoftRefund is Script {
         // ── appeals - the reason this cut exists ──
         sels[i++] = ArbiterRegistryFacet.raiseAppeal.selector;
         sels[i++] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        sels[i++] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
-        sels[i++] = ArbiterRegistryFacet.getAppealVotes.selector;
+        sels[i++] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
+        sels[i++] = ArbiterVaultFacet.getAppealVotes.selector;
         sels[i++] = ArbiterRegistryFacet.resolveAppeal.selector;
 
         // ── the dispute bounty, where the undelivered deposit now lands ──
-        sels[i++] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        sels[i++] = ArbiterRegistryFacet.getRefundableBounty.selector;
-        sels[i++] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        sels[i++] = ArbiterRegistryFacet.fundDispute.selector;
-        sels[i++] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
-        sels[i++] = ArbiterRegistryFacet.creditDisputeFee.selector;
+        sels[i++] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[i++] = ArbiterVaultFacet.getRefundableBounty.selector;
+        sels[i++] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[i++] = ArbiterVaultFacet.fundDispute.selector;
+        sels[i++] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
+        sels[i++] = ArbiterVaultFacet.creditDisputeFee.selector;
 
         // ── the vault and its economics ──
-        sels[i++] = ArbiterRegistryFacet.getVaultBalance.selector;
-        sels[i++] = ArbiterRegistryFacet.fundVault.selector;
-        sels[i++] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        sels[i++] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        sels[i++] = ArbiterRegistryFacet.setRewardPerDispute.selector;
-        sels[i++] = ArbiterRegistryFacet.getTreasurySlice.selector;
-        sels[i++] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        sels[i++] = ArbiterRegistryFacet.setDisputeDiscount.selector;
-        sels[i++] = ArbiterRegistryFacet.getDisputeDiscount.selector;
+        sels[i++] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[i++] = ArbiterVaultFacet.fundVault.selector;
+        sels[i++] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[i++] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[i++] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        sels[i++] = ArbiterVaultFacet.getTreasurySlice.selector;
+        sels[i++] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[i++] = ArbiterVaultFacet.setDisputeDiscount.selector;
+        sels[i++] = ArbiterVaultFacet.getDisputeDiscount.selector;
 
         // ── the chat key ──
         sels[i++] = ArbiterRegistryFacet.setArbiterChatKey.selector;

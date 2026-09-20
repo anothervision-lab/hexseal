@@ -9,11 +9,15 @@ pragma solidity ^0.8.20;
 
 import "./RegistryFacet.sol";
 import "./AgreementDeployer.sol"; // the IAgreementDeployer interface only
+import {MarketPresence} from "./facets/MarketPresence.sol"; // "an arbiter is not a party"
 
 // ---------- INTERFACES ----------
 
 interface IRegistry {
     function register(address agreement, address client, address executor, uint256 amount) external;
+    /// The same record, for a deal whose executor has been NAMED and has not
+    /// agreed yet — the direct hire. See RegistryFacet.registerOffer.
+    function registerOffer(address agreement, address client, address executor, uint256 amount) external;
     function hasActivePair(address client, address executor) external view returns (bool);
 }
 
@@ -565,6 +569,18 @@ contract FactoryFacet {
         if (region > 6) revert InvalidRegion();
         if (msg.sender != address(this)) revert NotDiamond();
 
+        // Rule B, on the line where EVERY deal in the protocol is born — the
+        // same argument the emergency brake below is placed by. The boards
+        // refuse an arbiter by name a few lines earlier, and they are facets
+        // that can be replaced one at a time or joined by a third; a gate on
+        // the birth of the deal cannot be forgotten by a board written later.
+        //
+        // The two checks cost one cold SLOAD each for an ordinary pair (the
+        // seat table answers "not in the corps" and stops), on a transaction
+        // that spends around half a million creating a clone.
+        MarketPresence.requireNotBondedArbiter(client);
+        MarketPresence.requireNotBondedArbiter(executor);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (fs.agreementDeployer == address(0)) revert DeployerNotSet();
 
@@ -639,6 +655,24 @@ contract FactoryFacet {
         if (region > 6) revert InvalidRegion();
         if (_msgSender() != client) revert NotClient();
 
+        // Rule B, both sides. The direct hire is the one entrance where the
+        // EXECUTOR never presses anything: he is named in a parameter, and
+        // without the second line a bonded arbiter would be made a party to a
+        // deal by somebody else's transaction, with nothing of his own to
+        // withdraw afterwards.
+        //
+        // ⚠️ THE SECOND LINE STAYS EVEN THOUGH THE DEAL IS NOW ONLY AN OFFER
+        // (18 September 2026). An offer costs the named man nothing on his
+        // record — `registerOffer` below does not count it against him — so it
+        // is tempting to read this check as redundant. It is not: rule B is
+        // the owner's flat rule that a seat holding a bond may not BE named as
+        // a party, and the half of the harm this offer keeps is the half that
+        // does not live in a counter — a funded deal in his name, an NFT half
+        // minted to him, and a screen showing a sitting arbiter as somebody's
+        // executor. Naming an arbiter is refused outright.
+        MarketPresence.requireNotBondedArbiter(client);
+        MarketPresence.requireNotBondedArbiter(executor);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (fs.agreementDeployer == address(0)) revert DeployerNotSet();
 
@@ -658,6 +692,15 @@ contract FactoryFacet {
 
         uint256 fee = FactoryStorage.quote(fs, amount);
 
+        // ⚠️ THE FEE IS GONE THE MOMENT IT IS TAKEN, and a refusal does not
+        // bring it back (checked here, not assumed: it leaves for
+        // `fs.feeRecipient` on this line, and no exit of the clone — the
+        // activation timeout or the new `declineOffer` — ever touches the
+        // recipient's balance). So the direct hire costs the client the fee
+        // even if the man he named says no, exactly as it already did when the
+        // man simply never answered. That is the existing rule of this road,
+        // unchanged by the offer: the fee pays for a deal that was created,
+        // and it was.
         _safeTransferFrom(fs.usdc, client, fs.feeRecipient, fee);
         emit FeeCollected(0, client, FEE_KIND_DIRECT_DEAL, fee);
 
@@ -668,7 +711,14 @@ contract FactoryFacet {
         );
         if (agreementAddress == address(0)) revert FactoryZeroAddress();
 
-        IRegistry(fs.diamond).register(agreementAddress, client, executor, amount);
+        // AN OFFER, NOT AN ASSIGNMENT (18 September 2026, the owner's
+        // decision). This is the one road where the executor is named by
+        // somebody else's transaction, so it is the one road that registers
+        // the deal as pending his consent: until he activates, the deal is on
+        // the client's record and not on his. Every other road reaches
+        // `register` above, where both sides are counted from the first block,
+        // because on those roads he asked for it himself.
+        IRegistry(fs.diamond).registerOffer(agreementAddress, client, executor, amount);
 
         _safeTransferFrom(fs.usdc, client, agreementAddress, amount);
 

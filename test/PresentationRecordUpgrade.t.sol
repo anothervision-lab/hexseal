@@ -8,6 +8,38 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import {UpgradePresentationRecord} from "../script/UpgradePresentationRecord.s.sol";
 import {ArbiterChainCensus} from "./ArbiterChainCensus.sol";
 import "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {PreSplitArbiterDispatcher} from "./ArbiterSplitRig.sol";
+import {DeployFull} from "../script/DeployFull.s.sol";
+
+/// ⚠️ THE ONE LINE OF run() THIS REHEARSAL REPLACES, AND WHY (16 September
+/// 2026). This cut mounts all fifty-nine arbiter selectors on ONE address,
+/// because that is the shape Base Sepolia had the day it was signed. Since the
+/// split no single production contract implements all fifty-nine, so run()'s own
+/// post-flight — which reads the roster, the vault balance and the arbiter floor
+/// back through the diamond — cannot be rehearsed against a bare
+/// `new ArbiterRegistryFacet()` any more. Everything else about run() is
+/// exercised exactly as written: the pre-flight, the cut, the post-flight, the
+/// counts, and every refusal scene below.
+///
+/// The double forwards each selector to whichever of the two real facets
+/// implements it, so the code under rehearsal is TODAY's, not a frozen copy.
+/// That the DEFAULT deployment is a freshly compiled ArbiterRegistryFacet is
+/// asserted separately, against the build artifact, in
+/// test_TheDefaultFacetDeploymentIsThisCheckoutsRegistryFacet.
+contract PresentationRecordRehearsal is UpgradePresentationRecord {
+    function deployRegistryFacet() public override returns (address) {
+        DeployFull d = new DeployFull();
+        return address(
+            new PreSplitArbiterDispatcher(
+                address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
+                d.arbiterRegistryFacetSelectors(),
+                d.arbiterVaultFacetSelectors()
+            )
+        );
+    }
+}
 
 /// A double that answers getNoResponseFloor() with THE WRONG number. It exists for
 /// exactly one purpose: to prove by measurement that the script's post-flight
@@ -24,11 +56,26 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
     UpgradePresentationRecord internal upgrade;
 
     function setUp() public {
-        upgrade = new UpgradePresentationRecord();
+        upgrade = new PresentationRecordRehearsal();
     }
 
     // ── Ground truth: read straight out of the compiled artifact — the same
     //    device as _abiSelectors in the DeployFullSelectors suite ───────────
+    /// The arm on the seam above: the DEFAULT `deployRegistryFacet()` — the one
+    /// a person running this script actually gets — must still deploy a freshly
+    /// compiled ArbiterRegistryFacet and nothing else. Without this the
+    /// rehearsal could quietly be proving things about a double while the real
+    /// path deployed anything at all.
+    function test_TheDefaultFacetDeploymentIsThisCheckoutsRegistryFacet() public {
+        address deployed = (new UpgradePresentationRecord()).deployRegistryFacet();
+        string memory json = vm.readFile("out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json");
+        assertEq(
+            deployed.codehash,
+            keccak256(vm.parseJsonBytes(json, ".deployedBytecode.object")),
+            "the default deployment is not this checkout's compiled ArbiterRegistryFacet"
+        );
+    }
+
     function _abiSelectors(string memory contractName) internal view returns (bytes4[] memory out) {
         string memory json = vm.readFile(string.concat("out/", contractName, ".sol/", contractName, ".json"));
         string[] memory sigs = vm.parseJsonKeys(json, ".methodIdentifiers");
@@ -544,7 +591,7 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
     function _setVaultBalance(DiamondProxy diamond, uint256 amount) internal {
         vm.store(address(diamond), bytes32(uint256(ARB_POS) + 9), bytes32(amount));
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), amount,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), amount,
             "the vaultBalance offset in ArbiterRegistryStorage.Data has drifted"
         );
     }
@@ -572,7 +619,7 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
             bytes32(uint256(uint160(arbiter)))
         );
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDisputeClaimer(agreement), arbiter,
+            ArbiterVaultFacet(address(diamond)).getDisputeClaimer(agreement), arbiter,
             "the disputeClaims offset in ArbiterRegistryStorage.Data has drifted"
         );
     }
@@ -649,7 +696,7 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
 
         ArbiterRegistryFacet strayFacet = new ArbiterRegistryFacet();
         bytes4[] memory strayMount = new bytes4[](1);
-        strayMount[0] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        strayMount[0] = ArbiterVaultFacet.getRefundableBounty.selector;
         IDiamondCut.FacetCut[] memory strayCut = new IDiamondCut.FacetCut[](1);
         strayCut[0] = IDiamondCut.FacetCut(address(strayFacet), IDiamondCut.FacetCutAction.Replace, strayMount);
         IDiamondCut(address(diamond)).diamondCut(strayCut, address(0), "");
@@ -1076,7 +1123,7 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
 
         vm.mockCall(
             oldFacetAddr,
-            abi.encodeWithSelector(ArbiterRegistryFacet.getVaultBalance.selector),
+            abi.encodeWithSelector(ArbiterVaultFacet.getVaultBalance.selector),
             abi.encode(uint256(999))
         );
 
@@ -1159,7 +1206,7 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
 
         ArbiterRegistryFacet strayFacet = new ArbiterRegistryFacet();
         bytes4[] memory stray = new bytes4[](1);
-        stray[0] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        stray[0] = ArbiterVaultFacet.getRefundableBounty.selector;
         IDiamondCut.FacetCut[] memory strayCut = new IDiamondCut.FacetCut[](1);
         strayCut[0] = IDiamondCut.FacetCut(address(strayFacet), IDiamondCut.FacetCutAction.Replace, stray);
         IDiamondCut(address(diamond)).diamondCut(strayCut, address(0), "");

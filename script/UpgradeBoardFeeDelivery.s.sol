@@ -54,7 +54,10 @@ pragma solidity ^0.8.20;
 //                  taken. Both new; both in the ADD group. The pull is open to
 //                  anyone and can only pay `FactoryStorage.feeRecipient` — the
 //                  same shape, and the same argument, as
-//                  `ArbiterRegistryFacet.withdrawTreasurySlice()`.
+//                  `ArbiterRegistryFacet.withdrawTreasurySlice()` (the function
+//                  moved to ArbiterVaultFacet on 16 September 2026; the selector
+//                  did not change, and on the day of this cut it was the
+//                  registry's).
 //
 // WHAT THIS CUT DELIBERATELY DOES NOT CHANGE. `mintService` /
 // `mintServiceWithPermit` pay the anti-spam floor straight from the executor's
@@ -114,6 +117,7 @@ import {FactoryFacet, FactoryStorage} from "../src/FactoryFacet.sol";
 import {JobBoardFacet} from "../src/facets/JobBoardFacet.sol";
 import {ServiceBoardFacet} from "../src/facets/ServiceBoardFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract UpgradeBoardFeeDelivery is Script {
 

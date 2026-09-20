@@ -28,6 +28,8 @@ import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterChainCensus} from "./ArbiterChainCensus.sol";
 import "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {PreSplitArbiterDispatcher, ArbiterSplitRig} from "./ArbiterSplitRig.sol";
 
 /// A double of the bare button: a contract that REALLY answers
 /// removeArbiter(address). It exists for exactly one purpose — to show that before
@@ -52,7 +54,37 @@ contract WrongSuspensionWindowStub {
     }
 }
 
-contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
+import {DeployFull} from "../script/DeployFull.s.sol";
+
+/// ⚠️ THE ONE LINE OF run() THIS REHEARSAL REPLACES, AND WHY (16 September
+/// 2026). This cut mounts its whole registry group on ONE address, the shape
+/// Base Sepolia had the day it was signed. Since the split no single production
+/// contract implements that whole group, so run()'s own post-flight — the
+/// roster, the vault balance and the arbiter floor read back through the
+/// diamond — cannot be rehearsed against a bare `new ArbiterRegistryFacet()`.
+/// The double forwards each selector to whichever of the two real facets
+/// implements it, so what is rehearsed is TODAY's code and not a frozen copy.
+///
+/// Everything else about run() is exercised exactly as written: the pre-flight,
+/// the cut, the Remove, the migration, the post-flight and every refusal scene.
+/// That the DEFAULT deployment is a freshly compiled ArbiterRegistryFacet is
+/// asserted against the build artifact in
+/// test_TheDefaultFacetDeploymentIsThisCheckoutsRegistryFacet.
+contract AccountabilityRehearsal is UpgradeArbiterAccountability {
+    function deployRegistryFacet() public override returns (address) {
+        DeployFull d = new DeployFull();
+        return address(
+            new PreSplitArbiterDispatcher(
+                address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
+                d.arbiterRegistryFacetSelectors(),
+                d.arbiterVaultFacetSelectors()
+            )
+        );
+    }
+}
+
+contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSplitRig {
     UpgradeArbiterAccountability internal upgrade;
 
     /// The bare button, named by THE TEXT OF ITS SIGNATURE rather than by
@@ -86,12 +118,28 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     ///     dispute top-up, and the size of it is a stored number rather than a
     ///     constant, because the protocol has seen zero disputes and three
     ///     dollars is a starting point.
+    ///   • withdrawAppealShare(address), getAppealShareOwed(address,address),
+    ///     getAppealLedger(address), quoteAppealDeposit(address) —
+    ///     17 September 2026: the appeal economics, all four on
+    ///     ArbiterVaultFacet (half of the pair this cut's registry became);
+    ///     settleAppealDebts(uint256) and getAppealDebts() joined them the same day.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](4);
+        sels = new bytes4[](12);
         sels[0] = bytes4(keccak256("acceptDAOAddress()"));
         sels[1] = bytes4(keccak256("getPendingDAOAddress()"));
         sels[2] = bytes4(keccak256("setDisputeDiscount(uint256)"));
         sels[3] = bytes4(keccak256("getDisputeDiscount()"));
+        sels[4] = bytes4(keccak256("withdrawAppealShare(address)"));
+        sels[5] = bytes4(keccak256("getAppealShareOwed(address,address)"));
+        sels[6] = bytes4(keccak256("getAppealLedger(address)"));
+        sels[7] = bytes4(keccak256("quoteAppealDeposit(address)"));
+        sels[8] = bytes4(keccak256("settleAppealDebts(uint256)"));
+        sels[9] = bytes4(keccak256("getAppealDebts()"));
+        // The two of 18 September 2026: item D1's public door for a dead
+        // dispute claim, and the read a screen needs now that the appeal
+        // quorum moves with the corps.
+        sels[10] = bytes4(keccak256("abandonClaim(address)"));
+        sels[11] = bytes4(keccak256("getAppealPanel(address)"));
     }
 
     /// The same thing for the OTHER facet, which until 29 August 2026 had not
@@ -120,11 +168,39 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     uint256 constant SLOT_SEATED_COUNT_BY = 26;
 
     function setUp() public {
-        upgrade = new UpgradeArbiterAccountability();
+        upgrade = new AccountabilityRehearsal();
     }
 
     // ── Ground truth: read straight out of the compiled artifact — the same
     //    device as _abiSelectors in the DeployFullSelectors suite ───────────
+    /// ⚠️ "THE REGISTRY FACET'S ABI" IS TWO FILES SINCE 16 SEPTEMBER 2026. It
+    /// was cut into ArbiterRegistryFacet and ArbiterVaultFacet — twenty-eight
+    /// selectors moved, not one signature changed — so the union of the two is
+    /// byte for byte the set the single facet exposed when this cut was signed.
+    /// Taught rather than frozen: these checks exist to notice a function added
+    /// later, and a frozen literal would stop noticing.
+    /// The arm on the seam: the DEFAULT `deployRegistryFacet()` — what a person
+    /// running this script actually gets — must still be a freshly compiled
+    /// ArbiterRegistryFacet, or the rehearsal would be proving things about a
+    /// double while the real path deployed anything at all.
+    function test_TheDefaultFacetDeploymentIsThisCheckoutsRegistryFacet() public {
+        address deployed = (new UpgradeArbiterAccountability()).deployRegistryFacet();
+        string memory json = vm.readFile("out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json");
+        assertEq(
+            deployed.codehash,
+            keccak256(vm.parseJsonBytes(json, ".deployedBytecode.object")),
+            "the default deployment is not this checkout's compiled ArbiterRegistryFacet"
+        );
+    }
+
+    function _registryAbiPair() internal view returns (bytes4[] memory out) {
+        bytes4[] memory a = _abiSelectors("ArbiterRegistryFacet");
+        bytes4[] memory b = _abiSelectors("ArbiterVaultFacet");
+        out = new bytes4[](a.length + b.length);
+        for (uint256 i = 0; i < a.length; i++) out[i] = a[i];
+        for (uint256 i = 0; i < b.length; i++) out[a.length + i] = b[i];
+    }
+
     function _abiSelectors(string memory contractName) internal view returns (bytes4[] memory out) {
         string memory json = vm.readFile(string.concat("out/", contractName, ".sol/", contractName, ".json"));
         string[] memory sigs = vm.parseJsonKeys(json, ".methodIdentifiers");
@@ -193,7 +269,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     /// and parked here, and the coverage lock would call the cut complete.
     function test_TheGrowthExemptionIsRealAndCoversNothingTheCutMounted() public view {
         bytes4[] memory grown  = _grownAfterThisCut();
-        bytes4[] memory abiSels = _abiSelectors("ArbiterRegistryFacet");
+        bytes4[] memory abiSels = _registryAbiPair();
 
         for (uint256 i = 0; i < grown.length; i++) {
             assertTrue(
@@ -243,7 +319,11 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         bytes4[] memory addGroup,
         bytes4[] memory grown
     ) internal view {
-        bytes4[] memory abiSels = _abiSelectors(facetName);
+        // The registry is a PAIR of contracts in this checkout — see
+        // _registryAbiPair. Any other facet is read as itself.
+        bytes4[] memory abiSels = keccak256(bytes(facetName)) == keccak256("ArbiterRegistryFacet")
+            ? _registryAbiPair()
+            : _abiSelectors(facetName);
         assertGt(abiSels.length, 0, "the facet ABI is empty: there is nothing to read");
 
         // Not one facet selector is forgotten — except what grew AFTER the cut, see
@@ -420,7 +500,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     /// would go through green while the diamond kept an entry leading nowhere forever
     /// — it can only be taken out by a separate cut with a Remove.
     function test_NoPhantomSelectorInEitherList() public view {
-        bytes4[] memory reg = _abiSelectors("ArbiterRegistryFacet");
+        bytes4[] memory reg = _registryAbiPair();
         bytes4[] memory acc = _abiSelectors("ArbiterAccountabilityFacet");
 
         bytes4[] memory replaceSels = upgrade.replaceSelectors();
@@ -762,14 +842,34 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     /// Add, an unmounted one in Replace, the count unchanged) goes through in silence
     /// again — and rejects the whole cut in one production transaction, after two
     /// facets have been broadcast.
+    /// The chain's single arbiter facet, stood in for. Since the 16 September
+    /// 2026 split no production contract implements the whole census group on
+    /// its own — twenty-eight of those selectors are ArbiterVaultFacet's — so a
+    /// bare `new ArbiterRegistryFacet()` here would mount (diamondCut only
+    /// requires code at the address) and then revert on the first pre-flight
+    /// read of the vault. The double forwards each selector to whichever of the
+    /// two real facets implements it, so the pre-cut rig answers exactly as Base
+    /// Sepolia does and the code under rehearsal is today's.
+    function _preSplitArbiterDouble() internal returns (address) {
+        DeployFull d = new DeployFull();
+        return address(
+            new PreSplitArbiterDispatcher(
+                address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
+                d.arbiterRegistryFacetSelectors(),
+                d.arbiterVaultFacetSelectors()
+            )
+        );
+    }
+
     function _mountLiveLayout(DiamondProxy diamond) internal returns (address oldFacetAddr) {
-        ArbiterRegistryFacet oldFacet = new ArbiterRegistryFacet();
+        address oldFacet = _preSplitArbiterDouble();
 
         IDiamondCut.FacetCut[] memory cuts = new IDiamondCut.FacetCut[](1);
-        cuts[0] = IDiamondCut.FacetCut(address(oldFacet), IDiamondCut.FacetCutAction.Add, _chainCensus(upgrade.scriptPath()));
+        cuts[0] = IDiamondCut.FacetCut(oldFacet, IDiamondCut.FacetCutAction.Add, _chainCensus(upgrade.scriptPath()));
         IDiamondCut(address(diamond)).diamondCut(cuts, address(0), "");
 
-        oldFacetAddr = address(oldFacet);
+        oldFacetAddr = oldFacet;
     }
 
     /// The same again, but removeArbiter is mounted on a double that REALLY answers
@@ -781,7 +881,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     function _mountLiveLayoutWithWorkingButton(DiamondProxy diamond)
         internal returns (address oldFacetAddr, address stubAddr)
     {
-        ArbiterRegistryFacet oldFacet = new ArbiterRegistryFacet();
+        address oldFacet = _preSplitArbiterDouble();
         LegacyRemoveArbiterStub stub = new LegacyRemoveArbiterStub();
 
         bytes4[] memory nakedSel = new bytes4[](1);
@@ -789,14 +889,14 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
 
         IDiamondCut.FacetCut[] memory cuts = new IDiamondCut.FacetCut[](2);
         cuts[0] = IDiamondCut.FacetCut(
-            address(oldFacet),
+            oldFacet,
             IDiamondCut.FacetCutAction.Add,
             _censusWithout(_chainCensus(upgrade.scriptPath()), NAKED_REMOVE_ARBITER)
         );
         cuts[1] = IDiamondCut.FacetCut(address(stub), IDiamondCut.FacetCutAction.Add, nakedSel);
         IDiamondCut(address(diamond)).diamondCut(cuts, address(0), "");
 
-        oldFacetAddr = address(oldFacet);
+        oldFacetAddr = oldFacet;
         stubAddr = address(stub);
     }
 
@@ -892,7 +992,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
 
         ArbiterRegistryFacet strayFacet = new ArbiterRegistryFacet();
         bytes4[] memory stray = new bytes4[](1);
-        stray[0] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        stray[0] = ArbiterVaultFacet.getRefundableBounty.selector;
         IDiamondCut.FacetCut[] memory strayCut = new IDiamondCut.FacetCut[](1);
         strayCut[0] = IDiamondCut.FacetCut(address(strayFacet), IDiamondCut.FacetCutAction.Replace, stray);
         IDiamondCut(address(diamond)).diamondCut(strayCut, address(0), "");
@@ -936,14 +1036,14 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     /// script was written for.
     function test_RunRevertsWhenRemoveTargetIsNotMounted() public {
         DiamondProxy diamond = _deployMinimalDiamond();
-        ArbiterRegistryFacet oldFacet = new ArbiterRegistryFacet();
+        address oldFacet = _preSplitArbiterDouble();
 
         // The census is mounted WITHOUT the bare button — 63 of 64. It is subtracted by
         // the text of its signature rather than by upgrade.removeSelectors(): the bench
         // takes nothing from the cut's lists.
         IDiamondCut.FacetCut[] memory cuts = new IDiamondCut.FacetCut[](1);
         cuts[0] = IDiamondCut.FacetCut(
-            address(oldFacet),
+            oldFacet,
             IDiamondCut.FacetCutAction.Add,
             _censusWithout(_chainCensus(upgrade.scriptPath()), NAKED_REMOVE_ARBITER)
         );
@@ -1118,7 +1218,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
 
         vm.mockCall(
             oldFacetAddr,
-            abi.encodeWithSelector(ArbiterRegistryFacet.getVaultBalance.selector),
+            abi.encodeWithSelector(ArbiterVaultFacet.getVaultBalance.selector),
             abi.encode(uint256(999))
         );
 
@@ -1196,6 +1296,8 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         );
 
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
+
+        ArbiterVaultFacet d_v = ArbiterVaultFacet(address(diamond));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedBy(arb), address(this), "addArbiter must record the provenance");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedCountBy(address(this)), 1, "addArbiter must raise the seating counter");
 
@@ -1230,7 +1332,16 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
             upgrade.buildCuts(address(newReg), address(newAcc)), address(0), ""
         );
 
+        // ⚠️ AND THE SEPTEMBER SPLIT PLAYED OUT (16 September 2026): the cut
+        // above is the signed one and mounts its whole registry group on one
+        // fresh ArbiterRegistryFacet, which implements thirty-one of them since
+        // the split. `getArbiters`, read below, is one of the twenty-eight that
+        // moved.
+        _replayArbiterVaultSplit(address(diamond));
+
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
+
+        ArbiterVaultFacet d_v = ArbiterVaultFacet(address(diamond));
         address[] memory pending = upgrade.arbitersMissingProvenance(address(diamond));
         assertEq(pending.length, 1, "there is exactly one empty seat");
         assertEq(pending[0], blank);
@@ -1298,6 +1409,8 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         upgrade.run();
 
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
+
+        ArbiterVaultFacet d_v = ArbiterVaultFacet(address(diamond));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedBy(arb), ownerAddr, "the provenance was not filled in by the migration");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedCountBy(ownerAddr), 1, "the owner's seating counter was not raised");
         assertEq(upgrade.arbitersMissingProvenance(address(diamond)).length, 0, "after the migration there must be no empty seats");
@@ -1316,6 +1429,8 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
         upgrade.run();
 
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
+
+        ArbiterVaultFacet d_v = ArbiterVaultFacet(address(diamond));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedBy(arb), address(this), "the provenance was overwritten with the owner, which is not allowed");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedCountBy(ownerAddr), 0, "the owner was credited with a seating they did not do");
     }
@@ -1339,8 +1454,16 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
             upgrade.buildCuts(address(newReg), address(newAcc)), address(0), ""
         );
 
+        // ⚠️ AND THE SEPTEMBER SPLIT PLAYED OUT (16 September 2026): the cut
+        // above is the signed one and mounts its whole registry group on one
+        // fresh ArbiterRegistryFacet, which implements thirty-one of them since
+        // the split. `getArbiters`, read below, is one of the twenty-eight that
+        // moved.
+        _replayArbiterVaultSplit(address(diamond));
+
         address ownerAddr = _armRun(diamond);
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
+        ArbiterVaultFacet d_v = ArbiterVaultFacet(address(diamond));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getSeatedBy(arb), address(0), "premise: the provenance is not filled in yet");
 
         upgrade.migrateProvenanceOnly();
@@ -1407,9 +1530,10 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
 
         // ── The storage survived the cut ──────────────────────────────────
         ArbiterRegistryFacet d = ArbiterRegistryFacet(address(diamond));
-        assertEq(d.getArbiters().length, 1, "the arbiter did not survive the cut");
-        assertEq(d.getVaultBalance(), 777_000_000, "the vault did not survive the cut");
-        assertTrue(d.isRegisteredArbiter(arb), "the arbiter status did not survive the cut");
+        ArbiterVaultFacet d_v = ArbiterVaultFacet(address(diamond));
+        assertEq(d_v.getArbiters().length, 1, "the arbiter did not survive the cut");
+        assertEq(d_v.getVaultBalance(), 777_000_000, "the vault did not survive the cut");
+        assertTrue(d_v.isRegisteredArbiter(arb), "the arbiter status did not survive the cut");
 
         // ── The bare button is dead ───────────────────────────────────────
         (bool ok, ) = address(diamond).call(abi.encodeWithSignature("removeArbiter(address)", arb));
@@ -1446,7 +1570,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus {
     function _setVaultBalance(DiamondProxy diamond, uint256 amount) internal {
         vm.store(address(diamond), bytes32(uint256(ARB_POS) + 9), bytes32(amount));
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), amount,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), amount,
             "the vaultBalance offset in ArbiterRegistryStorage.Data has drifted"
         );
     }

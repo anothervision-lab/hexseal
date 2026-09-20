@@ -8,6 +8,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import {UpgradeArbiterChatKey} from "../script/archive/UpgradeArbiterChatKey.s.sol";
 import {ArbiterChainCensus} from "./ArbiterChainCensus.sol";
 import "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 /// The same cut, but deploying the "facet from before the accountability split"
 /// double.
@@ -307,7 +308,7 @@ contract ArbiterChatKeyUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterChainCe
         bytes32 slot = bytes32(uint256(ARB_POS) + 9);
         vm.store(address(diamond), slot, bytes32(amount));
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), amount,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), amount,
             "the vaultBalance offset in ArbiterRegistryStorage.Data has drifted"
         );
     }
@@ -393,7 +394,7 @@ contract ArbiterChatKeyUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterChainCe
         // pre-flight check, simulating somebody else's intervening upgrade.
         ArbiterRegistryFacet strayFacet = new ArbiterRegistryFacet();
         bytes4[] memory strayMount = new bytes4[](1);
-        strayMount[0] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        strayMount[0] = ArbiterVaultFacet.getRefundableBounty.selector;
         IDiamondCut.FacetCut[] memory strayCut = new IDiamondCut.FacetCut[](1);
         strayCut[0] = IDiamondCut.FacetCut(address(strayFacet), IDiamondCut.FacetCutAction.Replace, strayMount);
         IDiamondCut(address(diamond)).diamondCut(strayCut, address(0), "");

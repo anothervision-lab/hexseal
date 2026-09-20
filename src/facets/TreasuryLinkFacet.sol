@@ -117,6 +117,11 @@ pragma solidity ^0.8.20;
 // ============================================================
 
 import {ArbiterRegistryStorage, ArbiterRegistryFacet, IUSDCFull} from "./ArbiterRegistryFacet.sol";
+// `getArbiterFloor()` moved out of the registry into ArbiterVaultFacet on
+// 16 September 2026 (the EIP-170 split). The SELECTOR did not change and the
+// self-call below still routes through the diamond exactly as before — only the
+// type whose `.getArbiterFloor` is named here had to follow the function.
+import {ArbiterVaultFacet} from "./ArbiterVaultFacet.sol";
 import {OwnershipLib} from "../DiamondProxy.sol";
 import {FactoryStorage} from "../FactoryFacet.sol";
 
@@ -261,7 +266,7 @@ contract TreasuryLinkFacet {
         uint256 disputes = ArbiterRegistryStorage.data().vaultTargetDisputes;
         if (disputes == 0) return 0;
 
-        uint256 floor_ = ArbiterRegistryFacet(address(this)).getArbiterFloor();
+        uint256 floor_ = ArbiterVaultFacet(address(this)).getArbiterFloor();
         if (floor_ == 0) return 0;
 
         unchecked {

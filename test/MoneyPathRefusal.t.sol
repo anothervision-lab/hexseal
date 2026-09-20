@@ -16,6 +16,7 @@ pragma solidity ^0.8.20;
 // reverts (Circle's USDC), `refusesSilently` returns false without reverting.
 
 import "./MoneyPathBase.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract MoneyPathRefusalTest is MoneyPathBase {
     /// Local copy, because expectEmit needs a declaration it can name. A drift
@@ -505,7 +506,7 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         // And the arbiter can be paid out of it, which is what the credit
         // promised in the first place.
         vm.prank(arbiterAddr);
-        ArbiterRegistryFacet(address(diamond)).withdrawArbiterReward();
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         _assertDiamondBalances("after the arbiter took their share");
     }
 

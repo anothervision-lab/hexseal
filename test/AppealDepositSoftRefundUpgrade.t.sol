@@ -60,11 +60,14 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ArbiterApplicationsFacet.sol";
 import "../src/facets/DealMetadataFacet.sol";
+import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {MockUSDCB} from "./BoardsFixture.sol";
 import {UpgradeAppealDepositSoftRefund} from "../script/UpgradeAppealDepositSoftRefund.s.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
 
 /// A facet standing in for "some other code entirely behind the same selector".
 /// Used to prove the codehash probe is reading the CODE and not merely noticing
@@ -73,7 +76,7 @@ contract ImpostorArbiterFacet {
     function resolveAppeal(address) external pure { revert("impostor"); }
 }
 
-contract AppealDepositSoftRefundUpgradeTest is Test {
+contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     UpgradeAppealDepositSoftRefund upgrade;
     DeployFull deploy;
     DiamondProxy diamond;
@@ -89,6 +92,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// down BY HAND here, so that a facet which silently grows or loses a
     /// function stops at this line instead of at the signature.
     uint256 constant CHAIN_FACETS      = 13;
+
     uint256 constant CHAIN_ROUTED      = 221;
     uint256 constant ARBITER_SELECTORS = 59;
 
@@ -96,92 +100,6 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// chain's rule, not this project's — and reading the constant out of the
     /// thing being measured is exactly the mistake this file exists to avoid.
     uint256 constant CONTRACT_SIZE_LIMIT = 24_576;
-
-    /// ⚠️ WHAT THE TREE CARRIES THAT THE CHAIN DOES NOT, AND WHY IT IS NOT THIS
-    /// CUT'S BUSINESS — written by hand, BY SIGNATURE TEXT, never taken from any
-    /// script's lists.
-    ///
-    /// `notifyWorkHandedIn()` is on RegistryFacet and ships with
-    /// script/UpgradeRegistryHandInSignal.s.sol, a different cut on a different
-    /// facet. DeployFull already mounts it, so a rig built from today's tree has
-    /// it and the live chain does not. This cut touches neither that facet nor
-    /// that selector, which is why the two are order-independent.
-    /// ⚠️ 1 -> 5 ON 3 SEPTEMBER 2026. FactoryFacet gains the emergency brake
-    /// (decision 17): `pauseNewDeals()`, `resumeNewDeals()`,
-    /// `newDealsPausedUntil()` and the `NEW_DEALS_PAUSE_DURATION()` getter,
-    /// shipping with script/UpgradeEmergencyBrake.s.sol. Another cut on another
-    /// facet — this one touches only ArbiterRegistryFacet — so the two are
-    /// order-independent, and the four are named by signature text below like
-    /// the one before them.
-    uint256 constant GROWN_ELSEWHERE    = 5;
-
-    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
-    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
-    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
-    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
-    ///
-    /// It gets a constant of its OWN rather than turning the five above into a
-    /// six. The brake and the ceiling ride in one transaction but they are two
-    /// decisions, and a number that covers both can no longer say which one
-    /// drifted. Drop item 138 from the cut and exactly this line goes to zero.
-    /// The selector itself is named by signature text in the list below, like
-    /// every other entry.
-    ///
-    /// It is growth on a facet this cut never touches — this one is
-    /// ArbiterRegistryFacet only — so it is order-independent from this cut,
-    /// exactly like the five before it.
-    uint256 constant GROWN_ELSEWHERE_FEE_CAP = 1;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 8 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains the door a hand-seated
-    /// arbiter posts his own bond through, and the read that says whether he
-    /// has. Two selectors, `postArbiterBond()` and `isArbiterActive(address)`,
-    /// shipped by script/UpgradeArbiterBondRequired.s.sol.
-    ///
-    /// A constant of its OWN rather than a bigger number somewhere else: the
-    /// two ride in their own transaction and are their own decision, and a
-    /// number that covers several can no longer say which one drifted. Land
-    /// that cut and exactly this line goes to zero.
-    uint256 constant PENDING_ARBITER_BOND_ADDS = 2;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains the door that takes back
-    /// a GRANTED SEAT NOTHING HAS BEEN EARNED IN —
-    /// `revokeUnprovenSeat(address,string)`, shipped by
-    /// script/UpgradeUnprovenSeatRevocationAndBondPermit.s.sol.
-    ///
-    /// One selector, and a constant of its OWN for the same reason the line
-    /// above has one: it rides in its own transaction and is its own decision,
-    /// and a number that covers several can no longer say which of them drifted.
-    /// Land that cut and exactly this line goes to zero.
-    uint256 constant PENDING_UNPROVEN_SEAT_ADDS = 1;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains a SECOND bond door,
-    /// `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)`, which takes
-    /// the same 50 USDC on a signed EIP-2612 paper instead of on an allowance
-    /// granted beforehand. Granting an allowance is a transaction sent to USDC,
-    /// which does not trust our forwarder, so that step could never be made
-    /// gasless from our side — and the arbiter it is asked of has earned nothing
-    /// in the protocol yet to pay the gas with.
-    ///
-    /// It rides in the SAME transaction as the line above, and still gets a
-    /// constant of its OWN, for the reason every line here has one: they are two
-    /// decisions, and a number covering both can no longer say which of them
-    /// drifted. Land that cut and exactly this line goes to zero.
-    uint256 constant PENDING_BOND_PERMIT_ADDS = 1;
-
-    uint256 constant EXTRA_BEYOND_CHAIN = GROWN_ELSEWHERE + GROWN_ELSEWHERE_FEE_CAP + PENDING_ARBITER_BOND_ADDS + PENDING_UNPROVEN_SEAT_ADDS + PENDING_BOND_PERMIT_ADDS;
-
-    function _grownElsewhere() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](GROWN_ELSEWHERE + GROWN_ELSEWHERE_FEE_CAP);
-        sels[0] = bytes4(keccak256("notifyWorkHandedIn()"));
-        sels[1] = bytes4(keccak256("pauseNewDeals()"));
-        sels[2] = bytes4(keccak256("resumeNewDeals()"));
-        sels[3] = bytes4(keccak256("newDealsPausedUntil()"));
-        sels[4] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
-        sels[5] = bytes4(keccak256("MAX_FEE_BPS()"));
-    }
 
     function setUp() public {
         upgrade = new UpgradeAppealDepositSoftRefund();
@@ -243,12 +161,55 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// Oracle: solc. The hand-written list against `methodIdentifiers`, both
     /// directions, so a swap cannot pass on a matching count.
     function test_TheReplaceListCoversExactlyTheCompiledFacet() public view {
-        upgrade.assertReplaceListCoversTheWholeFacet(upgrade.replaceSelectors());
+        // The compiled side with the growth queued behind this cut taken out BY
+        // NAME — the script ran and its list may not be edited, while the pair
+        // it is compared with keeps growing. See `_grownAfterThisCut`.
+        upgrade.assertReplaceListCovers(upgrade.replaceSelectors(), _compiledAsThisCutSawIt());
         assertEq(
             upgrade.artifactSelectors().length,
-            ARBITER_SELECTORS,
-            "the compiled ArbiterRegistryFacet exposes a different number of functions than this cut mounts"
+            ARBITER_SELECTORS + _grownAfterThisCut().length,
+            "the compiled ArbiterRegistryFacet exposes a different number of functions than this cut mounts plus what is queued behind it"
         );
+    }
+
+    /// ⚠️ WHAT THE PAIR GREW **AFTER** THIS CUT WAS SIGNED — by SIGNATURE TEXT,
+    /// never taken from the script's lists or from the artifact.
+    ///
+    ///   • withdrawAppealShare(address), getAppealShareOwed(address,address),
+    ///     getAppealLedger(address), quoteAppealDeposit(address) —
+    ///     17 September 2026, the appeal economics, plus settleAppealDebts(uint256)
+    ///     and getAppealDebts() the same day — all six on ArbiterVaultFacet.
+    ///
+    /// Held to "real, and not in this cut's Replace group" by
+    /// test_TheGrowthBeyondThisCutIsRealAndBelongsToAnotherFacet.
+    function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](8);
+        sels[0] = bytes4(keccak256("withdrawAppealShare(address)"));
+        sels[1] = bytes4(keccak256("getAppealShareOwed(address,address)"));
+        sels[2] = bytes4(keccak256("getAppealLedger(address)"));
+        sels[3] = bytes4(keccak256("quoteAppealDeposit(address)"));
+        sels[4] = bytes4(keccak256("settleAppealDebts(uint256)"));
+        sels[5] = bytes4(keccak256("getAppealDebts()"));
+        // And the two of 18 September 2026 on the arbiter registry: item D1's
+        // public door for a dead dispute claim, and the read a screen needs now
+        // that the appeal quorum moves with the corps.
+        sels[6] = bytes4(keccak256("abandonClaim(address)"));
+        sels[7] = bytes4(keccak256("getAppealPanel(address)"));
+    }
+
+    /// The compiled pair minus the named growth. Every name must actually be in
+    /// the artifact, or the subtraction would be silently subtracting nothing.
+    function _compiledAsThisCutSawIt() internal view returns (bytes4[] memory out) {
+        bytes4[] memory compiled = upgrade.artifactSelectors();
+        bytes4[] memory grown = _grownAfterThisCut();
+        for (uint256 i = 0; i < grown.length; i++) {
+            require(_contains(compiled, grown[i]), "the growth allowance names a function the compiled pair does not have");
+        }
+        out = new bytes4[](compiled.length - grown.length);
+        uint256 k;
+        for (uint256 i = 0; i < compiled.length; i++) {
+            if (!_contains(grown, compiled[i])) out[k++] = compiled[i];
+        }
     }
 
     /// ⚠️ THE LOAD-BEARING ONE. Oracle: the committed census, i.e. the live
@@ -288,7 +249,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// need an `Add` element, and this cut has none.
     function test_TheCompiledFacetGainsNothingAndSoNeedsNoAddGroup() public view {
         bytes4[] memory onChain  = _censusAt(".selectors", ".count");
-        bytes4[] memory compiled = upgrade.artifactSelectors();
+        bytes4[] memory compiled = _compiledAsThisCutSawIt();
         for (uint256 i = 0; i < compiled.length; i++) {
             assertTrue(
                 _contains(onChain, compiled[i]),
@@ -314,24 +275,67 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     }
 
     /// The growth this rig carries beyond the chain must be REAL and must
-    /// belong to somebody else. Two conditions, so the exemption can neither go
-    /// stale nor quietly cover a hole in this cut.
+    /// belong to somebody else. Two conditions, so a surplus can neither be
+    /// imaginary nor quietly cover a hole in this cut.
+    ///
+    /// ⚠️ THE SURPLUS IS MEASURED, NOT DECLARED. It used to be a hand-written
+    /// list sized by two hand-written constants, and a list like that answers
+    /// "is the surplus what I said it was", which is a question about the list.
+    /// Now it is whatever the rig actually carried beyond the census, and the
+    /// two conditions below are asked of THAT. Land a cut, queue another, drop
+    /// one: nothing here needs touching, and nothing here can be bought by
+    /// touching it.
     function test_TheGrowthBeyondThisCutIsRealAndBelongsToAnotherFacet() public view {
-        bytes4[] memory grown = _grownElsewhere();
+        bytes4[] memory grown = rigSurplusOverCensus;
+        assertGt(grown.length, 0, "the rig carries no surplus over the census at all - this lock has nothing to be about");
+
         bytes4[] memory registryAbi = _abiOf("out/RegistryFacet.sol/RegistryFacet.json");
         bytes4[] memory factoryAbi  = _abiOf("out/FactoryFacet.sol/FactoryFacet.json");
+        bytes4[] memory treasuryAbi = _abiOf("out/TreasuryLinkFacet.sol/TreasuryLinkFacet.json");
+        bytes4[] memory appsAbi     = _abiOf("out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json");
+        // Added 18 September 2026: the job board is now one of the facets whose
+        // growth reaches this rig. "An arbiter is not a player in the market"
+        // put three reads on it (getOpenMarketItems, pruneClosedApplications,
+        // getAppliedJobIds), and the registry one (getOpenDealCount, already
+        // covered by registryAbi above). Without this line the surplus carried
+        // a selector no NAMED facet implemented, which is what this lock exists
+        // to refuse — and it was right to go red: the name was simply missing.
+        bytes4[] memory jobBoardAbi = _abiOf("out/JobBoardFacet.sol/JobBoardFacet.json");
         bytes4[] memory arbiterAbi  = upgrade.artifactSelectors();
+        bytes4[] memory queued      = _grownAfterThisCut();
+
         for (uint256 i = 0; i < grown.length; i++) {
-            // Two named facets, and the entry must be implemented by one of
-            // them — never merely "somewhere", which would let a deleted
-            // function's exemption live on and cover the next thing.
+            // The growth queued on THIS pair behind this cut, named by
+            // signature: real (it is in the pair's ABI) and not a hole in this
+            // cut (it is not in the Replace group). Asked here rather than
+            // waved through, so the allowance cannot cover a selector the cut
+            // did mount.
+            if (_contains(queued, grown[i])) {
+                assertTrue(_contains(arbiterAbi, grown[i]), "the growth allowance is stale: no such function in the arbiter pair");
+                assertFalse(
+                    _contains(upgrade.replaceSelectors(), grown[i]),
+                    "the growth allowance covers a selector this cut REPLACED - it would hide a hole in this very cut"
+                );
+                continue;
+            }
+            // Implemented by a NAMED facet of this checkout, never merely
+            // "somewhere": a surplus nobody implements is a rig carrying a door
+            // that leads nowhere.
             assertTrue(
-                _contains(registryAbi, grown[i]) || _contains(factoryAbi, grown[i]),
-                "an exemption names a selector neither RegistryFacet nor FactoryFacet implements - the exemption is stale"
+                _contains(registryAbi, grown[i]) || _contains(factoryAbi, grown[i])
+                    || _contains(treasuryAbi, grown[i]) || _contains(appsAbi, grown[i])
+                    || _contains(jobBoardAbi, grown[i]),
+                string.concat(
+                    "the rig carries a selector no named facet of this checkout implements: ",
+                    vm.toString(grown[i])
+                )
             );
             assertFalse(
                 _contains(arbiterAbi, grown[i]),
-                "an exemption names a selector that IS on ArbiterRegistryFacet - it would hide a hole in this very cut"
+                string.concat(
+                    "the rig's surplus includes a selector that IS on ArbiterRegistryFacet - it would hide a hole in this very cut: ",
+                    vm.toString(grown[i])
+                )
             );
         }
     }
@@ -356,7 +360,8 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
 
         address previousFacet = upgrade.assertAllMountedOnOneFacet(sels, address(diamond));
         upgrade.assertNothingIsLeftBehind(sels, previousFacet, address(diamond));
-        upgrade.assertTheCompiledFacetNeedsNoAddGroup(address(diamond));
+        // The compiled side handed in without the growth queued behind this cut.
+        upgrade.assertNoAddGroupNeeded(address(diamond), _compiledAsThisCutSawIt());
 
         uint256 routedBefore = _routed();
         uint256 facetsBefore = IDiamondLoupe(address(diamond)).facetAddresses().length;
@@ -399,10 +404,18 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
             upgrade.buildCuts(address(new ArbiterRegistryFacet())), address(0), ""
         );
 
+        // ⚠️ AND THEN THE SEPTEMBER SPLIT IS PLAYED OUT. The cut above is the
+        // one that was SIGNED and it mounts all fifty-nine on one fresh
+        // ArbiterRegistryFacet, which since the split implements thirty-one of
+        // them. `getArbiters`, read on both sides of the cut here, is one of the
+        // twenty-eight that moved. Playing the move out is what the chain will
+        // do; rewriting the signed script is not.
+        _replayArbiterVaultSplit(address(diamond));
+
         upgrade.assertStorageContinuity(before_, upgrade.snapshotArbiterStorage(address(diamond)));
         assertEq(before_.arbiterCount, 1, "precondition: the seat this test added is not there");
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getArbiters().length,
+            ArbiterVaultFacet(address(diamond)).getArbiters().length,
             1,
             "the seat did not survive the cut"
         );
@@ -421,6 +434,15 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// Both directions, or a probe stuck on one answer would look identical to
     /// a working one.
     function test_TheCodehashProbeTellsThisCheckoutFromOtherCode() public {
+        // ⚠️ THE PRE-CUT HOST HERE IS THE SPLIT DOUBLE, NOT A FACET
+        // (16 September 2026). The rig puts all fifty-nine arbiter selectors on
+        // one address, the way the chain has them, and that address is
+        // PreSplitArbiterDispatcher rather than a plain ArbiterRegistryFacet.
+        // The probe below reads the CODE behind `resolveAppeal`, so the scene
+        // first puts a real, freshly compiled facet there — which is the state
+        // the probe is being asked about, and the state the chain is in.
+        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ArbiterRegistryFacet()));
+
         assertEq(
             upgrade.liveFacetCodehash(address(diamond)),
             upgrade.thisCheckoutCodehash(),
@@ -440,6 +462,15 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// otherwise a second run pays for an identical facet and cuts it in to
     /// change nothing, which reads afterwards exactly like a success.
     function test_ThePreFlightRefusesADiamondThatAlreadyRunsThisCode() public {
+        // ⚠️ THE PRE-CUT HOST HERE IS THE SPLIT DOUBLE, NOT A FACET
+        // (16 September 2026). The rig puts all fifty-nine arbiter selectors on
+        // one address, the way the chain has them, and that address is
+        // PreSplitArbiterDispatcher rather than a plain ArbiterRegistryFacet.
+        // The probe below reads the CODE behind `resolveAppeal`, so the scene
+        // first puts a real, freshly compiled facet there — which is the state
+        // the probe is being asked about, and the state the chain is in.
+        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ArbiterRegistryFacet()));
+
         vm.expectRevert(
             abi.encodeWithSignature(
                 "Error(string)",
@@ -483,7 +514,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// that drops the whole cut on chain. The pre-flight must name it before a
     /// wei is spent.
     function test_ThePreFlightRefusesAReplaceSelectorThatIsNotMounted() public {
-        _unmount(ArbiterRegistryFacet.getAppealVotes.selector);
+        _unmount(ArbiterVaultFacet.getAppealVotes.selector);
         // ⚠️ HOISTED ON PURPOSE. `upgrade.replaceSelectors()` is an external
         // call, and written inline as an argument it is evaluated BEFORE the
         // call under test -- it would swallow the expectRevert, and this test
@@ -505,14 +536,21 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// something routed nowhere means this cut needs an Add group it does not
     /// have.
     function test_ThePreFlightRefusesWhenTheCompiledFacetWouldNeedAnAddGroup() public {
-        _unmount(ArbiterRegistryFacet.getAppealVotes.selector);
+        // ⚠️ THE GROWTH IS TAKEN OUT OF THE COMPILED SIDE HERE TOO. The four
+        // appeal-economics selectors are unmounted on this rig by construction,
+        // so the plain `assertTheCompiledFacetNeedsNoAddGroup` refuses with or
+        // without the unmount below — a refusal this scene would then be
+        // "proving" for free. With the growth taken out, the unmount is the
+        // only thing left that can make it refuse.
+        bytes4[] memory compiled = _compiledAsThisCutSawIt();
+        _unmount(ArbiterVaultFacet.getAppealVotes.selector);
         vm.expectRevert(
             abi.encodeWithSignature(
                 "Error(string)",
                 "pre-flight: the compiled facet exposes a function that is mounted nowhere - this cut needs an Add group and has none"
             )
         );
-        upgrade.assertTheCompiledFacetNeedsNoAddGroup(address(diamond));
+        upgrade.assertNoAddGroupNeeded(address(diamond), compiled);
     }
 
     /// A Replace group spread over two facets breaks this cut's one assumption.
@@ -549,7 +587,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// The pre-flights above exist to catch this BEFORE it costs a facet, so
     /// the thing they are protecting against is worth demonstrating once.
     function test_ADiamondRejectsAReplaceOfAnUnmountedSelector() public {
-        _unmount(ArbiterRegistryFacet.getAppealVotes.selector);
+        _unmount(ArbiterVaultFacet.getAppealVotes.selector);
         // Hoisted for the same reason: buildCuts is an external call.
         IDiamondCut.FacetCut[] memory cuts = upgrade.buildCuts(address(new ArbiterRegistryFacet()));
         address d = address(diamond);
@@ -626,8 +664,13 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
     /// clean deploy and this diamond drift apart.
     function test_TheCutAndAFreshDeployMountTheSameSet() public view {
         _assertSameSet(
-            upgrade.replaceSelectors(),
-            deploy.arbiterRegistryFacetSelectors(),
+            // The growth queued behind this cut is added to THIS cut's side: a
+            // fresh deploy mounts what the pair has today.
+            _concat(upgrade.replaceSelectors(), _grownAfterThisCut()),
+            // The pair: this cut mounted ONE facet, and that facet is two files
+            // since the 16 September 2026 split. Same set of functions either
+            // way — that is what makes it a split and not a change.
+            _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
             "this cut vs DeployFull"
         );
     }
@@ -638,48 +681,134 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
 
     function _deployPreCutDiamond() internal returns (DiamondProxy d) {
         d = _deployFullShapedDiamond();
+        // The census this rig is measured against predates the unmount; see the
+        // helper's own note for why the script cannot supply this any more.
+        _mountHistoricalDealMetadata(d);
 
         bytes4[] memory onChain = _censusAt(".selectors", ".count");
+        _conformToCensus(d, onChain);
+    }
+
+    /// Every selector this checkout mounts that the census does not hold,
+    /// filled in by _conformToCensus. COMPUTED, never declared: this is the
+    /// surplus that used to be a hand-kept total.
+    bytes4[] internal rigSurplusOverCensus;
+
+    /// Cut the rig down to the census, and then prove it IS the census.
+    ///
+    /// ⚠️ THE SIZE OF THE DIFFERENCE IS COMPUTED, NEVER DECLARED. Whatever this
+    /// checkout mounts that the census does not hold comes off, however many
+    /// that is. The shape this helper replaced sized its array from a hand-kept
+    /// total and refused when the count disagreed, so every cut landing in the
+    /// tree reddened it and every red was answered by raising the total.
+    ///
+    /// The claim that takes the count's place is stronger, not weaker: after the
+    /// removal the rig's selector set must EQUAL the census's, both directions
+    /// checked. A count agrees with a swap; equality does not.
+    ///
+    /// The other direction deserves its own sentence. A selector the census
+    /// holds and this checkout can no longer build is the case that arrives when
+    /// a facet leaves the tree -- it reds HERE, naming the selector, instead of
+    /// leaving the rig one door short of the diamond it claims to be.
+    function _conformToCensus(DiamondProxy d, bytes4[] memory census) internal {
         IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
 
-        bytes4[] memory extra = new bytes4[](EXTRA_BEYOND_CHAIN);
+        uint256 routed;
+        for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
+
+        bytes4[] memory scratch = new bytes4[](routed);
         uint256 n;
         for (uint256 i = 0; i < all.length; i++) {
             for (uint256 j = 0; j < all[i].functionSelectors.length; j++) {
                 bytes4 sel = all[i].functionSelectors[j];
-                if (!_contains(onChain, sel)) {
-                    require(n < EXTRA_BEYOND_CHAIN, "the local rig has more selectors than the chain by more than the cut queued behind this one");
-                    extra[n++] = sel;
-                }
+                if (!_contains(census, sel)) scratch[n++] = sel;
             }
         }
-        require(n == EXTRA_BEYOND_CHAIN, "the local rig does not differ from the chain by exactly the cut queued behind this one");
-        // And it must be the selector the exemption NAMES, not merely one of
-        // the right size.
-        // A set comparison, not `extra[0] == grown[0]`: the loupe hands the
-        // surplus back in facet order, which is not the order this file writes
-        // the exemptions in, and with more than one entry an index-by-index
-        // check would be asserting something about iteration order.
-        _assertSameSet(
-            extra,
-            _concat(
-                _concat(_concat(_grownElsewhere(), _arbiterBondSelectors()), _unprovenSeatSelectors()),
-                _bondPermitSelectors()
-            ),
-            "the rig's surplus over the chain"
+
+        // Kept for the locks that ask what the surplus IS, now that nothing
+        // declares what it should be. Recorded before it is removed, because
+        // after the removal it is gone from the diamond.
+        delete rigSurplusOverCensus;
+        for (uint256 i = 0; i < n; i++) rigSurplusOverCensus.push(scratch[i]);
+
+        if (n > 0) {
+            bytes4[] memory extra = new bytes4[](n);
+            for (uint256 i = 0; i < n; i++) extra[i] = scratch[i];
+            IDiamondCut.FacetCut[] memory remove = new IDiamondCut.FacetCut[](1);
+            remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
+            IDiamondCut(address(d)).diamondCut(remove, address(0), "");
+        }
+
+        for (uint256 i = 0; i < census.length; i++) {
+            require(
+                IDiamondLoupe(address(d)).facetAddress(census[i]) != address(0),
+                string.concat(
+                    "the rig is MISSING a selector the chain routed at this census: ",
+                    vm.toString(census[i]),
+                    " - this checkout no longer builds it, and a stand rehearsing a past cut has to mount it itself"
+                )
+            );
+        }
+
+        IDiamondLoupe.Facet[] memory conformed = IDiamondLoupe(address(d)).facets();
+        uint256 routedAfter;
+        for (uint256 i = 0; i < conformed.length; i++) routedAfter += conformed[i].functionSelectors.length;
+        require(routedAfter == census.length, "the conformed rig routes a different number of selectors than the census holds");
+        // ⚠️ THE ARBITER FACET IS TWO CONTRACTS IN THIS CHECKOUT AND ONE ON THE
+        // CHAIN (16 September 2026). The split moved twenty-eight selectors to
+        // ArbiterVaultFacet without touching a signature, so the SET above is
+        // right either way — but the rig would carry one facet more than the
+        // chain, and the signed cut rehearsed here would then meet a Replace
+        // group spread over two addresses, which its pre-flight refuses and
+        // should go on refusing. So the rig is put back into the chain's shape
+        // instead of the check being loosened: one host for all fifty-nine.
+        //
+        // ⚠️ THIS CALL STAYS, and the line that stood here saying it would come
+        // out the day the split landed was wrong. The rig is conformed to THIS
+        // STAND'S census, read before the split, when one host routed all
+        // fifty-nine arbiter selectors; the split landing on Base Sepolia
+        // (17 September 2026, block 46 946 562) does not change that past.
+        // Measured 18 September 2026 on EmergencyBrakeUpgrade: without this
+        // call setUp reverts "the conformed rig has a different number of
+        // facets than the live chain had" and the suite does not run.
+        _mountArbiterAsOneHost(address(d));
+
+        IDiamondLoupe.Facet[] memory conformedNow = IDiamondLoupe(address(d)).facets();
+        require(
+            conformedNow.length == CHAIN_FACETS,
+            "the conformed rig has a different number of facets than the live chain had"
         );
-
-        IDiamondCut.FacetCut[] memory remove = new IDiamondCut.FacetCut[](1);
-        remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
-        IDiamondCut(address(d)).diamondCut(remove, address(0), "");
-
-        uint256 routed;
-        IDiamondLoupe.Facet[] memory after_ = IDiamondLoupe(address(d)).facets();
-        for (uint256 i = 0; i < after_.length; i++) routed += after_[i].functionSelectors.length;
-        require(routed == CHAIN_ROUTED, "the local pre-cut rig routes a different number of selectors than the live chain");
-        require(after_.length == CHAIN_FACETS, "the local pre-cut rig has a different number of facets than the live chain");
     }
 
+    /// ⚠️ A FACET THE DEPLOY SCRIPT NO LONGER CARRIES, MOUNTED HERE ON PURPOSE.
+    ///
+    /// This rig has to look like the chain did at THIS STAND'S CENSUS, and at
+    /// that census DealMetadataFacet was mounted and answering 0xb6a03ff7. On
+    /// 14 September 2026 the owner signed the cut that unmounted it, and
+    /// script/DeployFull.s.sol stopped mounting it the same day.
+    ///
+    /// So the rig can no longer get it by borrowing the script's list, and that
+    /// is the lesson rather than an inconvenience: a stand that rehearses a PAST
+    /// cut must own the past itself. Borrowing the shape of the chain from a
+    /// script that tracks the PRESENT is what let this whole class of drift go
+    /// unnoticed for ten days.
+    function _mountHistoricalDealMetadata(DiamondProxy target) internal {
+        bytes4[] memory sels = new bytes4[](1);
+        sels[0] = DealMetadataFacet.getDealTokenURI.selector;
+        // ⚠️ ASKED OF THE CENSUS, NOT DECIDED HERE. Mount it only if the chain
+        // routed it at this census and this checkout no longer builds it. A
+        // standing "always mount" would be one more hand-kept fact about which
+        // cuts have landed -- the exact species this file just stopped keeping
+        // -- and it would revert as a duplicate Add the day DeployFull carries
+        // the facet again.
+        if (!_contains(_censusAt(".selectors", ".count"), sels[0])) return;
+        if (IDiamondLoupe(address(target)).facetAddress(sels[0]) != address(0)) return;
+        IDiamondCut.FacetCut[] memory c = new IDiamondCut.FacetCut[](1);
+        c[0] = IDiamondCut.FacetCut(
+            address(new DealMetadataFacet()), IDiamondCut.FacetCutAction.Add, sels
+        );
+        IDiamondCut(address(target)).diamondCut(c, address(0), "");
+    }
     function _deployFullShapedDiamond() internal returns (DiamondProxy d) {
         IDiamondCut.FacetCut[] memory initCuts = deploy.buildInitCuts(
             address(new DiamondCutFacet()),
@@ -695,9 +824,10 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
                 address(new JobBoardFacet()),
                 address(new ServiceBoardFacet()),
                 address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
                 address(new ArbiterAccountabilityFacet()),
                 address(new ArbiterApplicationsFacet()),
-                address(new DealMetadataFacet()),
+                address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
                 address(new ReputationFacet())
             ),
@@ -794,49 +924,15 @@ contract AppealDepositSoftRefundUpgradeTest is Test {
         }
     }
 
-    /// ⚠️ THE PENDING ARBITER-BOND PAIR, BY SIGNATURE TEXT (8 September 2026).
-    ///
-    /// `ArbiterApplicationsFacet` gained the door a hand-seated arbiter posts
-    /// his own bond through and the read that says whether he still owes it.
-    /// They are in this tree and not yet on the chain, so a from-scratch
-    /// diamond carries two selectors the census does not.
-    ///
-    /// Written as TEXT and hashed here, never `Facet.f.selector`: taken from
-    /// the type, this expectation would move together with the thing it is
-    /// meant to hold, and a renamed function would keep both sides agreeing.
+    /// Joins two selector lists. (This helper carried a docstring about "the
+    /// pending arbiter-bond pair, not yet on the chain" from 8 September 2026.
+    /// It described neither this function nor the world: those selectors
+    /// reached the chain with the cuts of 17 and 19 September 2026, and
+    /// `_pendingCut()` in test/DeployFullMatchesChain.t.sol is empty. Removed
+    /// on 19 September 2026 rather than left to be believed.)
     function _concat(bytes4[] memory a, bytes4[] memory b) internal pure returns (bytes4[] memory out) {
         out = new bytes4[](a.length + b.length);
         for (uint256 i = 0; i < a.length; i++) out[i] = a[i];
         for (uint256 i = 0; i < b.length; i++) out[a.length + i] = b[i];
     }
-
-    function _arbiterBondSelectors() internal pure returns (bytes4[] memory out) {
-        out = new bytes4[](2);
-        out[0] = bytes4(keccak256("postArbiterBond()"));
-        out[1] = bytes4(keccak256("isArbiterActive(address)"));
-    }
-
-    /// ⚠️ THE PENDING UNPROVEN-SEAT SELECTOR, BY SIGNATURE TEXT
-    /// (11 September 2026). Written as text and hashed here, never
-    /// `Facet.f.selector`: taken from the type, this expectation would move
-    /// together with the thing it is meant to hold, and a renamed function
-    /// would keep both sides agreeing.
-    function _unprovenSeatSelectors() internal pure returns (bytes4[] memory out) {
-        out = new bytes4[](1);
-        out[0] = bytes4(keccak256("revokeUnprovenSeat(address,string)"));
-    }
-
-    /// ⚠️ THE PENDING BOND-PERMIT SELECTOR, BY SIGNATURE TEXT (11 September
-    /// 2026). The SECOND bond door: the same 50 USDC, carried in on a signed
-    /// EIP-2612 paper instead of on an allowance granted in a transaction of its
-    /// own. It rides in the same cut as the line above and is a separate
-    /// decision. Written as text and hashed here, never `Facet.f.selector`:
-    /// taken from the type, this expectation would move together with the thing
-    /// it is meant to hold, and a renamed function would keep both sides
-    /// agreeing.
-    function _bondPermitSelectors() internal pure returns (bytes4[] memory out) {
-        out = new bytes4[](1);
-        out[0] = bytes4(keccak256("postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)"));
-    }
-
 }

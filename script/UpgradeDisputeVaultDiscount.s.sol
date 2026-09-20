@@ -113,6 +113,7 @@ import "forge-std/console.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract UpgradeDisputeVaultDiscount is Script {
 
@@ -122,6 +123,16 @@ contract UpgradeDisputeVaultDiscount is Script {
         "out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json";
     string internal constant ACCOUNTABILITY_ARTIFACT =
         "out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json";
+
+    /// ⚠️ THE REGISTRY FACET IS TWO CONTRACTS SINCE 16 SEPTEMBER 2026. It was
+    /// cut into ArbiterRegistryFacet and ArbiterVaultFacet, twenty-eight
+    /// selectors moving without one signature changing. THIS CUT IS ALREADY
+    /// SIGNED and its lists are the record of what went on chain that day — they
+    /// are not touched. What changed is only the question "what does the
+    /// registry facet implement", and since the split the honest answer is the
+    /// UNION of the two, which is byte for byte the set the single facet had.
+    string internal constant VAULT_ARTIFACT =
+        "out/ArbiterVaultFacet.sol/ArbiterVaultFacet.json";
 
     /// The number from a recorded decision, written here by a person rather than
     /// read from the facet. That is the whole point: the facet is
@@ -416,7 +427,7 @@ contract UpgradeDisputeVaultDiscount is Script {
         bytes4[] memory accSels,
         bytes4[] memory accAdd
     ) public view {
-        _assertSameSet(_concat(regSels, regAdd), artifactSelectors(REGISTRY_ARTIFACT), "ArbiterRegistryFacet");
+        _assertSameSet(_concat(regSels, regAdd), registryFacetAbi(), "ArbiterRegistryFacet");
         _assertSameSet(_concat(accSels, accAdd), artifactSelectors(ACCOUNTABILITY_ARTIFACT), "ArbiterAccountabilityFacet");
 
         // And each facet's two groups must be disjoint, or one of the two
@@ -439,6 +450,15 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// solc's own answer to "what does this facet expose", straight out of the
     /// build artifact. `methodIdentifiers` maps the signature to the four-byte
     /// selector as text, so nothing has to be hashed here.
+    /// What the facet THIS CUT MOUNTED implements today: one contract when the
+    /// cut was signed, two since the September split, the same set of functions
+    /// either way. Read out of the two artifacts rather than frozen as a
+    /// literal, so a function the registry gains before the split cut lands is
+    /// still noticed.
+    function registryFacetAbi() public view returns (bytes4[] memory) {
+        return _concat(artifactSelectors(REGISTRY_ARTIFACT), artifactSelectors(VAULT_ARTIFACT));
+    }
+
     function artifactSelectors(string memory artifactPath) public view returns (bytes4[] memory out) {
         string memory json = vm.readFile(artifactPath);
         string[] memory sigs = vm.parseJsonKeys(json, ".methodIdentifiers");
@@ -530,7 +550,7 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// the code this cut carried.
     function assertTheDiscountAnswers(address diamond, uint256 expected) public view {
         (bool ok, bytes memory ret) = diamond.staticcall(
-            abi.encodeWithSelector(ArbiterRegistryFacet.getDisputeDiscount.selector)
+            abi.encodeWithSelector(ArbiterVaultFacet.getDisputeDiscount.selector)
         );
         require(ok && ret.length >= 32, "post-flight: the diamond does not answer getDisputeDiscount()");
         require(
@@ -602,16 +622,17 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// every other angle, exactly healthy.
     function snapshotArbitration(address diamond) public view returns (StorageSnapshot memory s) {
         ArbiterRegistryFacet reg = ArbiterRegistryFacet(diamond);
-        address[] memory arbiters = reg.getArbiters();
+        ArbiterVaultFacet reg_v = ArbiterVaultFacet(diamond);
+        address[] memory arbiters = reg_v.getArbiters();
         s.arbiterCount = arbiters.length;
         if (arbiters.length > 0) s.firstArbiter = arbiters[0];
-        s.chiefArbiter     = reg.getChiefArbiter();
-        s.daoAddress       = reg.getDAOAddress();
+        s.chiefArbiter     = reg_v.getChiefArbiter();
+        s.daoAddress       = reg_v.getDAOAddress();
         s.daoActive        = reg.isDaoActive();
-        s.vaultBalance     = reg.getVaultBalance();
-        s.treasurySlice    = reg.getTreasurySlice();
-        s.rewardPerDispute = reg.getRewardPerDispute();
-        s.arbiterFloor     = reg.getArbiterFloor();
+        s.vaultBalance     = reg_v.getVaultBalance();
+        s.treasurySlice    = reg_v.getTreasurySlice();
+        s.rewardPerDispute = reg_v.getRewardPerDispute();
+        s.arbiterFloor     = reg_v.getArbiterFloor();
         s.daoThreshold     = reg.getDaoThreshold();
         s.proposalTtl      = ArbiterAccountabilityFacet(diamond).getProposalTTL();
     }
@@ -736,47 +757,47 @@ contract UpgradeDisputeVaultDiscount is Script {
         sels[18] = ArbiterRegistryFacet.resolveAppeal.selector;
 
         // Rewards
-        sels[19] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        sels[20] = ArbiterRegistryFacet.fundVault.selector;
-        sels[21] = ArbiterRegistryFacet.setRewardPerDispute.selector;
+        sels[19] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[20] = ArbiterVaultFacet.fundVault.selector;
+        sels[21] = ArbiterVaultFacet.setRewardPerDispute.selector;
         sels[22] = ArbiterRegistryFacet.setDAOAddress.selector;
 
         // Views
         sels[23] = ArbiterRegistryFacet.isDaoActive.selector;
         sels[24] = ArbiterRegistryFacet.getMinXPToRegister.selector;
         sels[25] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        sels[26] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        sels[27] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        sels[28] = ArbiterRegistryFacet.getArbiters.selector;
-        sels[29] = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        sels[30] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        sels[31] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        sels[32] = ArbiterRegistryFacet.getVaultBalance.selector;
-        sels[33] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        sels[34] = ArbiterRegistryFacet.getDAOAddress.selector;
-        sels[35] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        sels[36] = ArbiterRegistryFacet.getAppealVotes.selector;
-        sels[37] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
+        sels[26] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[27] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[28] = ArbiterVaultFacet.getArbiters.selector;
+        sels[29] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        sels[30] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[31] = ArbiterVaultFacet.getPendingVerdict.selector;
+        sels[32] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[33] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[34] = ArbiterVaultFacet.getDAOAddress.selector;
+        sels[35] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[36] = ArbiterVaultFacet.getAppealVotes.selector;
+        sels[37] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
 
         // Dispute settlement fee — 80/20 arbiter/treasury
-        sels[38] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        sels[39] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        sels[40] = ArbiterRegistryFacet.getTreasurySlice.selector;
+        sels[38] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[39] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[40] = ArbiterVaultFacet.getTreasurySlice.selector;
 
         // Paid call for an arbiter: floor and the quote to reach it.
         // `quoteDisputeTopUp` now returns the DISCOUNTED number — what the
         // wallet pays — so the screen and the transfer are the same subtraction.
-        sels[41] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        sels[42] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        sels[43] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;   // changed
+        sels[41] = ArbiterVaultFacet.setArbiterFloor.selector;
+        sels[42] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[43] = ArbiterVaultFacet.quoteDisputeTopUp.selector;   // changed
 
         // Paid call for an arbiter: payment and the soft refund. `fundDispute`
         // reserves the bank's share out of `vaultBalance` in the same
         // transaction and books it under the agreement.
-        sels[44] = ArbiterRegistryFacet.fundDispute.selector;         // changed
-        sels[45] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        sels[46] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        sels[47] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        sels[44] = ArbiterVaultFacet.fundDispute.selector;         // changed
+        sels[45] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[46] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[47] = ArbiterVaultFacet.getRefundableBounty.selector;
 
         // The arbiter's chat key
         sels[48] = ArbiterRegistryFacet.setArbiterChatKey.selector;
@@ -793,7 +814,7 @@ contract UpgradeDisputeVaultDiscount is Script {
 
         // Governance handover (mounted 27 August 2026)
         sels[55] = ArbiterRegistryFacet.acceptDAOAddress.selector;
-        sels[56] = ArbiterRegistryFacet.getPendingDAOAddress.selector;
+        sels[56] = ArbiterVaultFacet.getPendingDAOAddress.selector;
     }
 
     /// The two that do not exist on chain yet on the registry side, and half the
@@ -810,8 +831,8 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// `facetAddress` with the zero address.
     function registryAddSelectors() public pure returns (bytes4[] memory sels) {
         sels = new bytes4[](2);
-        sels[0] = ArbiterRegistryFacet.setDisputeDiscount.selector;
-        sels[1] = ArbiterRegistryFacet.getDisputeDiscount.selector;
+        sels[0] = ArbiterVaultFacet.setDisputeDiscount.selector;
+        sels[1] = ArbiterVaultFacet.getDisputeDiscount.selector;
     }
 
     /// Thirty-five — the whole of today's ArbiterAccountabilityFacet, and

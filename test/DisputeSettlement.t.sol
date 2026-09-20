@@ -23,6 +23,7 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/MinimalForwarder.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 // ---------- MOCK USDC ----------
 // Copied from Extras and extended with a per-address blocking switch (imitating
@@ -107,9 +108,10 @@ contract DisputeSettlementTest is Test {
         DiamondLoupeFacet    diamondLoupeFacet    = new DiamondLoupeFacet();
         OwnershipFacet       ownershipFacet       = new OwnershipFacet();
         ArbiterRegistryFacet arbiterRegistryFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet arbiterRegistryFacetVault = new ArbiterVaultFacet();
         ReputationFacet      reputationFacet      = new ReputationFacet();
 
-        bytes4[] memory regSels = new bytes4[](12);
+        bytes4[] memory regSels = new bytes4[](14);
         regSels[0]  = RegistryFacet.initRegistry.selector;
         regSels[1]  = RegistryFacet.register.selector;
         regSels[2]  = RegistryFacet.updateStatus.selector;
@@ -122,6 +124,12 @@ contract DisputeSettlementTest is Test {
         regSels[9]  = RegistryFacet.getActive.selector;
         regSels[10] = RegistryFacet.totalAgreements.selector;
         regSels[11] = RegistryFacet.authorizedFactory.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[12] = RegistryFacet.registerOffer.selector;
+        regSels[13] = RegistryFacet.notifyOfferAccepted.selector;
 
         bytes4[] memory facSels = new bytes4[](14);
         facSels[0]  = FactoryFacet.initFactory.selector;
@@ -139,49 +147,50 @@ contract DisputeSettlementTest is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
 
-        bytes4[] memory arbSels = new bytes4[](42);
+        bytes4[] memory arbSels = new bytes4[](19);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[3] = ArbiterRegistryFacet.claimDispute.selector;
         arbSels[4] = ArbiterRegistryFacet.releaseDisputeClaim.selector;
         arbSels[5] = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbSels[6] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        arbSels[7] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbSels[8] = ArbiterRegistryFacet.getArbiters.selector;
-        arbSels[9] = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        arbSels[10] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        arbSels[11] = ArbiterRegistryFacet.activateDAO.selector;
-        arbSels[12] = ArbiterRegistryFacet.applyAsArbiter.selector;
-        arbSels[13] = ArbiterRegistryFacet.isDaoActive.selector;
-        arbSels[14] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        arbSels[15] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        arbSels[16] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[17] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[19] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[20] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[21] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        arbSels[22] = ArbiterRegistryFacet.fundVault.selector;
-        arbSels[23] = ArbiterRegistryFacet.setRewardPerDispute.selector;
-        arbSels[24] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[25] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        arbSels[26] = ArbiterRegistryFacet.getVaultBalance.selector;
-        arbSels[27] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        arbSels[28] = ArbiterRegistryFacet.getDAOAddress.selector;
-        arbSels[29] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbSels[30] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        arbSels[31] = ArbiterRegistryFacet.getTreasurySlice.selector;
-        arbSels[32] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        arbSels[33] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        arbSels[34] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbSels[35] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        arbSels[36] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        arbSels[37] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
-        arbSels[38] = ArbiterRegistryFacet.fundDispute.selector;
-        arbSels[39] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        arbSels[40] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        arbSels[41] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        arbSels[6] = ArbiterRegistryFacet.activateDAO.selector;
+        arbSels[7] = ArbiterRegistryFacet.applyAsArbiter.selector;
+        arbSels[8] = ArbiterRegistryFacet.isDaoActive.selector;
+        arbSels[9] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
+        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[18] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        bytes4[] memory arbSelsVault = new bytes4[](23);
+        arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
+        arbSelsVault[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        arbSelsVault[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        arbSelsVault[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        arbSelsVault[6] = ArbiterVaultFacet.fundVault.selector;
+        arbSelsVault[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        arbSelsVault[8] = ArbiterVaultFacet.getPendingVerdict.selector;
+        arbSelsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
+        arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        arbSelsVault[12] = ArbiterVaultFacet.creditDisputeFee.selector;
+        arbSelsVault[13] = ArbiterVaultFacet.getTreasurySlice.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        arbSelsVault[15] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        arbSelsVault[16] = ArbiterVaultFacet.setArbiterFloor.selector;
+        arbSelsVault[17] = ArbiterVaultFacet.getArbiterFloor.selector;
+        arbSelsVault[18] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
+        arbSelsVault[19] = ArbiterVaultFacet.fundDispute.selector;
+        arbSelsVault[20] = ArbiterVaultFacet.getDisputeBounty.selector;
+        arbSelsVault[21] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        arbSelsVault[22] = ArbiterVaultFacet.getRefundableBounty.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -215,7 +224,7 @@ contract DisputeSettlementTest is Test {
         ownSels[2] = OwnershipFacet.acceptOwnership.selector;
         ownSels[3] = OwnershipFacet.pendingOwner.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](8);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](9);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet),        IDiamondCut.FacetCutAction.Add, regSels);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet),         IDiamondCut.FacetCutAction.Add, facSels);
         cut[2] = IDiamondCut.FacetCut(address(diamondCutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
@@ -226,6 +235,7 @@ contract DisputeSettlementTest is Test {
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
         cut[6] = IDiamondCut.FacetCut(address(reputationFacet),      IDiamondCut.FacetCutAction.Add, repSels);
+        cut[8] = IDiamondCut.FacetCut(address(arbiterRegistryFacetVault), IDiamondCut.FacetCutAction.Add, arbSelsVault);
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -405,7 +415,7 @@ contract DisputeSettlementTest is Test {
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute must still close");
         assertEq(usdc.balanceOf(client) - clientBefore, 33, "no fee taken, winner gets the whole (tiny) pot");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "nothing credited");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
     }
 
     // ============================================================
@@ -428,7 +438,7 @@ contract DisputeSettlementTest is Test {
 
         assertEq(usdc.balanceOf(client) - clientBefore, 194_000_000, "client gets 97%");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 4_800_000, "arbiter 80% of the fee");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), 1_200_000, "treasury 20% of the fee");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 1_200_000, "treasury 20% of the fee");
     }
 
     /// The same happy path, but the executor wins — the payout goes to them rather
@@ -446,7 +456,7 @@ contract DisputeSettlementTest is Test {
 
         assertEq(usdc.balanceOf(executor) - executorBefore, 194_000_000, "executor gets 97%");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 4_800_000, "arbiter 80% of the fee");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), 1_200_000, "treasury 20% of the fee");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 1_200_000, "treasury 20% of the fee");
     }
 
     /// End to end: the counters mean nothing unless real USDC stand behind them on
@@ -461,11 +471,11 @@ contract DisputeSettlementTest is Test {
 
         uint256 arbBefore = usdc.balanceOf(arbiterAddr);
         vm.prank(arbiterAddr);
-        ArbiterRegistryFacet(address(diamond)).withdrawArbiterReward();
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         assertEq(usdc.balanceOf(arbiterAddr) - arbBefore, 4_800_000, "reward must actually reach the arbiter's wallet");
 
         uint256 recipientBefore = usdc.balanceOf(feeRecipient);
-        ArbiterRegistryFacet(address(diamond)).withdrawTreasurySlice();
+        ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
         assertEq(usdc.balanceOf(feeRecipient) - recipientBefore, 1_200_000, "treasury slice must actually reach the fee recipient");
     }
 
@@ -482,7 +492,7 @@ contract DisputeSettlementTest is Test {
 
         // creditDisputeFee is removed from the diamond — imitating a facet upgrade
         // that broke the taking of the fee.
-        _removeSelectorFromDiamond(ArbiterRegistryFacet.creditDisputeFee.selector);
+        _removeSelectorFromDiamond(ArbiterVaultFacet.creditDisputeFee.selector);
 
         uint256 clientBefore  = usdc.balanceOf(client);
         uint256 diamondBefore = usdc.balanceOf(address(diamond));
@@ -498,7 +508,7 @@ contract DisputeSettlementTest is Test {
         assertEq(usdc.balanceOf(client) - clientBefore, 200_000_000, "no fee taken, winner gets the whole pot");
         assertEq(usdc.balanceOf(address(diamond)) - diamondBefore, 0, "not a cent may be stranded on the diamond");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "nothing credited");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
     }
 
     // ============================================================
@@ -529,7 +539,7 @@ contract DisputeSettlementTest is Test {
         // And it cannot be collected yet — but that is a refused payout, not a refused closing.
         vm.prank(arbiterAddr);
         vm.expectRevert();
-        ArbiterRegistryFacet(address(diamond)).withdrawArbiterReward();
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
     }
 
     // ============================================================
@@ -598,7 +608,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), 0, "no treasury slice");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "no treasury slice");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
 
@@ -1291,13 +1301,13 @@ contract DisputeSettlementTest is Test {
     /// The floor defaults to 10 USDC. It is what decides from what deal amount the
     /// service makes any sense at all.
     function testArbiterFloorDefaultsToTen() public view {
-        assertEq(ArbiterRegistryFacet(address(diamond)).getArbiterFloor(), 10_000_000, "default floor is $10");
+        assertEq(ArbiterVaultFacet(address(diamond)).getArbiterFloor(), 10_000_000, "default floor is $10");
     }
 
     function testSetArbiterFloorOnlyOwner() public {
         vm.prank(address(0xBEEF));
         vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
-        ArbiterRegistryFacet(address(diamond)).setArbiterFloor(15_000_000);
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(15_000_000);
     }
 
     function testSetArbiterFloorChangesQuote() public {
@@ -1307,9 +1317,9 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        uint256 before_ = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
-        ArbiterRegistryFacet(address(diamond)).setArbiterFloor(20_000_000);
-        uint256 after_ = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 before_ = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
+        uint256 after_ = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
 
         assertEq(after_ - before_, 10_000_000, "raising the floor by $10 raises the top-up by $10");
     }
@@ -1322,7 +1332,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a)), 7_600_000, "top-up to reach $10");
+        assertEq(ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 7_600_000, "top-up to reach $10");
     }
 
     /// The pot is large enough — the arbiter gets $10 by themselves, so the top-up is
@@ -1334,7 +1344,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a)), 0, "big pot pays the arbiter by itself");
+        assertEq(ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 0, "big pot pays the arbiter by itself");
     }
 
     /// The quote takes the fee FROM THE DEAL rather than recomputing it. The numbers
@@ -1350,11 +1360,11 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        ArbiterRegistryFacet(address(diamond)).setArbiterFloor(450_000_000);
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(450_000_000);
 
         assertEq(a.disputeFee(), 500_000_000, "setup: fee is capped at $500");
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a)),
+            ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)),
             50_000_000,
             "top-up must be computed from the CAPPED fee, not from raw 3%"
         );
@@ -1366,7 +1376,7 @@ contract DisputeSettlementTest is Test {
         a.activate();
 
         vm.expectRevert(ArbiterRegistryFacet.NotDisputed.selector);
-        ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
     }
 
     // -------- THE PAID CALL: PAYMENT AND REFUND --------
@@ -1381,35 +1391,35 @@ contract DisputeSettlementTest is Test {
 
     function testFundDisputePullsExactQuote() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
 
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
         uint256 before_ = usdc.balanceOf(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
 
         assertEq(before_ - usdc.balanceOf(client), need, "exactly the quoted amount is pulled");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), need, "bounty recorded");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), need, "bounty recorded");
     }
 
     function testFundDisputeFromStrangerReverts() public {
         Agreement a = _disputedAgreement(100_000_000);
         vm.prank(address(0xBEEF));
         vm.expectRevert(ArbiterRegistryFacet.NotParty.selector);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
     }
 
     function testFundDisputeTwiceReverts() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need * 2);
         vm.startPrank(client);
         usdc.approve(address(diamond), need * 2);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.expectRevert(ArbiterRegistryFacet.BountyAlreadyFunded.selector);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
     }
 
@@ -1419,7 +1429,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = _disputedAgreement(420_000_000);
         vm.prank(client);
         vm.expectRevert(ArbiterRegistryFacet.TopUpNotNeeded.selector);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
     }
 
     /// After a claim the bait has already done its work: an arbiter took it on, so
@@ -1430,17 +1440,17 @@ contract DisputeSettlementTest is Test {
 
         vm.prank(client);
         vm.expectRevert(ArbiterRegistryFacet.DisputeAlreadyClaimed.selector);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
     }
 
     /// No verdict happened, so the money goes back in full to whoever paid it in.
     function testBountyRefundedOnTimeoutWithoutVerdict() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
 
         vm.prank(executor);
@@ -1452,17 +1462,17 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
 
         assertEq(usdc.balanceOf(client) - before_ - 50_000_000, need, "bounty came back on top of the split half");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared");
     }
 
     /// Refunded exactly once: a repeated clearDisputeClaim does not pay a second time.
     function testBountyRefundHappensOnlyOnce() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
 
         vm.prank(executor);
@@ -1491,11 +1501,11 @@ contract DisputeSettlementTest is Test {
     /// exercises the path that mattered.
     function testBlacklistedPayerDoesNotBreakClaimClearing() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(executor, need);
         vm.startPrank(executor);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         a.respondToDispute();
         vm.stopPrank();
 
@@ -1505,13 +1515,13 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty left the dispute");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor), need, "and became claimable instead");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty left the dispute");
+        assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor), need, "and became claimable instead");
 
         usdc.setBlocked(executor, false);
         uint256 before_ = usdc.balanceOf(executor);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).withdrawDisputeBounty();
+        ArbiterVaultFacet(address(diamond)).withdrawDisputeBounty();
         assertEq(usdc.balanceOf(executor) - before_, need, "payer got it once unblocked");
     }
 
@@ -1522,7 +1532,7 @@ contract DisputeSettlementTest is Test {
     function testWithdrawDisputeBountyRevertsIfNothingOwed() public {
         vm.prank(executor);
         vm.expectRevert(ArbiterRegistryFacet.NoRefundableBounty.selector);
-        ArbiterRegistryFacet(address(diamond)).withdrawDisputeBounty();
+        ArbiterVaultFacet(address(diamond)).withdrawDisputeBounty();
     }
 
     /// The error for withdrawing a top-up and the error for pushing the treasury's
@@ -1546,11 +1556,11 @@ contract DisputeSettlementTest is Test {
     /// call, not a replacement of the whole usdc contract).
     function testShortTokenReplyDoesNotBreakClaimClearing() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(executor, need);
         vm.startPrank(executor);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         a.respondToDispute();
         vm.stopPrank();
 
@@ -1568,8 +1578,8 @@ contract DisputeSettlementTest is Test {
 
         vm.clearMockedCalls();
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty left the dispute");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor), need, "and became claimable instead");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty left the dispute");
+        assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor), need, "and became claimable instead");
     }
 
     // -------- THE PAID CALL: THE PAYOUT --------
@@ -1584,18 +1594,18 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
 
         _claimByArbiter(a);
         _submitAndFinalize(a, true);
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr) >= need, true, "arbiter got at least the bounty");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared after payout");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared after payout");
     }
 
     /// The verdict was overturned by the owner before finalisation — the top-up must
@@ -1611,11 +1621,11 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
 
         _claimByArbiter(a);
@@ -1629,9 +1639,9 @@ contract DisputeSettlementTest is Test {
         vm.warp(block.timestamp + 24 hours + 1); // FINALIZE_DELAY
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(client), need, "bounty went to the payer as claimable");
+        assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(client), need, "bounty went to the payer as claimable");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "overturned arbiter got nothing, including the bounty");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty left the dispute either way");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty left the dispute either way");
     }
 
     /// The flat payout from the vault is no longer credited: the vault is unchanged
@@ -1655,18 +1665,18 @@ contract DisputeSettlementTest is Test {
 
         stdstore
             .target(address(diamond))
-            .sig(ArbiterRegistryFacet.getRewardPerDispute.selector)
+            .sig(ArbiterVaultFacet.getRewardPerDispute.selector)
             .checked_write(5_000_000);
 
         usdc.mint(owner, 5_000_000);
         vm.startPrank(owner);
         usdc.approve(address(diamond), 5_000_000);
-        ArbiterRegistryFacet(address(diamond)).fundVault(5_000_000);
+        ArbiterVaultFacet(address(diamond)).fundVault(5_000_000);
         vm.stopPrank();
 
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
         _submitAndFinalize(a, true);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore, "vault untouched by a resolved dispute");
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "vault untouched by a resolved dispute");
     }
 
     /// setRewardPerDispute no longer writes anything — it reverts unconditionally,
@@ -1675,11 +1685,11 @@ contract DisputeSettlementTest is Test {
     /// pure function.
     function testSetRewardPerDisputeAlwaysReverts() public {
         vm.expectRevert(ArbiterRegistryFacet.RewardPathRetired.selector);
-        ArbiterRegistryFacet(address(diamond)).setRewardPerDispute(5_000_000);
+        ArbiterVaultFacet(address(diamond)).setRewardPerDispute(5_000_000);
 
         vm.prank(address(0xBEEF));
         vm.expectRevert(ArbiterRegistryFacet.RewardPathRetired.selector);
-        ArbiterRegistryFacet(address(diamond)).setRewardPerDispute(1);
+        ArbiterVaultFacet(address(diamond)).setRewardPerDispute(1);
     }
 
     // -------- THE COUNTER OF DISPUTES WITHOUT A VERDICT --------
@@ -1728,12 +1738,12 @@ contract DisputeSettlementTest is Test {
     function testTimeoutAfterClaimRefundsTheBountyAndCountsBoth() public {
         Agreement a = _disputedAgreement(100_000_000);
 
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         assertGt(need, 0, "setup: the pot must be small enough to need a top-up");
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         vm.stopPrank();
 
         // The arbiter takes the dispute and stays silent to the end of the window: there will be no verdict.
@@ -1752,8 +1762,8 @@ contract DisputeSettlementTest is Test {
         // The whole pot to the client, and the top-up on top of it to whoever paid it.
         assertEq(usdc.balanceOf(client) - cBefore, 100_000_000 + need, "whole pot plus the refunded top-up");
         assertEq(usdc.balanceOf(executor) - eBefore, 0, "the claimed branch does not split anything");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(client), 0, "the push refund succeeded, nothing left claimable");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared");
+        assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(client), 0, "the push refund succeeded, nothing left claimable");
 
         assertEq(ReputationFacet(address(diamond)).getUnresolvedDisputes(client), 1, "client counted");
         assertEq(ReputationFacet(address(diamond)).getUnresolvedDisputes(executor), 1, "executor counted");
@@ -1768,7 +1778,7 @@ contract DisputeSettlementTest is Test {
     /// not be lost, but it would be frozen until somebody else acted.
     function testFundDisputeAfterTheWindowReverts() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need);
         vm.prank(client);
         usdc.approve(address(diamond), need);
@@ -1777,9 +1787,9 @@ contract DisputeSettlementTest is Test {
 
         vm.prank(client);
         vm.expectRevert(ArbiterRegistryFacet.DisputeWindowPassed.selector);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "nothing was taken");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "nothing was taken");
     }
 
     /// The boundary is exactly the same as for claimDispute: the last second of the
@@ -1788,7 +1798,7 @@ contract DisputeSettlementTest is Test {
     /// claimed.
     function testFundDisputeOnTheLastSecondMatchesClaimDispute() public {
         Agreement a = _disputedAgreement(100_000_000);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(client, need);
         vm.prank(client);
         usdc.approve(address(diamond), need);
@@ -1797,8 +1807,8 @@ contract DisputeSettlementTest is Test {
         vm.warp(a.disputedAt() + a.DISPUTE_WINDOW());
 
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), need, "top-up accepted on the last second");
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), need, "top-up accepted on the last second");
 
         // ...and a claim on the same second goes through too. Had the gates diverged,
         // one of the two would fail here.
@@ -1906,7 +1916,7 @@ contract DisputeSettlementTest is Test {
     function testFundDisputeThroughForwarderIsPaidByTheHuman() public {
         (Agreement a, address payer, address peer) = _forwardedDispute(100_000_000);
 
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         assertGt(need, 0, "setup: the pot must need a top-up");
         usdc.mint(payer, need);
         vm.prank(payer);
@@ -1916,11 +1926,11 @@ contract DisputeSettlementTest is Test {
 
         (bool ok, bytes memory retdata) = _relayToDiamond(
             PAYER_PK,
-            abi.encodeWithSelector(ArbiterRegistryFacet.fundDispute.selector, address(a))
+            abi.encodeWithSelector(ArbiterVaultFacet.fundDispute.selector, address(a))
         );
         assertTrue(ok, string.concat("forwarded fundDispute() failed: ", vm.toString(retdata)));
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), need, "bounty recorded");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), need, "bounty recorded");
         assertEq(payerBefore - usdc.balanceOf(payer), need, "USDC pulled from the human, not the forwarder");
         assertEq(usdc.balanceOf(address(relayForwarder)), 0, "the forwarder must never hold the deal's money");
 
@@ -1949,19 +1959,19 @@ contract DisputeSettlementTest is Test {
         (Agreement a, , ) = _forwardedDispute(100_000_000);
 
         address outsider = vm.addr(OUTSIDER_PK);
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(outsider, need);
         vm.prank(outsider);
         usdc.approve(address(diamond), need);
 
         (bool ok, bytes memory retdata) = _relayToDiamond(
             OUTSIDER_PK,
-            abi.encodeWithSelector(ArbiterRegistryFacet.fundDispute.selector, address(a))
+            abi.encodeWithSelector(ArbiterVaultFacet.fundDispute.selector, address(a))
         );
 
         assertFalse(ok, "the diamond accepted a forwarded top-up from a non-party");
         assertEq(bytes4(retdata), ArbiterRegistryFacet.NotParty.selector, "wrong revert reason");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0, "nothing was taken");
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "nothing was taken");
     }
 
     /// The second function of the same road. A return through claimable happens when
@@ -1975,7 +1985,7 @@ contract DisputeSettlementTest is Test {
     function testWithdrawDisputeBountyThroughForwarderPaysTheHuman() public {
         (Agreement a, address payer, address peer) = _forwardedDispute(100_000_000);
 
-        uint256 need = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         usdc.mint(peer, need);
         vm.startPrank(peer);
         usdc.approve(address(diamond), need);
@@ -1984,7 +1994,7 @@ contract DisputeSettlementTest is Test {
 
         (bool funded, bytes memory fundRet) = _relayToDiamond(
             PEER_PK,
-            abi.encodeWithSelector(ArbiterRegistryFacet.fundDispute.selector, address(a))
+            abi.encodeWithSelector(ArbiterVaultFacet.fundDispute.selector, address(a))
         );
         assertTrue(funded, string.concat("setup: forwarded fundDispute failed: ", vm.toString(fundRet)));
 
@@ -1997,18 +2007,18 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
         usdc.setBlocked(peer, false);
 
-        uint256 owed = ArbiterRegistryFacet(address(diamond)).getRefundableBounty(peer);
+        uint256 owed = ArbiterVaultFacet(address(diamond)).getRefundableBounty(peer);
         assertEq(owed, need, "the failed push must land on the human's claimable balance");
 
         uint256 before_ = usdc.balanceOf(peer);
         (bool ok, bytes memory retdata) = _relayToDiamond(
             PEER_PK,
-            abi.encodeWithSelector(ArbiterRegistryFacet.withdrawDisputeBounty.selector)
+            abi.encodeWithSelector(ArbiterVaultFacet.withdrawDisputeBounty.selector)
         );
         assertTrue(ok, string.concat("forwarded withdrawDisputeBounty() failed: ", vm.toString(retdata)));
 
         assertEq(usdc.balanceOf(peer) - before_, owed, "the human got his top-up back");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(peer), 0, "claimable cleared");
+        assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(peer), 0, "claimable cleared");
         assertEq(usdc.balanceOf(address(relayForwarder)), 0, "the forwarder must never receive the refund");
     }
 

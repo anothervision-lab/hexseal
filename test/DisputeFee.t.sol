@@ -16,6 +16,7 @@ import "../src/AgreementDeployer.sol";
 import "../src/Agreement.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -89,6 +90,7 @@ contract DisputeFeeTest is Test {
         RegistryFacet registryFacet = new RegistryFacet();
         FactoryFacet  factoryFacet  = new FactoryFacet();
         ArbiterRegistryFacet arbiterFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet arbiterFacetVault = new ArbiterVaultFacet();
 
         // updateStatus is mounted for the sake of Agreement.raiseDispute()'s
         // _updateRegistry(): without it the call is silently swallowed by the
@@ -96,11 +98,17 @@ contract DisputeFeeTest is Test {
         // activePartyPairs stays stuck on ACTIVE — a second agreement between the
         // same client/executor would then hit ActiveDealAlreadyExists even though
         // the first one is already in dispute.
-        bytes4[] memory regSels = new bytes4[](4);
+        bytes4[] memory regSels = new bytes4[](6);
         regSels[0] = RegistryFacet.initRegistry.selector;
         regSels[1] = RegistryFacet.register.selector;
         regSels[2] = RegistryFacet.hasActivePair.selector;
         regSels[3] = RegistryFacet.updateStatus.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[4] = RegistryFacet.registerOffer.selector;
+        regSels[5] = RegistryFacet.notifyOfferAccepted.selector;
 
         bytes4[] memory facSels = new bytes4[](7);
         facSels[0] = FactoryFacet.initFactory.selector;
@@ -118,17 +126,21 @@ contract DisputeFeeTest is Test {
         // real claim on the dispute instead of passing arbiter_ as an argument (no
         // such argument exists in production, see creditDisputeFee), so the tests
         // now drive the agreement to DISPUTED and genuinely claim it as arbiter.
-        bytes4[] memory arbSels = new bytes4[](10);
-        arbSels[0] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        arbSels[1] = ArbiterRegistryFacet.getTreasurySlice.selector;
-        arbSels[2] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        arbSels[3] = ArbiterRegistryFacet.addArbiter.selector;
-        arbSels[4] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbSels[5] = ArbiterRegistryFacet.commitDisputeClaim.selector;
-        arbSels[6] = ArbiterRegistryFacet.claimDispute.selector;
-        arbSels[7] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[8] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[9] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
+        bytes4[] memory arbSels = new bytes4[](5);
+        arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
+        arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
+        arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
+        arbSels[3] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[4] = ArbiterRegistryFacet.overturnVerdict.selector;
+        bytes4[] memory arbSelsVault = new bytes4[](6);
+        arbSelsVault[0] = ArbiterVaultFacet.creditDisputeFee.selector;
+        arbSelsVault[1] = ArbiterVaultFacet.getTreasurySlice.selector;
+        arbSelsVault[2] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        arbSelsVault[3] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbSelsVault[4] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        // Since 17 September 2026 an overturned arbiter's share lands in the
+        // bank, and the scene that says so has to be able to read it.
+        arbSelsVault[5] = ArbiterVaultFacet.getVaultBalance.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -137,13 +149,14 @@ contract DisputeFeeTest is Test {
         bytes4[] memory accSels = new bytes4[](1);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](4);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](5);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, regSels);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet),  IDiamondCut.FacetCutAction.Add, facSels);
         cut[2] = IDiamondCut.FacetCut(address(arbiterFacet),  IDiamondCut.FacetCutAction.Add, arbSels);
         cut[3] = IDiamondCut.FacetCut(
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
+        cut[4] = IDiamondCut.FacetCut(address(arbiterFacetVault),  IDiamondCut.FacetCutAction.Add, arbSelsVault);
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -260,7 +273,7 @@ contract DisputeFeeTest is Test {
         vm.prank(client);
         Agreement(agreement).raiseDispute();
 
-        if (!ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arb)) {
+        if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arb)) {
             ArbiterRegistryFacet(address(diamond)).addArbiter(arb);
             _bondSeat(arb);
         }
@@ -284,7 +297,7 @@ contract DisputeFeeTest is Test {
     function testCreditDisputeFeeRejectsStranger() public {
         vm.prank(address(0xBAD));
         vm.expectRevert(ArbiterRegistryFacet.NotRegisteredAgreement.selector);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
     }
 
     /// Nobody carried the dispute through to a verdict — there is nobody to credit,
@@ -295,7 +308,7 @@ contract DisputeFeeTest is Test {
         vm.startPrank(agreement);
         usdc.transfer(address(diamond), 6_000_000);
         vm.expectRevert(ArbiterRegistryFacet.NoVerdictSubmitted.selector);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
     }
 
@@ -305,7 +318,7 @@ contract DisputeFeeTest is Test {
         address agreement = _createAgreement();
         vm.prank(agreement);
         vm.expectRevert(ArbiterRegistryFacet.ZeroAmount.selector);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(0);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(0);
     }
 
     /// The 80/20 split and both counters — the arbiter really claimed the dispute,
@@ -320,11 +333,11 @@ contract DisputeFeeTest is Test {
         usdc.mint(agreement, 6_000_000);
         vm.startPrank(agreement);
         usdc.transfer(address(diamond), 6_000_000);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 4_800_000, "arbiter 80%");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(),      1_200_000, "treasury 20%");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),      1_200_000, "treasury 20%");
     }
 
     /// The treasury's share is computed by subtraction, so no unit is lost on a
@@ -338,11 +351,11 @@ contract DisputeFeeTest is Test {
         usdc.mint(agreement, 1_000_003);
         vm.startPrank(agreement);
         usdc.transfer(address(diamond), 1_000_003);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(1_000_003);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(1_000_003);
         vm.stopPrank();
 
         uint256 toArb = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb);
-        uint256 toTre = ArbiterRegistryFacet(address(diamond)).getTreasurySlice();
+        uint256 toTre = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
         assertEq(toArb, 800_002, "arbiter share floors");
         assertEq(toArb + toTre, 1_000_003, "parts must sum to the whole");
     }
@@ -359,7 +372,7 @@ contract DisputeFeeTest is Test {
         usdc.mint(agreement1, 6_000_000);
         vm.startPrank(agreement1);
         usdc.transfer(address(diamond), 6_000_000);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
         address agreement2 = _createAgreement();
@@ -367,18 +380,25 @@ contract DisputeFeeTest is Test {
         usdc.mint(agreement2, 1_000_003);
         vm.startPrank(agreement2);
         usdc.transfer(address(diamond), 1_000_003);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(1_000_003);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(1_000_003);
         vm.stopPrank();
 
         // 6_000_000 -> 4_800_000/1_200_000; 1_000_003 -> 800_002/200_001.
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 4_800_000 + 800_002, "arbiter reward must accumulate");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(),      1_200_000 + 200_001, "treasury slice must accumulate");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),      1_200_000 + 200_001, "treasury slice must accumulate");
     }
 
-    /// The verdict was overturned (overturnVerdict) — the arbiter was wrong, there
-    /// will be no reward, and the whole fee goes to the treasury rather than being
-    /// split 80/20.
-    function testCreditDisputeFeeOverturnedSendsEntireFeeToTreasury() public {
+    /// The verdict was overturned (overturnVerdict) — the arbiter was wrong and
+    /// gets nothing. The treasury keeps its ordinary 20% and NOT A CENT MORE;
+    /// the arbiter's forfeited 80% goes to the arbiter bank (17 September 2026,
+    /// the owner's decision, journal item 205). Until that day this test was
+    /// `testCreditDisputeFeeOverturnedSendsEntireFeeToTreasury` and asserted the
+    /// opposite — the whole fee into the treasury slice.
+    ///
+    /// With no appeal behind the overturn there is nothing to pay back, so the
+    /// whole 80% lands in the bank. The appeal branches are in
+    /// test/AppealEconomics.t.sol.
+    function testCreditDisputeFeeOverturnedSendsTheForfeitedShareToTheBankNotTheTreasury() public {
         address agreement = _createAgreement();
         address arb = address(0xA1);
         // _disputeAndClaim already submits a verdict (clientWins=true) — here it is
@@ -386,14 +406,19 @@ contract DisputeFeeTest is Test {
         _disputeAndClaim(agreement, arb);
         ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreement, false);
 
+        uint256 bankBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
         usdc.mint(agreement, 6_000_000);
         vm.startPrank(agreement);
         usdc.transfer(address(diamond), 6_000_000);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "overturned arbiter gets nothing");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(),      6_000_000, "treasury gets the whole fee");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 1_200_000, "the treasury keeps its 20% and no more");
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance() - bankBefore, 4_800_000,
+            "the forfeited 80% goes to the arbiter bank"
+        );
     }
 
     /// End to end: a real (non-diamond) arbiter can actually take the credited
@@ -410,12 +435,12 @@ contract DisputeFeeTest is Test {
         usdc.mint(agreement, 6_000_000);
         vm.startPrank(agreement);
         usdc.transfer(address(diamond), 6_000_000);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
         uint256 before = usdc.balanceOf(arb);
         vm.prank(arb);
-        ArbiterRegistryFacet(address(diamond)).withdrawArbiterReward();
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
 
         assertEq(usdc.balanceOf(arb) - before, 4_800_000, "reward must actually reach the arbiter's wallet");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "counter must be cleared");
@@ -432,23 +457,23 @@ contract DisputeFeeTest is Test {
         usdc.mint(agreement, 6_000_000);
         vm.startPrank(agreement);
         usdc.transfer(address(diamond), 6_000_000);
-        ArbiterRegistryFacet(address(diamond)).creditDisputeFee(6_000_000);
+        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
         address recipient = FactoryFacet(address(diamond)).getFeeRecipient();
         uint256 before = usdc.balanceOf(recipient);
 
         vm.prank(address(0xBEEF));
-        ArbiterRegistryFacet(address(diamond)).withdrawTreasurySlice();
+        ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
 
         assertEq(usdc.balanceOf(recipient) - before, 1_200_000, "slice must reach the fee recipient");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), 0, "counter must be cleared");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "counter must be cleared");
     }
 
     /// Nothing to push — a revert rather than a transfer of zero.
     function testPushTreasurySliceRevertsWhenEmpty() public {
         vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
-        ArbiterRegistryFacet(address(diamond)).withdrawTreasurySlice();
+        ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
     }
 
     /// The bond behind a hand-given seat (8 September 2026).

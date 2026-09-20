@@ -6,11 +6,43 @@ import "@openzeppelin/contracts/utils/Base64.sol";
 // ============================================================
 // DealMetadataFacet — on-chain SVG metadata for Agreement NFTs
 //
-// Agreement.sol calls getDealTokenURI() through the Diamond.
-// That keeps Agreement.sol small, which matters because Agreement is
-// deployed once as the implementation every EIP-1167 clone delegates to,
-// so its runtime bytecode has to fit the 24,576-byte contract size limit
-// on its own.
+// ⚠️ NOTHING CALLS THIS. The line that used to stand here said "Agreement.sol
+// calls getDealTokenURI() through the Diamond", and that stopped being true
+// when Agreement took the picture back inside itself: it carries its own
+// _buildSVG, _buildAttrs and base64 encoder, and tokenURI() never leaves the
+// clone. The sentence outlived the code by a long way, and a second copy of it
+// sat in the project map, which is most of the reason the selector still
+// looked load-bearing.
+//
+// Measured 14 September 2026 against Base Sepolia, diamond 0x760f0736: of the
+// 10 deals the registry has ever recorded, the 4 distinct Agreement
+// implementations behind them, the 6 implementations and 19 AgreementDeployers
+// ever deployed, and the 14 facets mounted today, the only deployed code
+// containing the 4 bytes 0xb6a03ff7 is this facet's own dispatcher. Nothing
+// under frontend/, relayer/, subgraph/ or shared/ names it either.
+//
+// The one real caller that ever existed is out of reach: the FactoryFacet of
+// 1 May 2026 (0xb15de445) embedded an Agreement that genuinely called it, but
+// that belonged to a diamond from before the 25 July 2026 redeploy.
+//
+// ⚠️ UNMOUNTED 14 SEPTEMBER 2026. The owner signed the cut:
+// script/RemoveDealMetadataFacet.s.sol, tx
+// 0xa93b2a4b0235d7c8b5351bcc81cf465fe66592e6ae6f1c10eae1b640dd3e65c7, receipt
+// status 0x1, block 0x2ca11f6. The diamond went 14 facets -> 13 and 240
+// selectors -> 239; facetAddress(0xb6a03ff7) reads back as the zero address.
+//
+// THIS SOURCE FILE STAYS. The contract itself is still deployed and verified at
+// 0xDeF2FEF4bbcE565B3013258B2158Bcd5852df3AF — a Remove unmounts a route, it
+// does not delete code — and frontend/src/lib/tokenUriImage.ts still cites this
+// file for the JSON-prefix format. What changed is that nothing routes to it:
+// script/DeployFull.s.sol no longer mounts it (same commit), so a deployment
+// from scratch no longer resurrects it, and test/DeployFullMatchesChain.t.sol
+// is the arm that reds if it ever comes back.
+//
+// The count of 14 mounted facets in the paragraph above is the measurement AS
+// IT WAS TAKEN, before the cut. It is left as it stands: it is dated, it is
+// what justified the removal, and rewriting a past measurement to match the
+// present is how a record stops being evidence.
 //
 // Status codes (uint8) = Agreement.Status enum:
 //   0=CREATED 1=FUNDED 2=ACTIVE 3=COMPLETED 4=DISPUTED 5=RESOLVED 6=REFUNDED

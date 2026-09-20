@@ -19,12 +19,14 @@ import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract ArbiterClaimCapTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
     /// ArbiterTwoFacetBench). `facet` deliberately keeps its old name: every
     /// vm.store(address(facet), ...) below keeps hitting the very same storage.
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
     ArbiterAccountabilityFacet accFacet;
     address arbiter;
 
@@ -41,7 +43,7 @@ contract ArbiterClaimCapTest is Test, ArbiterTwoFacetBench {
     uint256 constant SLOT_OPEN_CLAIM_COUNT = 13;
 
     function setUp() public {
-        (facet, accFacet) = _deployArbiterBench();
+        (facet, accFacet, facetVault) = _deployArbiterBench();
         arbiter = address(0xA1);
         vm.store(address(facet), keccak256(abi.encode(arbiter, uint256(ARB_BASE))), bytes32(uint256(1)));
         // The bond behind the seat (8 September 2026). Since the bond gate landed,

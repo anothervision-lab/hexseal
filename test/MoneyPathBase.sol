@@ -26,6 +26,7 @@ import "../src/RegistryFacet.sol";
 import "../src/FactoryFacet.sol";
 import "../src/AgreementDeployer.sol";
 import "../src/Agreement.sol";
+import "../src/AgreementRenderer.sol";
 import "../src/JobReceiptFacet.sol";
 import "../src/facets/JobBoardFacet.sol";
 import "../src/facets/ServiceBoardFacet.sol";
@@ -34,6 +35,7 @@ import "../src/facets/ArbiterApplicationsFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import {TreasuryLinkFacet} from "../src/facets/TreasuryLinkFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 // ---------- MOCK USDC ----------
 //
@@ -113,6 +115,13 @@ abstract contract MoneyPathBase is Test {
     string constant TERMS = "terms";
 
     function setUp() public virtual {
+        // The certificate's draughtsman, put where every Agreement compiled
+        // from this checkout looks for it. Etched rather than deployed on
+        // purpose: `new` here would move every later nonce, and with it every
+        // clone address printed on the cards that
+        // test/AgreementCertificateSnapshot.t.sol pins byte for byte.
+        vm.etch(AGREEMENT_RENDERER, type(AgreementRenderer).runtimeCode);
+
         owner        = address(this);
         client       = address(0x1);
         executor     = address(0x2);
@@ -134,11 +143,12 @@ abstract contract MoneyPathBase is Test {
         ServiceBoardFacet    svcFacet        = new ServiceBoardFacet();
         JobReceiptFacet      receiptFacet    = new JobReceiptFacet();
         ArbiterRegistryFacet arbFacet        = new ArbiterRegistryFacet();
+        ArbiterVaultFacet arbFacetVault = new ArbiterVaultFacet();
         ArbiterAccountabilityFacet accFacet  = new ArbiterAccountabilityFacet();
         ReputationFacet      repFacet        = new ReputationFacet();
         TreasuryLinkFacet    linkFacet       = new TreasuryLinkFacet();
 
-        bytes4[] memory regSels = new bytes4[](13);
+        bytes4[] memory regSels = new bytes4[](15);
         regSels[0]  = RegistryFacet.initRegistry.selector;
         regSels[1]  = RegistryFacet.register.selector;
         regSels[2]  = RegistryFacet.updateStatus.selector;
@@ -152,6 +162,12 @@ abstract contract MoneyPathBase is Test {
         regSels[10] = RegistryFacet.totalAgreements.selector;
         regSels[11] = RegistryFacet.authorizedFactory.selector;
         regSels[12] = RegistryFacet.notifyWorkHandedIn.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[13] = RegistryFacet.registerOffer.selector;
+        regSels[14] = RegistryFacet.notifyOfferAccepted.selector;
 
         bytes4[] memory facSels = new bytes4[](18);
         facSels[0]  = FactoryFacet.initFactory.selector;
@@ -210,41 +226,47 @@ abstract contract MoneyPathBase is Test {
         receiptSels[2] = JobReceiptFacet.isJobReceiptBurned.selector;
         receiptSels[3] = JobReceiptFacet.getTokenIdByJobId.selector;
 
-        bytes4[] memory arbSels = new bytes4[](31);
-        arbSels[0]  = ArbiterRegistryFacet.addArbiter.selector;
-        arbSels[1]  = ArbiterRegistryFacet.commitDisputeClaim.selector;
-        arbSels[2]  = ArbiterRegistryFacet.claimDispute.selector;
-        arbSels[3]  = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbSels[4]  = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbSels[5]  = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        arbSels[6]  = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[7]  = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[8]  = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        arbSels[9]  = ArbiterRegistryFacet.fundVault.selector;
-        arbSels[10] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        arbSels[11] = ArbiterRegistryFacet.getVaultBalance.selector;
-        arbSels[12] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        arbSels[13] = ArbiterRegistryFacet.getTreasurySlice.selector;
-        arbSels[14] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        arbSels[15] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        arbSels[16] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbSels[17] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        arbSels[18] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        arbSels[19] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
-        arbSels[20] = ArbiterRegistryFacet.fundDispute.selector;
-        arbSels[21] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        arbSels[22] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        arbSels[23] = ArbiterRegistryFacet.getRefundableBounty.selector;
-        arbSels[24] = ArbiterRegistryFacet.setDisputeDiscount.selector;
-        arbSels[25] = ArbiterRegistryFacet.getDisputeDiscount.selector;
-        arbSels[26] = ArbiterRegistryFacet.overturnVerdict.selector;
-        // The appeal flow. Mounted here because the appeal deposit is a term of
-        // the balance identity below, and a term nothing in this fixture could
-        // ever move is a term nothing in this fixture could ever check.
-        arbSels[27] = ArbiterRegistryFacet.raiseAppeal.selector;
-        arbSels[28] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        arbSels[29] = ArbiterRegistryFacet.resolveAppeal.selector;
-        arbSels[30] = ArbiterRegistryFacet.getAppealVotes.selector;
+        bytes4[] memory arbSels = new bytes4[](11);
+        arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
+        arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
+        arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
+        arbSels[3] = ArbiterRegistryFacet.clearDisputeClaim.selector;
+        arbSels[4] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[5] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbSels[6] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        arbSels[7] = ArbiterRegistryFacet.overturnVerdict.selector;
+        arbSels[8] = ArbiterRegistryFacet.raiseAppeal.selector;
+        arbSels[9] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        arbSels[10] = ArbiterRegistryFacet.resolveAppeal.selector;
+        bytes4[] memory arbSelsVault = new bytes4[](26);
+        arbSelsVault[0] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbSelsVault[1] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        arbSelsVault[2] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        arbSelsVault[3] = ArbiterVaultFacet.fundVault.selector;
+        arbSelsVault[4] = ArbiterVaultFacet.getPendingVerdict.selector;
+        arbSelsVault[5] = ArbiterVaultFacet.getVaultBalance.selector;
+        arbSelsVault[6] = ArbiterVaultFacet.creditDisputeFee.selector;
+        arbSelsVault[7] = ArbiterVaultFacet.getTreasurySlice.selector;
+        arbSelsVault[8] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        arbSelsVault[9] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        arbSelsVault[10] = ArbiterVaultFacet.setArbiterFloor.selector;
+        arbSelsVault[11] = ArbiterVaultFacet.getArbiterFloor.selector;
+        arbSelsVault[12] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
+        arbSelsVault[13] = ArbiterVaultFacet.fundDispute.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.getDisputeBounty.selector;
+        arbSelsVault[15] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        arbSelsVault[16] = ArbiterVaultFacet.getRefundableBounty.selector;
+        arbSelsVault[17] = ArbiterVaultFacet.setDisputeDiscount.selector;
+        arbSelsVault[18] = ArbiterVaultFacet.getDisputeDiscount.selector;
+        arbSelsVault[19] = ArbiterVaultFacet.getAppealVotes.selector;
+        // The appeal economics (17 September 2026): the panel's pull is a
+        // money exit, and its read is a ledger term below.
+        arbSelsVault[20] = ArbiterVaultFacet.withdrawAppealShare.selector;
+        arbSelsVault[21] = ArbiterVaultFacet.getAppealShareOwed.selector;
+        arbSelsVault[22] = ArbiterVaultFacet.getAppealLedger.selector;
+        arbSelsVault[23] = ArbiterVaultFacet.quoteAppealDeposit.selector;
+        arbSelsVault[24] = ArbiterVaultFacet.settleAppealDebts.selector;
+        arbSelsVault[25] = ArbiterVaultFacet.getAppealDebts.selector;
 
         bytes4[] memory accSels = new bytes4[](3);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
@@ -284,7 +306,7 @@ abstract contract MoneyPathBase is Test {
         ownSels[2] = OwnershipFacet.acceptOwnership.selector;
         ownSels[3] = OwnershipFacet.pendingOwner.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](13);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](14);
         cut[0]  = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, regSels);
         cut[1]  = IDiamondCut.FacetCut(address(factoryFacet),  IDiamondCut.FacetCutAction.Add, facSels);
         cut[2]  = IDiamondCut.FacetCut(address(cutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
@@ -298,6 +320,7 @@ abstract contract MoneyPathBase is Test {
         cut[10] = IDiamondCut.FacetCut(address(repFacet),      IDiamondCut.FacetCutAction.Add, repSels);
         cut[11] = IDiamondCut.FacetCut(address(linkFacet),     IDiamondCut.FacetCutAction.Add, linkSels);
         cut[12] = IDiamondCut.FacetCut(address(new ArbiterApplicationsFacet()), IDiamondCut.FacetCutAction.Add, _applicationsSelectors());
+        cut[13] = IDiamondCut.FacetCut(address(arbFacetVault),      IDiamondCut.FacetCutAction.Add, arbSelsVault);
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -348,10 +371,11 @@ abstract contract MoneyPathBase is Test {
     /// stack slot from the via_ir limit, and a fourth memory array there does
     /// not fit.
     function _applicationsSelectors() internal pure returns (bytes4[] memory appSels) {
-        appSels = new bytes4[](3);
+        appSels = new bytes4[](4);
         appSels[0] = ArbiterApplicationsFacet.postArbiterBond.selector;
         appSels[1] = ArbiterApplicationsFacet.isArbiterActive.selector;
         appSels[2] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
+        appSels[3] = ArbiterApplicationsFacet.getBondState.selector;
     }
 
     /// What this fixture's arbiter has locked as his seat bond.
@@ -399,8 +423,8 @@ abstract contract MoneyPathBase is Test {
         }
 
         total += FactoryFacet(address(diamond)).getUndeliveredFees();
-        total += ArbiterRegistryFacet(address(diamond)).getVaultBalance();
-        total += ArbiterRegistryFacet(address(diamond)).getTreasurySlice();
+        total += ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        total += ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
         // ---- the payroll pot (added 4 September 2026) ----
         //
@@ -421,13 +445,13 @@ abstract contract MoneyPathBase is Test {
             address who = _ledgerActors[i];
             total += ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(who);
             total += ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(who);
-            total += ArbiterRegistryFacet(address(diamond)).getRefundableBounty(who);
+            total += ArbiterVaultFacet(address(diamond)).getRefundableBounty(who);
         }
 
         // Per-agreement terms; the caller registers the deals it made.
         for (uint256 i = 0; i < _trackedDeals.length; i++) {
             address deal = _trackedDeals[i];
-            total += ArbiterRegistryFacet(address(diamond)).getDisputeBounty(deal);
+            total += ArbiterVaultFacet(address(diamond)).getDisputeBounty(deal);
 
             // ---- the appeal deposit in flight (added 4 September 2026) ----
             //
@@ -446,8 +470,24 @@ abstract contract MoneyPathBase is Test {
             // one day stops writing the field makes this sum too small, and
             // too small goes red — the fallback would have hidden it.
             ArbiterRegistryStorage.PendingVerdict memory v =
-                ArbiterRegistryFacet(address(diamond)).getPendingVerdict(deal);
+                ArbiterVaultFacet(address(diamond)).getPendingVerdict(deal);
             if (v.appealed && !v.appealResolved) total += v.appealDeposit;
+
+            // ---- the panel's unpulled shares (added 17 September 2026) ----
+            //
+            // A settled appeal with a quorum leaves `voterShare` per voter on
+            // the diamond until each voter pulls it. Summed per (deal, actor)
+            // through the same read a screen uses, for every actor the fixture
+            // knows — a voter the test forgot to track is money this sum does
+            // not see, and too small goes red.
+            //
+            // ⚠️ NOT the ledger's `advanceFromBond` / `advanceFromVault` /
+            // `debt`: the first two are money ALREADY PAID OUT to the
+            // appellant, the third is money that does not exist. Counting any
+            // of them would book what the diamond does not hold.
+            for (uint256 j = 0; j < _ledgerActors.length; j++) {
+                total += ArbiterVaultFacet(address(diamond)).getAppealShareOwed(deal, _ledgerActors[j]);
+            }
         }
     }
 

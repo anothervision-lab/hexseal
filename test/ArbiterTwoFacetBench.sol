@@ -44,6 +44,7 @@ import {DeployFull} from "../script/DeployFull.s.sol";
 import {LegacyPreSplitArbiterFacet} from "./legacy/LegacyPreSplitArbiterFacet.sol";
 import {ArbiterRegistryFacet, ArbiterRegistryStorage} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {
     DiamondProxy,
     DiamondCutFacet,
@@ -58,9 +59,14 @@ abstract contract ArbiterTwoFacetBench {
     /// Deploys a proxy with both arbiter facets and returns two handles TO ONE
     /// AND THE SAME ADDRESS. The caller (the test contract) becomes the owner,
     /// as it was on the old bench after a `vm.store` into the owner slot.
+    /// ⚠️ THREE handles since 16 September 2026, for the same reason there were
+    /// two: the money and the plain reads moved into ArbiterVaultFacet, and a
+    /// namespace is an OFFSET, not an address. A separate `new ArbiterVaultFacet()`
+    /// would answer out of its own empty storage and call the zero an answer.
+    /// All three returned handles point at the proxy.
     function _deployArbiterBench()
         internal
-        returns (ArbiterRegistryFacet reg, ArbiterAccountabilityFacet acc)
+        returns (ArbiterRegistryFacet reg, ArbiterAccountabilityFacet acc, ArbiterVaultFacet vault)
     {
         DeployFull deployFull = new DeployFull();
 
@@ -91,7 +97,7 @@ abstract contract ArbiterTwoFacetBench {
 
         DiamondProxy diamond = new DiamondProxy(address(this), initCuts, address(0), "");
 
-        IDiamondCut.FacetCut[] memory arbCuts = new IDiamondCut.FacetCut[](2);
+        IDiamondCut.FacetCut[] memory arbCuts = new IDiamondCut.FacetCut[](3);
         arbCuts[0] = IDiamondCut.FacetCut(
             address(new ArbiterRegistryFacet()),
             IDiamondCut.FacetCutAction.Add,
@@ -102,10 +108,16 @@ abstract contract ArbiterTwoFacetBench {
             IDiamondCut.FacetCutAction.Add,
             deployFull.arbiterAccountabilityFacetSelectors()
         );
+        arbCuts[2] = IDiamondCut.FacetCut(
+            address(new ArbiterVaultFacet()),
+            IDiamondCut.FacetCutAction.Add,
+            deployFull.arbiterVaultFacetSelectors()
+        );
         IDiamondCut(address(diamond)).diamondCut(arbCuts, address(0), "");
 
-        reg = ArbiterRegistryFacet(address(diamond));
-        acc = ArbiterAccountabilityFacet(address(diamond));
+        reg   = ArbiterRegistryFacet(address(diamond));
+        acc   = ArbiterAccountabilityFacet(address(diamond));
+        vault = ArbiterVaultFacet(address(diamond));
     }
 
     /// Plays out, on a bench of a HISTORICAL cut, what the next cut on chain will

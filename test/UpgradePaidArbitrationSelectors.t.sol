@@ -5,6 +5,9 @@ import "forge-std/Test.sol";
 import "../script/archive/UpgradePaidArbitration.s.sol";
 import "../script/DeployFull.s.sol";
 import "../src/DiamondProxy.sol";
+// DealMetadataFacet used to arrive through DeployFull; it stopped mounting the
+// facet on 14 September 2026, so this rig names its own dependency.
+import "../src/facets/DealMetadataFacet.sol";
 
 /// Anti-drift gate for script/UpgradePaidArbitration.s.sol — same design as
 /// test/UpgradeFeeModelSelectors.t.sol, adapted for a two-facet, Replace+Add
@@ -82,6 +85,21 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
 
     function _abiSelectors(string memory contractName) internal view returns (bytes4[] memory) {
         return _abiSelectors(contractName, contractName);
+    }
+
+    /// The one selector DealMetadataFacet ever answered, written out here
+    /// rather than borrowed from DeployFull.
+    ///
+    /// ⚠️ 14 SEPTEMBER 2026: the owner signed the cut that unmounted this facet
+    /// from the live diamond, and DeployFull stopped mounting it in the same
+    /// commit. This rig is NOT wrong to keep it — it rehearses a cut against a
+    /// diamond shaped the way the chain was AT THAT TIME, and at that time the
+    /// facet was mounted. What it may no longer do is ask DeployFull what that
+    /// shape was: DeployFull describes the chain of today, this rig describes
+    /// the chain of its own moment, and the two have parted company.
+    function _dealMetadataFacetSelectors() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](1);
+        sels[0] = DealMetadataFacet.getDealTokenURI.selector;
     }
 
     function _concat(bytes4[] memory a, bytes4[] memory b) internal pure returns (bytes4[] memory out) {
@@ -224,7 +242,7 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
             deploy.factoryFacetSelectors(),
             deploy.jobBoardFacetSelectors(),
             deploy.serviceBoardFacetSelectors(),
-            deploy.dealMetadataFacetSelectors(),
+            _dealMetadataFacetSelectors(),
             deploy.jobReceiptFacetSelectors(),
             // Changed by this release
             _concat(upgrade.arbiterRegistryFacetReplaceSelectors(), upgrade.arbiterRegistryFacetAddSelectors()),
@@ -274,7 +292,22 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
         // LIVE from DeployFull, so its growth lands in this sum even though this
         // archived script never touched it. The 31 July delivery of 63 is
         // unchanged.
-        assertEq(total, 175, "post-upgrade diamond should route exactly 175 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
+        // 175 -> 179 on 18 September 2026, "an arbiter is not a player in the
+        // market": JobBoardFacet gained three reads (getOpenMarketItems,
+        // pruneClosedApplications, getAppliedJobIds) and RegistryFacet one
+        // (getOpenDealCount). Both are among the nine facets this sum reads LIVE
+        // from DeployFull, so their growth lands here although this archived
+        // script never touched either. The rule those reads belong to mounts
+        // nothing of its own — it lives inside doors that were already routed —
+        // and the 31 July delivery of 63 is unchanged.
+        // 179 -> 183 on 18 September 2026, "a direct hire is an offer": the
+        // deal registry gained registerOffer, notifyOfferAccepted,
+        // syncOfferAcceptance and isOfferPending, and RegistryFacet is one of
+        // the nine read LIVE from DeployFull, so its growth lands here although
+        // this archived script never touched it. The arbiter registry's two new
+        // selectors of the same day (abandonClaim, getAppealPanel) do NOT land
+        // here: that facet's list is this script's own frozen delivery of 63.
+        assertEq(total, 183, "post-upgrade diamond should route exactly 183 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
 
         bytes4[] memory flat = new bytes4[](total);
         uint256 k = 0;

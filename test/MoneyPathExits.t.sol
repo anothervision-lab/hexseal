@@ -10,6 +10,7 @@ pragma solidity ^0.8.20;
 // implementation for life, so anything left in it is left forever.
 
 import "./MoneyPathBase.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract MoneyPathExitsTest is MoneyPathBase {
 
@@ -127,14 +128,14 @@ contract MoneyPathExitsTest is MoneyPathBase {
         assertEq(s.clone_, 0, "clone empty");
         assertEq(s.dia - b.dia, fee, "the fee is on the diamond");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), toArbiter);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getTreasurySlice(), toTreasury);
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), toTreasury);
         assertEq(toArbiter + toTreasury, fee, "the two shares are the whole fee");
         _assertDiamondBalances("after resolve for client");
 
         // And both halves can actually be taken out.
         vm.prank(arbiterAddr);
-        ArbiterRegistryFacet(address(diamond)).withdrawArbiterReward();
-        ArbiterRegistryFacet(address(diamond)).withdrawTreasurySlice();
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
+        ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
         assertEq(usdc.balanceOf(arbiterAddr) - b.arb, toArbiter, "arbiter paid out");
         assertEq(usdc.balanceOf(feeRecipient) - b.fee, toTreasury, "treasury paid out");
         assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond back to nothing beyond the arbiter's bond");

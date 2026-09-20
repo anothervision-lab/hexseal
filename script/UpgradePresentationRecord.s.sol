@@ -12,6 +12,7 @@ import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 // that `.selector` has somewhere to be read from.
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 /// The one selector this ALREADY EXECUTED cut reads through the diamond.
 ///
@@ -120,6 +121,27 @@ contract UpgradePresentationRecord is Script {
     /// 14 August 2026). Declared in the contract; here it is only checked.
     uint256 internal constant EXPECTED_NO_RESPONSE_FLOOR = 24 hours;
 
+    /// The facet this cut deploys. A `virtual` one-liner rather than a bare
+    /// `new` inside run(), and the default is BYTE FOR BYTE what it always was —
+    /// nothing about what this signed cut did has changed.
+    ///
+    /// ⚠️ WHY THE SEAM EXISTS (16 September 2026). ArbiterRegistryFacet was cut
+    /// into it and ArbiterVaultFacet: twenty-eight selectors moved, no signature
+    /// changed. This cut mounts all fifty-nine of them on ONE address, because
+    /// that is what the chain had the day it was signed — and today no single
+    /// production contract implements all fifty-nine, so run()'s own post-flight
+    /// (which reads arbiterFloor, vaultBalance and the roster back through the
+    /// diamond) can no longer be rehearsed against a bare `new
+    /// ArbiterRegistryFacet()`. The rehearsal overrides this one line with a
+    /// double that answers all fifty-nine, and the default path — the one a
+    /// person would actually run — is untouched. That the default really is a
+    /// freshly compiled ArbiterRegistryFacet is asserted by
+    /// test_TheDefaultFacetDeploymentIsThisCheckoutsRegistryFacet, not left as a
+    /// sentence here.
+    function deployRegistryFacet() public virtual returns (address) {
+        return address(new ArbiterRegistryFacet());
+    }
+
     function run() external {
         address diamond = vm.envAddress("DIAMOND_ADDRESS");
         require(diamond != address(0), "DIAMOND_ADDRESS not set");
@@ -148,18 +170,18 @@ contract UpgradePresentationRecord is Script {
 
         // ── The upgrade ───────────────────────────────────────────────────
         vm.startBroadcast();
-        ArbiterRegistryFacet facet = new ArbiterRegistryFacet();
-        IDiamondCut(diamond).diamondCut(buildCuts(address(facet)), address(0), "");
+        address facet = deployRegistryFacet();
+        IDiamondCut(diamond).diamondCut(buildCuts(facet), address(0), "");
         vm.stopBroadcast();
 
-        console.log("ArbiterRegistryFacet:", address(facet));
+        console.log("ArbiterRegistryFacet:", facet);
         console.log("Replace", replaceSels.length, "/ Add", addSels.length);
         console.log("");
 
         // ── Post-flight ───────────────────────────────────────────────────
         console.log("=== Post-flight ===");
-        assertRouted(replaceSels, address(facet), diamond);
-        assertRouted(addSels,     address(facet), diamond);
+        assertRouted(replaceSels, facet, diamond);
+        assertRouted(addSels,     facet, diamond);
         assertFacetHoldsNoSelectors(oldFacet, diamond);
         console.log("Replace/Add -> new facet, old facet emptied.");
 
@@ -272,9 +294,10 @@ contract UpgradePresentationRecord is Script {
     /// than quietly staying at the default.
     function snapshotArbiterStorage(address diamond) public view returns (StorageSnapshot memory s) {
         ArbiterRegistryFacet f = ArbiterRegistryFacet(diamond);
-        s.arbiterCount = f.getArbiters().length;
-        s.vaultBalance = f.getVaultBalance();
-        s.arbiterFloor = f.getArbiterFloor();
+        ArbiterVaultFacet f_v = ArbiterVaultFacet(diamond);
+        s.arbiterCount = f_v.getArbiters().length;
+        s.vaultBalance = f_v.getVaultBalance();
+        s.arbiterFloor = f_v.getArbiterFloor();
     }
 
     /// The three values taken BEFORE and AFTER the cut must match literally —
@@ -329,7 +352,8 @@ contract UpgradePresentationRecord is Script {
     /// separate and rarer case.
     function findArbitersWithPreCutClaims(address diamond) public view returns (address[] memory flagged) {
         ArbiterRegistryFacet f = ArbiterRegistryFacet(diamond);
-        address[] memory arbiters = f.getArbiters();
+        ArbiterVaultFacet f_v = ArbiterVaultFacet(diamond);
+        address[] memory arbiters = f_v.getArbiters();
         IOpenClaimCountProbe claims = IOpenClaimCountProbe(diamond);
 
         uint256 count;
@@ -439,48 +463,48 @@ contract UpgradePresentationRecord is Script {
         sels[19] = ArbiterRegistryFacet.resolveAppeal.selector;
 
         // Rewards
-        sels[20] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        sels[21] = ArbiterRegistryFacet.fundVault.selector;
-        sels[22] = ArbiterRegistryFacet.setRewardPerDispute.selector;
+        sels[20] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[21] = ArbiterVaultFacet.fundVault.selector;
+        sels[22] = ArbiterVaultFacet.setRewardPerDispute.selector;
         sels[23] = ArbiterRegistryFacet.setDAOAddress.selector;
 
         // Views
         sels[24] = ArbiterRegistryFacet.isDaoActive.selector;
         sels[25] = ArbiterRegistryFacet.getMinXPToRegister.selector;
         sels[26] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        sels[27] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        sels[28] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        sels[29] = ArbiterRegistryFacet.getArbiters.selector;
-        sels[30] = ArbiterRegistryFacet.getDisputeClaimer.selector;
+        sels[27] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[28] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[29] = ArbiterVaultFacet.getArbiters.selector;
+        sels[30] = ArbiterVaultFacet.getDisputeClaimer.selector;
         sels[31] = ArbiterAccountabilityFacet.getArbiterDeals.selector;
-        sels[32] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        sels[33] = ArbiterRegistryFacet.getPendingVerdict.selector;
+        sels[32] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[33] = ArbiterVaultFacet.getPendingVerdict.selector;
         sels[34] = ArbiterAccountabilityFacet.getArbiterReward.selector;
-        sels[35] = ArbiterRegistryFacet.getVaultBalance.selector;
-        sels[36] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        sels[37] = ArbiterRegistryFacet.getDAOAddress.selector;
+        sels[35] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[36] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[37] = ArbiterVaultFacet.getDAOAddress.selector;
         sels[38] = ArbiterAccountabilityFacet.getArbiterMistakeStreak.selector;
-        sels[39] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        sels[40] = ArbiterRegistryFacet.getAppealVotes.selector;
-        sels[41] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
+        sels[39] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[40] = ArbiterVaultFacet.getAppealVotes.selector;
+        sels[41] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
         sels[42] = ArbiterAccountabilityFacet.getArbiterBond.selector;
         sels[43] = ArbiterAccountabilityFacet.getOpenClaimCount.selector;
 
         // The dispute fee (3% of the disputed amount) — split 80/20 arbiter/treasury
-        sels[44] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        sels[45] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        sels[46] = ArbiterRegistryFacet.getTreasurySlice.selector;
+        sels[44] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[45] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[46] = ArbiterVaultFacet.getTreasurySlice.selector;
 
         // The paid arbiter call: the floor and the quote for the top-up to it
-        sels[47] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        sels[48] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        sels[49] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
+        sels[47] = ArbiterVaultFacet.setArbiterFloor.selector;
+        sels[48] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[49] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
 
         // The paid arbiter call: payment and the soft refund of the top-up
-        sels[50] = ArbiterRegistryFacet.fundDispute.selector;
-        sels[51] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        sels[52] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        sels[53] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        sels[50] = ArbiterVaultFacet.fundDispute.selector;
+        sels[51] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[52] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[53] = ArbiterVaultFacet.getRefundableBounty.selector;
 
         // The arbiter's chat keys (9 August 2026)
         sels[54] = ArbiterAccountabilityFacet.getArbiterChatKeys.selector;

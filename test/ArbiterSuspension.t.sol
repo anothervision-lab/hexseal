@@ -21,6 +21,7 @@ import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 /// A minimal Agreement mock — only what finalizeVerdict reads and calls (by way
 /// of claimDispute/submitVerdict on the road there): status/disputedAt/
@@ -47,6 +48,7 @@ contract MockAgreementForFinalize {
 contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
     ArbiterAccountabilityFacet acc;
     ArbiterRegistryFacet reg;
+    ArbiterVaultFacet regVault;
 
     address owner;
     address chief;
@@ -68,7 +70,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         // contracts that would give a clean zero and look like an answer. The
         // bench now gives one proxy carrying the code of both facets, as in
         // production.
-        (reg, acc) = _deployArbiterBench();
+        (reg, acc, regVault) = _deployArbiterBench();
 
         owner    = address(this);
         chief    = address(0xC4);
@@ -267,7 +269,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
 
         vm.prank(arbiter);
         reg.resignAsArbiter();
-        assertFalse(reg.isRegisteredArbiter(arbiter), "after the window one may resign");
+        assertFalse(regVault.isRegisteredArbiter(arbiter), "after the window one may resign");
     }
 
     /// The third prohibition checks THE VERDICT'S ARBITER, not whoever calls
@@ -425,7 +427,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         // standing between a person and the pot for all 48 hours of the pause. It is
         // checked by CONSEQUENCE, by the refusal from finalizeVerdict below, and not
         // by reading the field.
-        assertTrue(reg.isRegisteredArbiter(arbiter), "wrong scene: the seat must survive the automatic road");
+        assertTrue(regVault.isRegisteredArbiter(arbiter), "wrong scene: the seat must survive the automatic road");
 
         // The finalisation window has passed — the only thing now standing between a
         // punished arbiter and the pot is the suspension.
@@ -458,7 +460,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         // standing between a person and the pot for all 48 hours of the pause. It is
         // checked by CONSEQUENCE, by the refusal from finalizeVerdict below, and not
         // by reading the field.
-        assertTrue(reg.isRegisteredArbiter(arbiter), "wrong scene: the seat must survive the automatic road");
+        assertTrue(regVault.isRegisteredArbiter(arbiter), "wrong scene: the seat must survive the automatic road");
 
         vm.warp(t0 + 72 hours);
         reg.finalizeVerdict(address(victim));
@@ -659,11 +661,19 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         _storeUint(ARB_BASE, SLOT_OVERTURNED_VERDICTS, arbiter, 511);
         // The cause is a uint8 and does not fit 509/510, so it gets a marker of its
         // own from the same series but within the type's range: 211 matches no real
-        // cause (1..6) and does not fall into the auto-removal range (252..255 =
+        // cause (1..6) and does not fall into the auto-removal range (240..255 =
         // AUTO_REMOVAL_BASE + DemotionPath). The AUTO_REMOVAL_CODE constant that an
         // earlier version of this line referred to no longer exists — a base
         // replaced it; the statement itself did not stop being true, only the
         // reference was a lie.
+        //
+        // ⚠️ The range in that sentence was 252..255 until 18 September 2026, when
+        // the base moved down to 240 to make room for a fifth path. 211 survives the
+        // move — it is still below the floor, in the 7..239 gap that belongs to
+        // nobody — but the margin is now 29 codes and not 41, and a base moved lower
+        // still would swallow this marker and make the field read as an automatic
+        // removal that never happened.
+
         _storeUint(ARB_BASE, SLOT_LAST_REMOVAL_CAUSE, arbiter, 211);
 
         // suspendedUntil goes through a production call rather than a marker: the

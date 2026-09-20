@@ -1307,9 +1307,20 @@ contract ArbiterAccountabilityFacet {
 
         // The permanent half of the record, and the reason
         // chainProposalPath exists at all: the standing card must still tell
-        // the three automatic paths apart — 253 overturn, 254 timeout, 255
-        // appeal — now that the unseating happens two days after the path was
-        // known (that distinction was built into the card on purpose).
+        // the automatic paths apart — 241 overturn, 242 timeout, 243 appeal,
+        // 244 abandoned claim — now that the unseating happens two days after
+        // the path was known (that distinction was built into the card on
+        // purpose).
+        //
+        // ⚠️ THIS LINE IS WHERE THE FIFTH PATH STOPPED THE WHOLE DOOR. With the
+        // base at 252 the range held four codes, and `240 + 4` was `252 + 4` =
+        // 256: a Panic 0x11 inside recordAutomaticRemoval, reverting this
+        // function for exactly the arbiter it was written to unseat — the one
+        // whose third mistake in a row came from abandonClaim. He would have
+        // stayed seated under a charge that could not be executed, and his bond
+        // frozen with him, until the proposal went stale. The base moved to 240
+        // on 18 September 2026 and test/ArbiterDemotionPathCodes.t.sol now
+        // walks every path through this call.
         ArbiterRegistryStorage.recordAutomaticRemoval(d, arbiter, path);
 
         // ⚠️ ArbiterDemoted FIRES HERE AND NOT AT THE THIRD MISTAKE. It says
@@ -2005,16 +2016,27 @@ contract ArbiterAccountabilityFacet {
     /// removed three times.
     ///
     /// `lastRemovalCause` is encoded: 0 — never removed, 1..6 — Cause plus one,
-    /// 252..255 — automatic demotion (no cause, but the path is named:
+    /// 240..255 — automatic demotion (no cause, but the path is named:
     /// AUTO_REMOVAL_BASE + ArbiterRegistryFacet.DemotionPath, that is
-    /// 253 — overturned by the owner, 254 — agreement timeout, 255 — votes on an
-    /// appeal; 252 means "path not named" and is sent by no caller). The
-    /// encoding belongs to ArbiterRegistryStorage, here it is only read.
+    /// 241 — overturned by the owner, 242 — agreement timeout, 243 — votes on an
+    /// appeal, 244 — a dead claim taken off him; 240 means "path not named" and
+    /// is sent by no caller). Codes 7..239 belong to nobody and a reader must
+    /// show them as unknown. The encoding belongs to ArbiterRegistryStorage,
+    /// here it is only read.
     ///
-    /// Three automatic codes rather than one (16 August 2026): the distinction
-    /// between paths was introduced with a dedicated event field, but NOBODY
-    /// reads the events — the card is the only place they are read from, and a
-    /// single code would lose the distinction exactly where it is needed.
+    /// ⚠️ THE BASE MOVED FROM 252 TO 240 ON 18 SEPTEMBER 2026, and any reader
+    /// holding a copy of these numbers had to move with it. At 252 the range
+    /// had four places and the enum had grown to five paths, so the fifth
+    /// encoded to 256 and reverted the removal door instead of being recorded.
+    /// Nothing on the chain carried a cause at the time, so no card changed
+    /// meaning; the next such move would change all of them, which is why the
+    /// range now has eleven spare places and a test that walks it.
+    ///
+    /// A code per path rather than one shared code (16 August 2026): the
+    /// distinction between paths was introduced with a dedicated event field,
+    /// but NOBODY reads the events — the card is the only place they are read
+    /// from, and a single code would lose the distinction exactly where it is
+    /// needed.
     ///
     /// A function's selector does not depend on its return type — widening the
     /// tuple leaves the deployment cascade alone.

@@ -14,7 +14,7 @@ pragma solidity ^0.8.20;
 // HISTORY. On 2026-08-22 this file was written to MEASURE the promise, and
 // it found the promise false for disputed deals: triggerArbiterTimeout, the
 // only exit from DISPUTED, stood behind a bare
-// `IArbiterRegistryFacet(diamond).hasSubmittedVerdict(...)`. A silent diamond
+// `IArbiterVaultFacet(diamond).hasSubmittedVerdict(...)`. A silent diamond
 // meant a stranded pot, for ever, with no rescue function anywhere. The same
 // day the guard was rewritten (Agreement._verdictInFlight / _diamondHasCode)
 // and this file was turned from a description of the hole into the lock on
@@ -66,6 +66,7 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import "../src/facets/ArbiterApplicationsFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -236,7 +237,7 @@ abstract contract DiamondDeathEscrowBase is Test {
         ArbiterRegistryFacet arbiterRegistryFacet = new ArbiterRegistryFacet();
         ReputationFacet      reputationFacet      = new ReputationFacet();
 
-        bytes4[] memory regSels = new bytes4[](13);
+        bytes4[] memory regSels = new bytes4[](15);
         regSels[0]  = RegistryFacet.initRegistry.selector;
         regSels[1]  = RegistryFacet.register.selector;
         regSels[2]  = RegistryFacet.updateStatus.selector;
@@ -250,6 +251,12 @@ abstract contract DiamondDeathEscrowBase is Test {
         regSels[10] = RegistryFacet.totalAgreements.selector;
         regSels[11] = RegistryFacet.authorizedFactory.selector;
         regSels[12] = RegistryFacet.notifyWorkHandedIn.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[13] = RegistryFacet.registerOffer.selector;
+        regSels[14] = RegistryFacet.notifyOfferAccepted.selector;
 
         bytes4[] memory facSels = new bytes4[](14);
         facSels[0]  = FactoryFacet.initFactory.selector;
@@ -267,49 +274,26 @@ abstract contract DiamondDeathEscrowBase is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
 
-        bytes4[] memory arbSels = new bytes4[](42);
-        arbSels[0]  = ArbiterRegistryFacet.setChiefArbiter.selector;
-        arbSels[1]  = ArbiterRegistryFacet.addArbiter.selector;
-        arbSels[2]  = ArbiterRegistryFacet.commitDisputeClaim.selector;
-        arbSels[3]  = ArbiterRegistryFacet.claimDispute.selector;
-        arbSels[4]  = ArbiterRegistryFacet.releaseDisputeClaim.selector;
-        arbSels[5]  = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbSels[6]  = ArbiterRegistryFacet.getChiefArbiter.selector;
-        arbSels[7]  = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbSels[8]  = ArbiterRegistryFacet.getArbiters.selector;
-        arbSels[9]  = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        arbSels[10] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        arbSels[11] = ArbiterRegistryFacet.activateDAO.selector;
-        arbSels[12] = ArbiterRegistryFacet.applyAsArbiter.selector;
-        arbSels[13] = ArbiterRegistryFacet.isDaoActive.selector;
-        arbSels[14] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        arbSels[15] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        arbSels[16] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[17] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[19] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[20] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[21] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        arbSels[22] = ArbiterRegistryFacet.fundVault.selector;
-        arbSels[23] = ArbiterRegistryFacet.setRewardPerDispute.selector;
-        arbSels[24] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[25] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        arbSels[26] = ArbiterRegistryFacet.getVaultBalance.selector;
-        arbSels[27] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        arbSels[28] = ArbiterRegistryFacet.getDAOAddress.selector;
-        arbSels[29] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbSels[30] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        arbSels[31] = ArbiterRegistryFacet.getTreasurySlice.selector;
-        arbSels[32] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        arbSels[33] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        arbSels[34] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbSels[35] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        arbSels[36] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        arbSels[37] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
-        arbSels[38] = ArbiterRegistryFacet.fundDispute.selector;
-        arbSels[39] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        arbSels[40] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        arbSels[41] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        bytes4[] memory arbSels = new bytes4[](19);
+        arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
+        arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
+        arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
+        arbSels[3] = ArbiterRegistryFacet.claimDispute.selector;
+        arbSels[4] = ArbiterRegistryFacet.releaseDisputeClaim.selector;
+        arbSels[5] = ArbiterRegistryFacet.clearDisputeClaim.selector;
+        arbSels[6] = ArbiterRegistryFacet.activateDAO.selector;
+        arbSels[7] = ArbiterRegistryFacet.applyAsArbiter.selector;
+        arbSels[8] = ArbiterRegistryFacet.isDaoActive.selector;
+        arbSels[9] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
+        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[18] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
 
         bytes4[] memory accSels = new bytes4[](3);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterDeals.selector;
@@ -359,6 +343,12 @@ abstract contract DiamondDeathEscrowBase is Test {
         );
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
+
+        // The money and the plain reads (16 September 2026 split): the same
+        // selectors as before, a second address behind them. Mounted by its own
+        // diamondCut rather than as a tenth constructor entry, because the tenth
+        // memory array in this function put via-ir one slot too deep in the stack.
+        _mountArbiterVault();
 
         Agreement agreementImpl = new Agreement();
         AgreementDeployer agDeployer = new AgreementDeployer(address(diamond), address(agreementImpl));
@@ -593,6 +583,40 @@ abstract contract DiamondDeathEscrowBase is Test {
 
     function _facetOf(bytes4 sel) internal view returns (address) {
         return DiamondLoupeFacet(address(diamond)).facetAddress(sel);
+    }
+
+    /// The twenty selectors of ArbiterVaultFacet this bench actually uses.
+    function _mountArbiterVault() private {
+                bytes4[] memory sels = new bytes4[](23);
+        sels[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[2] = ArbiterVaultFacet.getArbiters.selector;
+        sels[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        sels[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[6] = ArbiterVaultFacet.fundVault.selector;
+        sels[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        sels[8] = ArbiterVaultFacet.getPendingVerdict.selector;
+        sels[9] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        sels[12] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[13] = ArbiterVaultFacet.getTreasurySlice.selector;
+        sels[14] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[15] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[16] = ArbiterVaultFacet.setArbiterFloor.selector;
+        sels[17] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[18] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
+        sels[19] = ArbiterVaultFacet.fundDispute.selector;
+        sels[20] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[21] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[22] = ArbiterVaultFacet.getRefundableBounty.selector;
+
+        IDiamondCut.FacetCut[] memory vaultCut = new IDiamondCut.FacetCut[](1);
+        vaultCut[0] = IDiamondCut.FacetCut(
+            address(new ArbiterVaultFacet()), IDiamondCut.FacetCutAction.Add, sels
+        );
+        DiamondCutFacet(address(diamond)).diamondCut(vaultCut, address(0), "");
     }
 
     function _mountOne(address facet, bytes4 sel, IDiamondCut.FacetCutAction action) internal {

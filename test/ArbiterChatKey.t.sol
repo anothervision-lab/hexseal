@@ -7,16 +7,18 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {FactoryStorage} from "../src/FactoryFacet.sol";
 import {MinimalForwarder} from "../src/MinimalForwarder.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract ArbiterChatKeyTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
     /// ArbiterTwoFacetBench). `facet` deliberately keeps its old name: every
     /// vm.store(address(facet), ...) below keeps hitting the very same storage.
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
     ArbiterAccountabilityFacet accFacet;
 
     function setUp() public {
-        (facet, accFacet) = _deployArbiterBench();
+        (facet, accFacet, facetVault) = _deployArbiterBench();
     }
 
     /// No keys — both halves zero. A test of its own, because "there is no key"
@@ -434,7 +436,7 @@ contract ArbiterChatKeyTest is Test, ArbiterTwoFacetBench {
         // `arbiterBond`, pinned by test/StorageLayout.t.sol. No USDC moves —
         // nothing here refunds or forfeits a bond.
         vm.store(address(facet), keccak256(abi.encode(who, uint256(pos) + 12)), bytes32(uint256(50_000_000)));
-        assertTrue(facet.isRegisteredArbiter(who), "failed to seat the arbiter");
+        assertTrue(facetVault.isRegisteredArbiter(who), "failed to seat the arbiter");
     }
 }
 

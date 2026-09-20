@@ -146,7 +146,19 @@ contract UpgradeFeeModelSelectorsTest is Test {
         assertEq(replace.length, 12, "JobBoardFacet: expected 12 Replace selectors");
         assertEq(add.length, 1, "JobBoardFacet: expected 1 Add selector");
         _assertDisjoint(replace, add, "JobBoardFacet");
-        _assertSameSelectorSet(_concat(replace, add), _abiSelectors("JobBoardFacet"), "JobBoardFacet");
+        // The live-ABI comparison was dropped on 18 September 2026, the fourth
+        // time for the fourth facet, for exactly the reason it was dropped from
+        // testArbiterRegistryFacetSelectors() on 31 July, from
+        // testFactoryFacetSelectors() on 25 August and from
+        // testRegistryFacetSelectors() on 31 August: this script was broadcast,
+        // so its lists are a RECORD of the thirteen selectors mounted on
+        // 30 July 2026, and the facet's ABI keeps growing. JobBoardFacet's
+        // growth since is the three reads of "an arbiter is not a player in the
+        // market" — getOpenMarketItems, pruneClosedApplications and
+        // getAppliedJobIds — which belong to the cut that adds them
+        // (script/UpgradeArbiterNotAParty.s.sol) and to
+        // test/DeployFullSelectors.t.sol, not to a July record. Demanding they
+        // be equal would be demanding that the past agree with the present.
     }
 
     function testServiceBoardFacetSelectors() public view {

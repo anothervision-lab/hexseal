@@ -25,15 +25,17 @@ import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract ArbiterChatKeyCircumstancesTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
     /// ArbiterTwoFacetBench). `facet` deliberately keeps its old name: every
     /// vm.store(address(facet), ...) below keeps hitting the very same storage.
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
     ArbiterAccountabilityFacet accFacet;
 
-    function setUp() public { (facet, accFacet) = _deployArbiterBench(); }
+    function setUp() public { (facet, accFacet, facetVault) = _deployArbiterBench(); }
 
     function _makeArbiter(address who) internal {
         bytes32 pos = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
@@ -47,7 +49,7 @@ contract ArbiterChatKeyCircumstancesTest is Test, ArbiterTwoFacetBench {
         // The check is mandatory: with a wrong slot the seating silently fails to
         // take, all five measurements below would start failing on NotArbiter, and
         // they would read as "circumstances checked".
-        assertTrue(facet.isRegisteredArbiter(who), "failed to seat the arbiter");
+        assertTrue(facetVault.isRegisteredArbiter(who), "failed to seat the arbiter");
     }
 
     /// 1. ABANDONED HALFWAY — and this is the costliest of the five cases.

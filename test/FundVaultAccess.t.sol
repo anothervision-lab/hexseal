@@ -15,6 +15,7 @@ import "../src/AgreementDeployer.sol";
 import "../src/Agreement.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -72,6 +73,7 @@ contract FundVaultAccessTest is Test {
         DiamondLoupeFacet    diamondLoupeFacet    = new DiamondLoupeFacet();
         OwnershipFacet       ownershipFacet       = new OwnershipFacet();
         ArbiterRegistryFacet arbiterRegistryFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet arbiterRegistryFacetVault = new ArbiterVaultFacet();
 
         bytes4[] memory facSels = new bytes4[](14);
         facSels[0]  = FactoryFacet.initFactory.selector;
@@ -89,31 +91,32 @@ contract FundVaultAccessTest is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
 
-        bytes4[] memory arbSels = new bytes4[](24);
+        bytes4[] memory arbSels = new bytes4[](16);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[3] = ArbiterRegistryFacet.claimDispute.selector;
         arbSels[4] = ArbiterRegistryFacet.releaseDisputeClaim.selector;
         arbSels[5] = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbSels[6] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        arbSels[7] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbSels[8] = ArbiterRegistryFacet.getArbiters.selector;
-        arbSels[9] = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        arbSels[10] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        arbSels[11] = ArbiterRegistryFacet.activateDAO.selector;
-        arbSels[12] = ArbiterRegistryFacet.applyAsArbiter.selector;
-        arbSels[13] = ArbiterRegistryFacet.isDaoActive.selector;
-        arbSels[14] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        arbSels[15] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        arbSels[16] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[17] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[19] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[20] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[21] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        arbSels[22] = ArbiterRegistryFacet.fundVault.selector;
-        arbSels[23] = ArbiterRegistryFacet.getVaultBalance.selector;
+        arbSels[6] = ArbiterRegistryFacet.activateDAO.selector;
+        arbSels[7] = ArbiterRegistryFacet.applyAsArbiter.selector;
+        arbSels[8] = ArbiterRegistryFacet.isDaoActive.selector;
+        arbSels[9] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
+        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        bytes4[] memory arbSelsVault = new bytes4[](8);
+        arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
+        arbSelsVault[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        arbSelsVault[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        arbSelsVault[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        arbSelsVault[6] = ArbiterVaultFacet.fundVault.selector;
+        arbSelsVault[7] = ArbiterVaultFacet.getVaultBalance.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -138,7 +141,7 @@ contract FundVaultAccessTest is Test {
         ownSels[2] = OwnershipFacet.acceptOwnership.selector;
         ownSels[3] = OwnershipFacet.pendingOwner.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](6);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](7);
         cut[0] = IDiamondCut.FacetCut(address(factoryFacet),         IDiamondCut.FacetCutAction.Add, facSels);
         cut[1] = IDiamondCut.FacetCut(address(diamondCutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
         cut[2] = IDiamondCut.FacetCut(address(diamondLoupeFacet),    IDiamondCut.FacetCutAction.Add, loupeSels);
@@ -147,6 +150,7 @@ contract FundVaultAccessTest is Test {
         cut[5] = IDiamondCut.FacetCut(
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
+        cut[6] = IDiamondCut.FacetCut(address(arbiterRegistryFacetVault), IDiamondCut.FacetCutAction.Add, arbSelsVault);
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -170,11 +174,11 @@ contract FundVaultAccessTest is Test {
         usdc.mint(feeRecipient, 100_000_000);
         vm.startPrank(feeRecipient);
         usdc.approve(address(diamond), 100_000_000);
-        ArbiterRegistryFacet(address(diamond)).fundVault(100_000_000);
+        ArbiterVaultFacet(address(diamond)).fundVault(100_000_000);
         vm.stopPrank();
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(),
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(),
             100_000_000,
             "vault did not receive the fee recipient's funding"
         );
@@ -187,7 +191,7 @@ contract FundVaultAccessTest is Test {
         vm.startPrank(stranger);
         usdc.approve(address(diamond), 100_000_000);
         vm.expectRevert(ArbiterRegistryFacet.NotOwnerOrFeeRecipient.selector);
-        ArbiterRegistryFacet(address(diamond)).fundVault(100_000_000);
+        ArbiterVaultFacet(address(diamond)).fundVault(100_000_000);
         vm.stopPrank();
     }
 
@@ -196,9 +200,9 @@ contract FundVaultAccessTest is Test {
         usdc.mint(owner, 50_000_000);
         vm.startPrank(owner);
         usdc.approve(address(diamond), 50_000_000);
-        ArbiterRegistryFacet(address(diamond)).fundVault(50_000_000);
+        ArbiterVaultFacet(address(diamond)).fundVault(50_000_000);
         vm.stopPrank();
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getVaultBalance(), 50_000_000, "owner funding lost");
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), 50_000_000, "owner funding lost");
     }
 }

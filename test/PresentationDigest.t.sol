@@ -38,12 +38,14 @@ import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {RegistryStorage} from "../src/RegistryFacet.sol";
 import {FactoryStorage} from "../src/FactoryFacet.sol";
 import {MinimalForwarder} from "../src/MinimalForwarder.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
     /// ArbiterTwoFacetBench). `facet` deliberately keeps its old name: every
     /// vm.store(address(facet), ...) below keeps hitting the very same storage.
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
     ArbiterAccountabilityFacet accFacet;
 
     address client;
@@ -70,7 +72,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
     uint256 constant REC_OFFSET_EXECUTOR = 2;
 
     function setUp() public {
-        (facet, accFacet) = _deployArbiterBench();
+        (facet, accFacet, facetVault) = _deployArbiterBench();
 
         client   = address(0xC1);
         executor = address(0xE1);
@@ -435,7 +437,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
         // NotAuthorized.
         vm.prank(stranger);
         vm.expectRevert(ArbiterRegistryFacet.NotParty.selector);
-        facet.fundDispute(agreement);
+        facetVault.fundDispute(agreement);
 
         // (3) the `executor` field. The same call from the executor must pass the
         // party check and stumble FURTHER ON (the mock cannot do disputeFee()).
@@ -443,7 +445,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
         // vm.expectRevert can only do "it reverts with this".
         vm.prank(executor);
         (bool ok, bytes memory ret) = address(facet).call(
-            abi.encodeWithSelector(ArbiterRegistryFacet.fundDispute.selector, agreement)
+            abi.encodeWithSelector(ArbiterVaultFacet.fundDispute.selector, agreement)
         );
         assertFalse(ok, "the scene did not assemble: the mock cannot do disputeFee(), the call must fail");
         assertTrue(ret.length >= 4, "the scene did not assemble: an answer with a reason was expected");
@@ -511,7 +513,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
         // `BondNotPosted`, so a rig that seats one has to fund him too. Slot 12 of
         // the arbiter namespace is `arbiterBond`, pinned by test/StorageLayout.t.sol.
         vm.store(address(facet), keccak256(abi.encode(who, uint256(ARB_BASE) + 12)), bytes32(uint256(50_000_000)));
-        assertTrue(facet.isRegisteredArbiter(who), "failed to seat the arbiter");
+        assertTrue(facetVault.isRegisteredArbiter(who), "failed to seat the arbiter");
     }
 
     /// The offset of trustedForwarder inside FactoryStorage.Layout — 3 slots from

@@ -29,6 +29,7 @@ import "../FactoryFacet.sol"; // for FactoryStorage
 import "../DiamondProxy.sol"; // for OwnershipLib
 
 import "./IFactory.sol";
+import {MarketPresence} from "./MarketPresence.sol"; // "an arbiter is not a party"
 
 // ---------- RECEIPT NFT INTERFACES ----------
 
@@ -115,11 +116,103 @@ library JobBoardStorage {
         // and up live here; generation 0 stays where it has always been.
         mapping(uint256 => mapping(uint256 => address[])) applicantsByGeneration;
         mapping(uint256 => mapping(uint256 => mapping(address => bool))) hasAppliedByGeneration;
+        // ---- appended 18 September 2026: "an arbiter is not a player in the
+        //      market" (the owner's decision of 17 September) ----
+        //
+        // How many of this client's jobs are OPEN right now. Moved by the two
+        // minters (+1) and by the two doors out of OPEN — `acceptApplicant` and
+        // `cancelJob` (-1). It exists because the rule into the arbiter corps
+        // asks "is anything of yours still hanging", and answering that by
+        // walking `clientJobs` would mean walking a list that only grows, at
+        // the cost of whoever has been on the board longest.
+        //
+        // Zero is the truth for every address that has never posted, which is
+        // also the state of a freshly cut diamond — and for the live one it is
+        // NOT: the cut carries a back-fill, because two jobs are OPEN on Base
+        // Sepolia today and a counter that started at zero under them would
+        // both lie to the rule and underflow on the cancel. See
+        // script/MarketPresenceBackfill.sol.
+        mapping(address => uint256) openJobCount;
+        // The job ids this address has applied to, one entry per job, in the
+        // order they were applied for. NOT a count of open applications and not
+        // trustworthy as one: an entry stays behind when the job closes or the
+        // application is withdrawn, because closing a job closes the
+        // applications of everybody else in the same transaction and there is
+        // no bound on how many that is. What the entry is good for is finding
+        // the live truth: `openApplicationsOf` reads the job's status and the
+        // job's own `hasApplied` for each id, so a stale entry costs gas and
+        // never counts.
+        mapping(address => uint256[]) appliedJobIds;
+        // applicant → job id → its position in `appliedJobIds` plus one; zero
+        // means "not listed". It keeps the list free of duplicates when
+        // somebody withdraws and applies for the same job again, and it is what
+        // `pruneClosedApplications` repairs when it removes an entry.
+        mapping(address => mapping(uint256 => uint256)) appliedJobSlot;
     }
 
     function store() internal pure returns (Layout storage s) {
         bytes32 p = POSITION;
         assembly { s.slot := p }
+    }
+
+    // -------- APPLICANT NAMESPACE (see the facet's own note below) --------
+    //
+    // These three live in the LIBRARY rather than in the facet because
+    // `MarketPresence` has to read them too, and two copies of "which
+    // generation owns this job's applicants" is exactly the shape that gives a
+    // rule one answer at the board and another at the door into the corps.
+
+    /// The applicant list of `jobId`, in the generation that job owns.
+    function applicantsOf(Layout storage s, uint256 jobId)
+        internal
+        view
+        returns (address[] storage)
+    {
+        uint256 generation = s.applicantGeneration[jobId];
+        if (generation == 0) return s.applicants[jobId];
+        return s.applicantsByGeneration[jobId][generation];
+    }
+
+    /// The `hasApplied` table of `jobId`, in the generation that job owns.
+    function hasAppliedOf(Layout storage s, uint256 jobId)
+        internal
+        view
+        returns (mapping(address => bool) storage)
+    {
+        uint256 generation = s.applicantGeneration[jobId];
+        if (generation == 0) return s.hasApplied[jobId];
+        return s.hasAppliedByGeneration[jobId][generation];
+    }
+
+    /// Is `who`'s application for `jobId` OPEN — the whole definition, in one
+    /// place: the job still stands, and this person is still on its list.
+    ///
+    /// Both halves are load-bearing. Without the status the application of
+    /// somebody whose job was cancelled would count for ever (a dead end of
+    /// exactly the kind the money paths are written against, only the other way
+    /// round: nothing to unlock, nothing to press, no way into the corps).
+    /// Without `hasApplied` a withdrawal would not be seen at all.
+    function isOpenApplication(Layout storage s, uint256 jobId, address who)
+        internal
+        view
+        returns (bool)
+    {
+        if (s.jobs[jobId].status != JobStatus.OPEN) return false;
+        return hasAppliedOf(s, jobId)[who];
+    }
+
+    /// How many applications of `who` are open right now, read from the live
+    /// truth rather than from a number somebody has to remember to move.
+    ///
+    /// Costs one pass over the index. `pruneClosedApplications` is what keeps
+    /// that index down to the open entries; until somebody presses it the pass
+    /// is longer and the answer is the same.
+    function openApplicationsOf(Layout storage s, address who) internal view returns (uint256 n) {
+        uint256[] storage ids = s.appliedJobIds[who];
+        uint256 len = ids.length;
+        for (uint256 i = 0; i < len; i++) {
+            if (isOpenApplication(s, ids[i], who)) n++;
+        }
     }
 }
 
@@ -264,9 +357,7 @@ contract JobBoardFacet {
         view
         returns (address[] storage)
     {
-        uint256 generation = s.applicantGeneration[jobId];
-        if (generation == 0) return s.applicants[jobId];
-        return s.applicantsByGeneration[jobId][generation];
+        return JobBoardStorage.applicantsOf(s, jobId);
     }
 
     /// The `hasApplied` table of `jobId`, in the generation that job owns.
@@ -279,9 +370,7 @@ contract JobBoardFacet {
         view
         returns (mapping(address => bool) storage)
     {
-        uint256 generation = s.applicantGeneration[jobId];
-        if (generation == 0) return s.hasApplied[jobId];
-        return s.hasAppliedByGeneration[jobId][generation];
+        return JobBoardStorage.hasAppliedOf(s, jobId);
     }
 
     /// Hands the freshly created `jobId` an applicant namespace of its own.
@@ -315,6 +404,13 @@ contract JobBoardFacet {
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
         if (region > 6) revert InvalidRegion();
 
+        // Rule B, on the PARAMETER and not on the sender: this door is pressed
+        // by the relayer and the money is pulled from `client`'s wallet on his
+        // permit signature, so `client` is the person who would become a party
+        // here. Checked before the permit is presented — a refusal then costs
+        // him nothing and leaves his signature unspent.
+        MarketPresence.requireNotBondedArbiter(client);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         uint256 fee = FactoryStorage.quote(fs, amount);
 
@@ -341,6 +437,7 @@ contract JobBoardFacet {
             agreement:      address(0)
         });
         jbs.clientJobs[client].push(jobId);
+        jbs.openJobCount[client]++;
 
         // --- Transfers ---
         _safeTransferFrom(fs.usdc, client, address(this), total);
@@ -374,6 +471,12 @@ contract JobBoardFacet {
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
         if (region > 6) revert InvalidRegion();
 
+        // Rule B: a seat with a bond behind it does not post work. The address
+        // asked is `_msgSender()`, so the answer is about the PERSON on the
+        // gasless path as well — `msg.sender` there is the forwarder, which
+        // holds no seat and would pass every time.
+        MarketPresence.requireNotBondedArbiter(client);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         uint256 fee = FactoryStorage.quote(fs, amount);
 
@@ -396,6 +499,7 @@ contract JobBoardFacet {
             agreement:      address(0)
         });
         s.clientJobs[client].push(jobId);
+        s.openJobCount[client]++;
 
         // --- Transfers ---
         _safeTransferFrom(fs.usdc, client, address(this), amount + fee);
@@ -456,11 +560,28 @@ contract JobBoardFacet {
         if (job.status != JobBoardStorage.JobStatus.OPEN) revert JobNotOpen();
         if (sender == job.client) revert SelfApply();
 
+        // Rule B: applying is how a person becomes the executor of somebody
+        // else's job, so the door is shut for a seat with a bond behind it. The
+        // application itself is also what rule A counts on the way in — the two
+        // halves meet here.
+        MarketPresence.requireNotBondedArbiter(sender);
+
         mapping(address => bool) storage applied = _hasAppliedOf(s, jobId);
         if (applied[sender]) revert AlreadyApplied();
 
         applied[sender] = true;
         _applicantsOf(s, jobId).push(sender);
+
+        // The applicant's own index of job ids, for the rule into the arbiter
+        // corps. Written once per (person, job): a withdrawal leaves the entry
+        // where it is, so applying again for the same job adds nothing and the
+        // count cannot be doubled by a withdraw-and-reapply. What makes the
+        // entry mean "open" is read live in `isOpenApplication`, never stored.
+        if (s.appliedJobSlot[sender][jobId] == 0) {
+            uint256[] storage mine = s.appliedJobIds[sender];
+            mine.push(jobId);
+            s.appliedJobSlot[sender][jobId] = mine.length;
+        }
 
         emit JobApplied(jobId, sender);
     }
@@ -478,9 +599,21 @@ contract JobBoardFacet {
         if (job.status != JobBoardStorage.JobStatus.OPEN) revert JobNotOpen();
         if (!_hasAppliedOf(s, jobId)[executor]) revert NotApplicant();
 
+        // Rule B, BOTH SIDES. This is the line where two people become the two
+        // parties of a deal, and the person pressing is only one of them: an
+        // applicant who took a seat and posted a bond after applying (or whose
+        // application predates the rule) must not be hired by his old
+        // application, and a client who did the same must not hire. Neither can
+        // be locked in by the refusal — the applicant has
+        // `withdrawApplication`, the client has `cancelJob`, and both come back
+        // with every cent the board holds for them.
+        MarketPresence.requireNotBondedArbiter(sender);
+        MarketPresence.requireNotBondedArbiter(executor);
+
         // --- Effects ---
         job.status = JobBoardStorage.JobStatus.ACCEPTED;
         job.chosenExecutor = executor;
+        _closeOpenJob(s, job.client);
 
         // --- Deploy through the Factory ---
         (bool ok, bytes memory ret) = address(this).call(
@@ -542,6 +675,7 @@ contract JobBoardFacet {
 
         // --- Effects ---
         job.status = JobBoardStorage.JobStatus.CANCELLED;
+        _closeOpenJob(s, job.client);
         uint256 refund = s.jobFunds[jobId];
         require(refund > 0, "JobBoard: no funds recorded");
         s.jobFunds[jobId] = 0;
@@ -658,7 +792,108 @@ contract JobBoardFacet {
         }
     }
 
+    /// @notice What this address still has open on the boards and in the
+    ///         registry, by kind — the same six numbers the doors into the
+    ///         arbiter corps refuse with.
+    ///
+    /// The read a screen needs BEFORE anybody presses anything: "you cannot
+    /// take a seat yet, and here is what is in the way". Without it the only
+    /// way to learn the numbers is to press a door and decode its revert, which
+    /// is how the bond screen behaved before 11 September and why it had to be
+    /// fixed.
+    ///
+    /// Answered from ONE place with the doors (`MarketPresence`), so a screen
+    /// that says "you are clear" and a door that refuses cannot both be right.
+    function getOpenMarketItems(address who)
+        external
+        view
+        returns (
+            uint256 jobs,
+            uint256 applications,
+            uint256 services,
+            uint256 requestsSent,
+            uint256 requestsReceived,
+            uint256 deals
+        )
+    {
+        return MarketPresence.openItemsOf(who);
+    }
+
+    /// @notice Drop entries from `who`'s application index that are provably
+    ///         not open applications any more, at most `maxSteps` of them.
+    ///
+    /// The bound on the one count that is a scan. An application closes when
+    /// the job closes — and the job closes for everybody at once, so nothing
+    /// can be charged to the client for the applicants he did not hire. The
+    /// index therefore keeps the closed entries, each costing two cold SLOADs
+    /// on every reading of `openApplicationsOf`, and this is the door that
+    /// removes them.
+    ///
+    /// ⚠️ OPEN TO ANYONE, AND IT HAS TO BE. The person it helps is the one
+    /// about to take a seat; if it were his own call only, a candidate with a
+    /// long history would have to press it himself several times before a door
+    /// that is already refusing him for a reason he cannot read. It cannot be
+    /// used against him either: the only entries it can remove are the ones
+    /// `isOpenApplication` calls closed, which is the same question the rule
+    /// itself asks — removing them changes no count, only the gas of reading
+    /// it. A caller who passes a stranger's address spends his own gas to make
+    /// somebody else's door cheaper.
+    ///
+    /// Walks from the END of the list on purpose: an entry that is removed is
+    /// filled by the last one, and the last one has already been examined and
+    /// kept, so nothing is examined twice and nothing is skipped.
+    function pruneClosedApplications(address who, uint256 maxSteps) external returns (uint256 removed) {
+        JobBoardStorage.Layout storage s = JobBoardStorage.store();
+        uint256[] storage ids = s.appliedJobIds[who];
+
+        uint256 i = ids.length;
+        uint256 steps = 0;
+        while (i > 0 && steps < maxSteps) {
+            i--;
+            steps++;
+
+            uint256 jobId = ids[i];
+            if (JobBoardStorage.isOpenApplication(s, jobId, who)) continue;
+
+            uint256 last = ids.length - 1;
+            if (i != last) {
+                uint256 moved = ids[last];
+                ids[i] = moved;
+                s.appliedJobSlot[who][moved] = i + 1;
+            }
+            ids.pop();
+            // The slot has to go with the entry, or a later application for the
+            // same job would find itself "already listed" and never be counted.
+            delete s.appliedJobSlot[who][jobId];
+            removed++;
+        }
+    }
+
+    /// @notice The job ids `who` has applied for, open and closed alike — the
+    ///         index `openApplicationsOf` reads and `pruneClosedApplications`
+    ///         shortens. A screen asking "which of my applications is in the
+    ///         way" pairs it with `getJob`.
+    function getAppliedJobIds(address who) external view returns (uint256[] memory) {
+        return JobBoardStorage.store().appliedJobIds[who];
+    }
+
     // -------- INTERNAL --------
+
+    /// One job left OPEN, so the client has one less thing hanging.
+    ///
+    /// ⚠️ SATURATING, and for the reason the service board's own counter is
+    /// (`_decrementPendingCount`): jobs posted before this counter existed
+    /// never incremented it, so the first cancel of one of those would read
+    /// zero. A plain `--` there is a Panic(0x11) on `cancelJob` — the client's
+    /// escrow stuck in the diamond with no door left, which is a worse failure
+    /// than an off-by-one in a gate. The cut back-fills the live counters so
+    /// the clamp is never reached in the steady state; it stands as the answer
+    /// to "what if the back-fill missed one", and the answer must not be
+    /// "somebody's money stays here".
+    function _closeOpenJob(JobBoardStorage.Layout storage s, address clientAddr) internal {
+        uint256 c = s.openJobCount[clientAddr];
+        if (c != 0) s.openJobCount[clientAddr] = c - 1;
+    }
 
     function _safeTransferFrom(address token, address from, address to, uint256 amount) internal {
         (bool success, bytes memory data) = token.call(

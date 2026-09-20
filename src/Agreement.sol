@@ -13,6 +13,29 @@ pragma solidity ^0.8.20;
 // by attendance; a dispute that was claimed and left undone goes to the client
 // ============================================================
 
+// The certificate's draughtsman. Imported rather than re-declared as a local
+// interface, and that is a seam decision: the struct crossing this call has
+// eight fields, and two hand-kept copies of it would encode differently the
+// first time one of them gained a field, with nothing to notice. One
+// definition, checked by the compiler on both sides.
+//
+// Importing costs this contract nothing in bytes: no `new`, no
+// `type(...).creationCode`, so the renderer's code never enters Agreement's.
+import {IAgreementRenderer} from "./AgreementRenderer.sol";
+
+// Where the certificate's draughtsman lives.
+//
+// ⚠️ DECLARED AT FILE LEVEL, NOT ONLY INSIDE THE CONTRACT, and not in
+// AgreementRenderer.sol either. Solidity cannot read a contract's constant
+// through the contract's name (`Agreement.RENDERER` does not compile -- solc
+// 0.8.36: "Member not found or not visible after argument-dependent lookup in
+// type(contract Agreement)"), so a test or a script that has to put the
+// renderer where the implementation expects it needs an importable name. And
+// the literal cannot live in the renderer's own file for a reason worth
+// writing down: the address is the CREATE2 hash OF THAT FILE'S BYTECODE, so
+// writing it there would change the very bytes it is derived from.
+address constant AGREEMENT_RENDERER = 0xF856d81cC6aFF41eA807A89B36Fc3D0769648743;
+
 // ---------- MINIMAL ERC721 (no OZ, no dependencies) ----------
 // Why not OZ: this implementation is cloned per deal (EIP-1167), so its size
 // is paid once and is bounded by the 24_576-byte contract limit.
@@ -250,6 +273,16 @@ interface IArbiterRegistryFacet {
     function creditDisputeFee(uint256 total) external;
 }
 
+/// Rule B's one question, asked of ArbiterApplicationsFacet through the
+/// diamond: `state` is 0 NONE, 1 UNPOSTED, 2 SAGGING, 3 WHOLE.
+///
+/// Declared here for its SELECTOR, not to be called through: the read itself
+/// is a raw staticcall (see _holdsArbiterBond), because a high-level call to a
+/// codeless diamond reverts in this frame instead of answering.
+interface IArbiterBondView {
+    function getBondState(address who) external view returns (uint8 state, uint256 bond, uint256 toPost);
+}
+
 /// The protocol fee model, read off the diamond (FactoryStorage.Layout).
 ///
 /// Used by the top-up and by nothing else in this file. The rate is READ every
@@ -277,6 +310,9 @@ interface ISignatureRegistry {
     /// Takes no argument: the registry reads the caller as the deal. See
     /// RegistryFacet.notifyWorkHandedIn.
     function notifyWorkHandedIn() external;
+    /// The named executor accepted. Same shape and same reason as the line
+    /// above. See RegistryFacet.notifyOfferAccepted.
+    function notifyOfferAccepted() external;
 }
 
 interface IArbiterRegistry {
@@ -306,6 +342,44 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     // work, and on a $10 pot it would eat half of it.
     uint256 public constant DISPUTE_FEE_BPS = 300;          // 3% of the pot
     uint256 public constant DISPUTE_FEE_CAP = 500_000_000;  // $500 (6 decimals)
+
+    // -------- THE CERTIFICATE'S DRAUGHTSMAN --------
+    //
+    // Where `tokenURI` goes for the picture. Public so that anyone holding a
+    // clone can read which draughtsman it was born with, without a block
+    // explorer and without trusting a document.
+    //
+    // ⚠️ A CONSTANT, NOT AN IMMUTABLE, AND NOT A STORAGE SLOT. Three roads
+    // were open and two of them cost more than they look:
+    //
+    //   * an immutable set when the implementation is deployed -- measured
+    //     with solc 0.8.36: `type(C).runtimeCode` is a COMPILE ERROR for any
+    //     contract holding one. Four upgrade scripts and four tests use
+    //     `type(Agreement).runtimeCode` to prove the implementation on chain
+    //     is byte-for-byte what this checkout compiles, and one of them,
+    //     `implementationHeadroom()`, is a `view` that could not deploy a twin
+    //     to measure instead. That proof would have been deleted repo-wide.
+    //   * a field in the clone's storage, written by initialize() -- one cold
+    //     SSTORE on every deal for a value identical in all of them, and a
+    //     move in a layout EIP-1167 clones share.
+    //
+    // So the address is fixed at compile time, and the renderer is deployed
+    // through the canonical CREATE2 deployer: the same bytes and the same salt
+    // land on the same address on every chain, so this literal is checkable by
+    // anyone who compiles this checkout, not a number to be taken on trust.
+    // test/AgreementRendererWiring.t.sol is what holds the two together.
+    // CREATE2 through 0x4e59b44847b379578588920cA78FbF26c0B4956C with salt
+    // keccak256("hexseal.agreement.renderer.v2"). Recomputable from this
+    // checkout alone; the arithmetic is in test/AgreementRendererWiring.t.sol.
+    //
+    // ⚠️ THE SALT MOVED TO v2 ON 20 SEPTEMBER 2026, and a new salt is not
+    // cosmetics. The renderer that draws the pot is DIFFERENT CODE, so it
+    // lands on a different CREATE2 address whatever the salt; the salt is
+    // bumped with it so the two deployments are two named things rather than
+    // one name with two meanings. The v1 renderer stays on chain for ever:
+    // ten clones born before this change read their picture out of it, and
+    // nothing can move them.
+    address public constant RENDERER = AGREEMENT_RENDERER;
 
     // -------- DIAMOND VIEW BUDGET --------
     //
@@ -343,6 +417,31 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     // surrounding opcodes).
     uint256 private constant VERDICT_VIEW_GAS_FLOOR =
         VERDICT_VIEW_GAS + VERDICT_VIEW_GAS / 63 + 8_000;
+
+    // -------- RULE B BUDGET --------
+    //
+    // The second diamond view that decides something: whether the man pressing
+    // activate() is an arbiter holding a bond. Same shape and same number as
+    // the verdict read, for the same reason -- an uncapped read in front of a
+    // decision hands a broken facet 63/64 of the transaction.
+    //
+    // The floor matters MORE here than anywhere else in this file, because a
+    // read that cannot be answered is tolerated below: without the floor, the
+    // executor picks a gas limit that starves his own check and walks through
+    // a rule that just said nothing. With it, "unanswerable" can only mean a
+    // diamond that does not carry the rule, never one the caller silenced.
+    uint256 private constant BOND_VIEW_GAS = 100_000;
+    uint256 private constant BOND_VIEW_GAS_FLOOR =
+        BOND_VIEW_GAS + BOND_VIEW_GAS / 63 + 8_000;
+
+    // ArbiterApplicationsFacet's bond states: 0 NONE, 1 UNPOSTED, 2 SAGGING,
+    // 3 WHOLE. "Holds a bond" is 2 and up, and the boundary is not a guess: a
+    // SAGGING seat is one a won appeal drew to zero, and rule B binds it
+    // exactly as it binds a whole one (MarketPresence.holdsBond reads
+    // `arbiterBond != 0 || bondDrawnByAppeal`). An UNPOSTED seat trades
+    // freely and must keep trading -- that is what lets a candidate sit in the
+    // corps' waiting room without losing his living.
+    uint8 private constant BOND_STATE_SAGGING = 2;
 
     // -------- DIAMOND WRITE BUDGETS --------
     //
@@ -676,6 +775,24 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// Appended at the END of the layout; see undeliveredRefund.
     uint256 public pendingExtraFeeTotal;
 
+    /// How many top-ups the executor has ACCEPTED. Counted, never derived.
+    ///
+    /// Why a counter and not a walk over `0..nextExtraId`: the only reader is
+    /// `tokenURI`, and a loop there would be an UNBOUNDED loop in front of the
+    /// one thing about a deal that has to keep working when everything else
+    /// stops. Nothing caps how many proposals a deal may carry, and a
+    /// certificate that stops rendering past some number of them reads to a
+    /// human as "this deal has no NFT" rather than as "this read ran out of
+    /// gas" — exactly the failure `_escapeJson` and `_escapeUri` were written
+    /// against, arrived at from a third direction. `extrasTotal` next to it
+    /// exists for the same reason and says so.
+    ///
+    /// It only ever goes up: ACCEPTED is terminal — `acceptExtra`,
+    /// `rejectExtra` and `withdrawExtra` all refuse anything but PENDING.
+    ///
+    /// Appended at the END of the layout; see undeliveredRefund.
+    uint256 public acceptedExtrasCount;
+
     // -------- STATUS ENUM --------
 
     enum Status {
@@ -718,6 +835,13 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     event DisputeFeeDeferred(uint256 amount);
     event DisputeFeeWithdrawn(uint256 amount);
     event TimedOut(address indexed client, uint256 amount);
+    /// The named executor refused the deal before it started, and the escrow
+    /// went straight back to the client (18 September 2026). Emitted NEXT TO
+    /// `TimedOut`, never instead of it — see `_refundBeforeStart`. It carries
+    /// nothing but the man who refused, because the money statement is in
+    /// `TimedOut` on the same transaction and two copies of one number are two
+    /// numbers.
+    event OfferDeclined(address indexed executor);
     event ArbiterTimedOut(address indexed client, uint256 amount);
     /// The dispute closed without a verdict because nobody took it on.
     /// Either figure is zero if that side's half could not be delivered.
@@ -795,6 +919,15 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     error ActivationWindowPassed();
     error ArbiterWindowNotPassed();
     error VerdictInFlight();
+    /// Rule B, refused at the activation door: a seat holding a bond may not
+    /// become a party to a trade.
+    ///
+    /// ⚠️ THE SAME NAME AND THE SAME ARGUMENT AS `MarketPresence
+    /// .ArbiterCannotBeAParty`, and therefore the same four bytes on the wire.
+    /// Deliberate: it is one rule with twelve doors, eleven of them in the
+    /// diamond, and a reader that already knows how to show the refusal from a
+    /// board does not have to learn a second name to show it from a clone.
+    error ArbiterCannotBeAParty(address who);
     /// Raised when triggerArbiterTimeout is called with too little gas to hand
     /// the verdict read its full budget. See VERDICT_VIEW_GAS_FLOOR.
     error NotEnoughGasForVerdictCheck();
@@ -1012,7 +1145,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// shows this figure BEFORE a dispute is opened: without it a user learns of
     /// the fee only when less money arrives than expected.
     function disputeFee() public view returns (uint256) {
-        uint256 pot = amount + extrasTotal;
+        uint256 pot = _pot();
         uint256 fee = (pot * DISPUTE_FEE_BPS) / 10_000;
         return fee > DISPUTE_FEE_CAP ? DISPUTE_FEE_CAP : fee;
     }
@@ -1081,9 +1214,61 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // If the activation window has passed — the executor missed it, triggerActivationTimeout is the way out
         if (block.timestamp > _fundedAt + ACTIVATION_WINDOW) revert ActivationWindowPassed();
 
+        // ⚠️ RULE B, ASKED HERE AND NOWHERE ELSE IN THIS FILE: a seat holding a
+        // bond may not BECOME a party to a trade.
+        //
+        // The other eleven doors of this rule stand in the diamond, where a
+        // person is NAMED as a party. This one has to stand in the clone,
+        // because since 18 September 2026 being named is no longer the moment
+        // he becomes one: a direct hire is an offer, the named man's record
+        // stays clean until he accepts, and accepting is this function. So a
+        // candidate could take a seat and post a bond while an offer hung on
+        // him — which the registry now permits ON PURPOSE, so that a stranger
+        // cannot shut him out of the corps — and then press this door himself
+        // and be a bonded arbiter with a live deal of his own.
+        //
+        // ⚠️ IT CANNOT RIDE ON THE ANNOUNCEMENT BELOW. That call is capped and
+        // wrapped in try/catch: a refusal thrown there is swallowed and the
+        // activation proceeds, which is a rule in name only. A check has to be
+        // able to say no out loud, so this is a read of its own, taken before
+        // the state write.
+        if (_holdsArbiterBond(sender)) revert ArbiterCannotBeAParty(sender);
+
         _activatedAt = _now40();
 
         emit Activated(executor);
+
+        // ANNOUNCED ON THE DIAMOND TOO, and on the direct hire this is not a
+        // notification but the moment a rule takes effect: a deal the executor
+        // was merely NAMED in is on the client's record only, and it joins the
+        // executor's on this line (RegistryFacet.notifyOfferAccepted, item 3 of
+        // the owner's decisions of 18 September 2026). Without it the doors
+        // into the arbiter corps would let a man with a live deal judge.
+        //
+        // TOLERATED AND CAPPED, like every other notify in this file, and the
+        // argument at `markDone` applies here word for word: a clone is nailed
+        // to its implementation for life, so a hard call would mean a diamond
+        // without this selector leaves the executor unable to START WORK at
+        // all, on every clone born from this implementation. What is at stake
+        // if the call fails is a counter; what would be at stake if it reverted
+        // is the deal.
+        //
+        // ⚠️ WHAT A FAILURE COSTS, said plainly rather than left to the word
+        // "tolerated": the deal is live and the executor's own record does not
+        // show it, so between this block and the deal's end he could pass rule
+        // A and take a seat while holding it. That is the one drift this device
+        // has. The bound on it is that the same announcement is idempotent and
+        // pressable again from the registry's side, and that the road it lives
+        // on is the one the diamond itself created two days earlier — a diamond
+        // that cannot answer here is a diamond that could not have sold the
+        // offer either.
+        //
+        // Last, after the state write and after the clone's own event, so a
+        // diamond that tried to re-enter would find _activatedAt already set
+        // and be refused by AlreadyActive.
+        if (_diamondHasCode()) {
+            try ISignatureRegistry(diamond).notifyOfferAccepted{gas: HANDOFF_NOTIFY_GAS}() {} catch {}
+        }
     }
 
     /// @notice The executor signals that the work is finished
@@ -1152,7 +1337,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         if (block.timestamp >= _markedDoneAt + AUTO_APPROVE_WINDOW) revert WindowAlreadyPassed();
 
         _settlePending();
-        uint256 payout = amount + extrasTotal;
+        uint256 payout = _pot();
 
         _complete(Status.COMPLETED);
         // Soft, like every other payment this contract makes. A hard transfer
@@ -1175,7 +1360,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         if (block.timestamp < _markedDoneAt + AUTO_APPROVE_WINDOW) revert WindowNotPassed();
 
         _settlePending();
-        uint256 payout = amount + extrasTotal;
+        uint256 payout = _pot();
 
         _complete(Status.COMPLETED);
         // Soft for the same reason as release() above, and it matters more
@@ -1279,7 +1464,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         _clientWonDispute = clientWins;
 
         _settlePending();
-        uint256 pot = amount + extrasTotal;
+        uint256 pot = _pot();
 
         // A failed credit is TOLERATED: otherwise a broken or unmounted
         // selector on the diamond would make the dispute unclosable, and the
@@ -1383,12 +1568,71 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
 
     /// @notice Activation timeout — the executor did not confirm within ACTIVATION_WINDOW
     /// Refund to the client
-    function triggerActivationTimeout() external nonReentrant {
+    function triggerActivationTimeout() external {
+        _refundBeforeStart(true);
+    }
+
+    /// @notice The named executor says no. The escrow goes back to the client
+    ///         in this block — he does not wait out ACTIVATION_WINDOW.
+    ///
+    /// ── WHY THIS EXISTS (the owner's decision of 18 September 2026) ────────
+    /// A direct hire NAMES its executor: nobody asks him, and until now his
+    /// only answer was silence for two days. That silence cost him — it is
+    /// booked as an executor fault, and since 17 September an unfinished deal
+    /// also shuts the doors into the arbiter corps. So a stranger could park a
+    /// funded deal on a candidate and take two days of his life with it. A
+    /// direct hire is now an offer, and an offer one can refuse out loud.
+    ///
+    /// ── WHAT IT DOES NOT CHOOSE ───────────────────────────────────────────
+    /// The money goes exactly where the activation timeout would have sent it:
+    /// all of it back to the client, who is its owner while nothing has
+    /// started. Nothing about the split depends on who pressed or when, so
+    /// there is nothing here to game — it is the same outcome, sooner.
+    ///
+    /// ── AND WHAT IT DOES NOT COST HIM ─────────────────────────────────────
+    /// No executor fault is booked. Answering "no" the same day is the
+    /// opposite of the thing the fault exists to record, which is a man who
+    /// held somebody's money hostage by not answering at all. The timeout
+    /// keeps booking it, unchanged.
+    ///
+    /// ⚠️ AVAILABLE ON EVERY ROAD, not only the direct hire, and that is a
+    /// deliberate superset. The clone cannot tell which road it was born on
+    /// without asking the diamond, and asking would mean an unreachable
+    /// diamond can block a refusal. On a board road the executor had already
+    /// applied, so his refusal is the same event the client would have got two
+    /// days later by timeout — the same money to the same person, with the
+    /// client's own escrow freed sooner. No outcome exists here that did not
+    /// exist before.
+    function declineOffer() external {
+        _refundBeforeStart(false);
+    }
+
+    /// The one exit a funded, unstarted deal has, and the two doors that press
+    /// it. `asTimeout` is the whole difference between them and it carries
+    /// every half of that difference on purpose, because they are one fact:
+    /// the press is either the CLIENT'S remedy against silence — so it is open
+    /// to both parties, waits out the window, and books the silence against the
+    /// executor — or it is the EXECUTOR'S own answer, which is his alone, waits
+    /// for nothing and books nothing against him.
+    ///
+    /// ⚠️ THE GUARD AND THE SENDER LIVE HERE AND NOT ON THE TWO DOORS, which is
+    /// unusual in this file and is a size decision, measured rather than
+    /// guessed: `nonReentrant` and `_msgSender()` both inline into every
+    /// function that carries them, and Agreement is the one contract in this
+    /// repository that cannot be split when it hits the EIP-170 wall — it is a
+    /// clone reference, not a facet. Both still stand in front of every
+    /// external call and every state write, so what moved is where the bytes
+    /// are, not when the check happens.
+    function _refundBeforeStart(bool asTimeout) private nonReentrant {
         address sender = _msgSender();
-        if (sender != client && sender != executor) revert NotParty();
+        if (asTimeout) {
+            if (sender != client && sender != executor) revert NotParty();
+        } else if (sender != executor) {
+            revert NotExecutor();
+        }
         if (_fundedAt == 0) revert NotFunded();
         if (_activatedAt != 0) revert AlreadyActive();
-        if (block.timestamp <= _fundedAt + ACTIVATION_WINDOW) revert WindowNotPassed();
+        if (asTimeout && block.timestamp <= _fundedAt + ACTIVATION_WINDOW) revert WindowNotPassed();
 
         uint256 payout = amount;
 
@@ -1401,11 +1645,19 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // cancelled it forever.
         uint256 clientPaid = _payClient(payout) ? payout : 0;
 
-        if (_diamondHasCode()) {
+        if (asTimeout && _diamondHasCode()) {
             try IReputationFacet(diamond).notifyExecutorFault{gas: FAULT_NOTIFY_GAS}(address(this)) {} catch {}
         }
 
+        // ⚠️ `TimedOut` IS EMITTED ON BOTH ROADS, and on the refusal it is the
+        // weaker half of a pair rather than a lie left standing. Every reader
+        // that exists today — the deal screen, the card, the subgraph — learns
+        // that a funded deal ended with the client paid from THIS log, and a
+        // refusal that emitted only its own new event would be invisible to all
+        // of them until each is taught the new name. So the money statement
+        // keeps its old name, and what actually happened is said next to it.
         emit TimedOut(client, clientPaid);
+        if (!asTimeout) emit OfferDeclined(executor);
     }
 
     /// @notice Deadline timeout — the executor did not deliver within the agreed days
@@ -1420,7 +1672,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         if (block.timestamp <= _deadlineAt() + DEADLINE_GRACE) revert DeadlineNotPassed();
 
         _settlePending();
-        uint256 payout = amount + extrasTotal;
+        uint256 payout = _pot();
 
         _complete(Status.REFUNDED);
         // Soft, and the same argument as the activation timeout above: the
@@ -1468,7 +1720,7 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         if (_verdictInFlight()) revert VerdictInFlight();
 
         _settlePending();
-        uint256 pot = amount + extrasTotal;
+        uint256 pot = _pot();
 
         // Two different events are told apart, and the signal is free: the
         // arbiter field is zero until the dispute is taken on. It holds exactly
@@ -1725,6 +1977,11 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         e.status = ExtraStatus.ACCEPTED;
         pendingExtrasTotal -= e.amount;
         extrasTotal += e.amount;
+        // Written in the same three lines that move the money, and not in a
+        // second place that could be forgotten: this counter and `extrasTotal`
+        // are one fact about one act, and the certificate prints them side by
+        // side.
+        acceptedExtrasCount++;
 
         uint256 fee = extraFee[extraId];
         if (fee > 0) {
@@ -1877,6 +2134,27 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     }
 
     function totalPayout() external view returns (uint256) {
+        return _pot();
+    }
+
+    /// WHAT THE ESCROW HOLDS FOR THE WORK: the signed amount plus every
+    /// top-up the executor has ACCEPTED.
+    ///
+    /// ⚠️ ONE DEFINITION, AND THAT IS THE POINT OF THE FUNCTION. This sum was
+    /// written out seven times in this file — in `release`, `triggerAutoApprove`,
+    /// `resolveDispute`, `triggerDeadlineTimeout`, the no-verdict split,
+    /// `disputeFee` and `totalPayout` — and on 20 September 2026 an eighth
+    /// reader arrived: the certificate. Eight copies of one rule is eight
+    /// places for it to drift, and a drift here is either money paid twice or
+    /// a card that tells a deal's two parties different numbers. Every one of
+    /// them now reads this line.
+    ///
+    /// ⚠️ `pendingExtrasTotal` IS NOT IN IT. A proposal the executor has not
+    /// accepted is still the client's money: `_settlePending` hands it back on
+    /// the way out of every exit. Adding it here would promise the executor
+    /// money that leaves in the same transaction, and would print, as the
+    /// escrow's contents, a figure nobody can be paid.
+    function _pot() private view returns (uint256) {
         return amount + extrasTotal;
     }
 
@@ -1928,370 +2206,59 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
 
     // -------- NFT METADATA --------
 
+    /// @notice The deal's certificate, as a wallet reads it.
+    ///
+    /// ⚠️ THE PICTURE IS NOT DRAWN HERE, AND THAT IS THE POINT. Until
+    /// 18 September 2026 this clone carried its own SVG, its own four escaping
+    /// layers and its own base64 encoder -- 5 500 bytes of the 24 576 a
+    /// contract is allowed, in the ONE contract of this repository that cannot
+    /// be split into facets, because EIP-1167 clones are nailed to it. The
+    /// drawing moved to src/AgreementRenderer.sol whole; what is left here is
+    /// the part that needs this clone's storage.
+    ///
+    /// ⚠️ THE RENDERER IS NOT REACHED THROUGH THE DIAMOND, ON PURPOSE. Its
+    /// address is a constant of this implementation's code, so reading a
+    /// certificate cannot be stopped by a cut, an unmounted selector or a
+    /// reverting facet. A clone asking the diamond where to find its
+    /// draughtsman would be handing the diamond a veto over what a finished
+    /// deal looks like forever.
+    ///
+    /// The refusal below is not decoration either: a staticcall to an address
+    /// with no code SUCCEEDS in the EVM and returns nothing, so without it a
+    /// wrong or undeployed renderer would read as a token whose metadata is
+    /// empty rather than as a broken deployment.
     function tokenURI(uint256 tokenId) external view returns (string memory) {
         require(
             (tokenId == TOKEN_ID || tokenId == EXECUTOR_TOKEN_ID) && _exists(tokenId),
             "Agreement: token not exists"
         );
-        Status s = status();
-        string memory img = string(abi.encodePacked(
-            "data:image/svg+xml;base64,",
-            _base64Encode(bytes(_buildSVG(s)))
-        ));
-        return string(abi.encodePacked(
-            'data:application/json;utf8,{"name":"HSEAL Deal ',
-            _shortAddr(address(this)),
-            '","description":"Escrow: ',
-            _shortAddr(client), ' -> ', _shortAddr(executor),
-            '","image":"', img,
-            '","attributes":[', _buildAttrs(s), ']}'
-        ));
-    }
-
-    function _buildAttrs(Status s) private view returns (string memory) {
-        return string(abi.encodePacked(
-            '{"trait_type":"Status","value":"',       _statusStr(s),           '"},'
-            '{"trait_type":"Amount USDC","value":"',   _uint2str(amount / 1e6), '"},'
-            '{"trait_type":"Deadline Days","value":"', _uint2str(_deadlineDays), '"},'
-            '{"trait_type":"Client","value":"',        _toHex(client),          '"},'
-            '{"trait_type":"Executor","value":"',      _toHex(executor),        '"},'
-            '{"trait_type":"Arbiter","value":"',       _toHex(arbiter),         '"},'
-            // Layers 1, 2 and 4, in that order and only in that order: the
-            // percent pass runs LAST, over finished JSON, because what it is
-            // quoting for is the address the finished JSON travels inside.
-            '{"trait_type":"Terms","value":"',
-                _escapeUri(_escapeJson(_truncateStr(terms, 200))), '"}'
-        ));
-    }
-
-    function _buildSVG(Status s) private view returns (string memory) {
-        string memory col = _statusColor(s);
-        string memory st  = _statusStr(s);
-        return string(abi.encodePacked(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="520" viewBox="0 0 400 520">',
-            '<style>text{font-family:monospace}.lb{font-size:9px;fill:#555;letter-spacing:1}.v{font-size:12px;fill:#ccc}.vl{font-size:13px;fill:#fff}.hd{font-size:11px}.c{text-anchor:middle}line{stroke:#1e1e1e;stroke-width:1}</style>',
-            '<rect width="400" height="520" fill="#0d0d0d"/>',
-            '<rect x="0" y="0" width="400" height="3" fill="', col, '"/>',
-            '<text x="32" y="44" class="hd" fill="#555">DEAL AGREEMENT</text>',
-            '<text x="368" y="44" class="hd" fill="#333" text-anchor="end">HSEAL</text>',
-            '<text x="32" y="66" class="hd" fill="#444">', _shortAddr(address(this)), '</text>',
-            _buildSVGStatus(col, st),
-            _buildSVGData(),
-            _buildSVGFooter()
-        ));
-    }
-
-    function _buildSVGStatus(string memory col, string memory st) private pure returns (string memory) {
-        return string(abi.encodePacked(
-            '<line x1="32" y1="82" x2="368" y2="82"/>',
-            '<rect x="32" y="94" width="336" height="36" rx="4" fill="', col, '" fill-opacity="0.12"/>',
-            '<rect x="32" y="94" width="3" height="36" rx="1" fill="', col, '"/>',
-            '<text x="46" y="117" font-size="14" fill="', col, '" font-weight="bold">', st, '</text>',
-            '<line x1="32" y1="144" x2="368" y2="144"/>'
-        ));
-    }
-
-    function _buildSVGData() private view returns (string memory) {
-        return string(abi.encodePacked(
-            '<text x="32"  y="164" class="lb">AMOUNT</text>',
-            '<text x="200" y="164" class="lb">DEADLINE</text>',
-            '<text x="32"  y="183" class="vl">', _formatUSDC(amount), '</text>',
-            '<text x="200" y="183" class="vl">', _uint2str(_deadlineDays), ' days</text>',
-            '<line x1="32" y1="200" x2="368" y2="200"/>',
-            '<text x="32" y="222" class="lb">CLIENT</text>',
-            '<text x="32" y="240" class="v">', _shortAddr(client), '</text>',
-            '<text x="32" y="268" class="lb">EXECUTOR</text>',
-            '<text x="32" y="286" class="v">', _shortAddr(executor), '</text>',
-            '<line x1="32" y1="304" x2="368" y2="304"/>',
-            '<text x="32" y="326" class="lb">TERMS</text>',
-            '<text x="32" y="344" font-size="10" fill="#555">', _escapeXml(_truncateStr(terms, 48)), '</text>'
-        ));
-    }
-
-    function _buildSVGFooter() private pure returns (string memory) {
-        return string(abi.encodePacked(
-            '<line x1="32" y1="396" x2="368" y2="396"/>',
-            '<text x="200" y="428" class="lb c" fill="#333">SOULBOUND</text>',
-            '<text x="200" y="448" class="lb c" fill="#333">hexseal.net</text>',
-            '</svg>'
-        ));
-    }
-
-    function _statusColor(Status s) private pure returns (string memory) {
-        if (s == Status.FUNDED)    return "#3b82f6";
-        if (s == Status.ACTIVE)    return "#22c55e";
-        if (s == Status.DISPUTED)  return "#ef4444";
-        if (s == Status.COMPLETED) return "#6b7280";
-        if (s == Status.RESOLVED)  return "#8b5cf6";
-        if (s == Status.REFUNDED)  return "#f59e0b";
-        return "#6b7280";
-    }
-
-    function _shortAddr(address addr) private pure returns (string memory) {
-        bytes memory full = bytes(_toHex(addr)); // "0x" + 40 hex chars = 42 total
-        bytes memory r = new bytes(13);          // "0xABCD...abcd"
-        r[0] = full[0]; r[1] = full[1];
-        r[2] = full[2]; r[3] = full[3]; r[4] = full[4]; r[5] = full[5];
-        r[6] = '.'; r[7] = '.'; r[8] = '.';
-        r[9] = full[38]; r[10] = full[39]; r[11] = full[40]; r[12] = full[41];
-        return string(r);
-    }
-
-    function _formatUSDC(uint256 raw) private pure returns (string memory) {
-        uint256 whole = raw / 1_000_000;
-        uint256 frac  = (raw % 1_000_000) / 10_000;
-        string memory f = frac == 0 ? "00"
-            : frac < 10 ? string(abi.encodePacked("0", _uint2str(frac)))
-            : _uint2str(frac);
-        return string(abi.encodePacked(_uint2str(whole), ".", f, " USDC"));
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // FOUR LAYERS, IN THIS ORDER, AND THEY ARE NOT INTERCHANGEABLE.
-    //
-    // The terms are a string a human typed, and by the time anyone reads them
-    // back they have been pasted into three nested documents at once. Each of
-    // the three forbids different characters and spells its escapes
-    // differently, so each gets a pass of its own. Every defect this cluster
-    // was written against is one layer doing another one's job, or not being
-    // there at all:
-    //
-    //   1. THE CUT      -- `_truncateStr`, counted in LETTERS, never in bytes.
-    //   2. JSON         -- `_escapeJson`: '"', '\\', and every control byte.
-    //   3. XML          -- `_escapeXml`: '&', '<', '>'. THE PICTURE ONLY.
-    //   4. THE ADDRESS  -- `_escapeUri`: percent-encoding, ON TOP OF THE
-    //                      FINISHED JSON, because the whole document leaves
-    //                      here as a `data:` URI and a URI has its own rules.
-    //
-    // WHICH LAYERS RUN WHERE. The attribute takes 1, then 2, then 4. The
-    // picture takes 1, then 3, and is then base64-encoded -- and base64's
-    // alphabet (A-Z a-z 0-9 + / =) contains nothing layer 4 would touch, which
-    // is why the picture needs no fourth pass and the attribute does.
-    // ══════════════════════════════════════════════════════════════════════
-
-    /// Cuts `s` down to at most `maxLen` BYTES, and never through the middle
-    /// of a letter.
-    ///
-    /// ⚠️ WHY THE WALK-BACK. UTF-8 is variable width -- one byte for ASCII,
-    /// two for Cyrillic, three for CJK, four for an emoji -- so a budget
-    /// counted in bytes lands inside a letter whenever it falls mid-sequence,
-    /// and what is left is not text. Measured on Base Sepolia deal
-    /// 0x20E1E36A...: its picture ended in a replacement character, because
-    /// the 48th byte of its terms was the second half of a Cyrillic letter.
-    /// The owner read that as "the picture fell apart".
-    ///
-    /// A continuation byte is `10xxxxxx`. Stepping back over them costs at
-    /// most three iterations and gives up at most one letter, which is why the
-    /// budget is honoured to within one character rather than merely honoured.
-    function _truncateStr(string memory s, uint256 maxLen) private pure returns (string memory) {
-        bytes memory b = bytes(s);
-        if (b.length <= maxLen) return s;
-        uint256 end = maxLen;
-        while (end > 0 && uint8(b[end]) & 0xC0 == 0x80) end--;
-        bytes memory r = new bytes(end + 3);
-        for (uint256 i = 0; i < end; i++) r[i] = b[i];
-        r[end] = '.'; r[end + 1] = '.'; r[end + 2] = '.';
-        return string(r);
-    }
-
-    /// The deal's terms as the BODY OF A JSON STRING: the quote, the
-    /// backslash, and every control byte 0x00-0x1F, which RFC 8259 forbids
-    /// raw inside a string.
-    ///
-    /// ⚠️ WHAT THIS COST BEFORE IT EXISTED. Measured off Base Sepolia on
-    /// 6 September 2026: deal 0xf45EdB8D... returns 2988 characters of
-    /// `tokenURI` and JSON.parse dies on it -- "Bad control character in
-    /// string literal at position 2870", a raw newline the client typed into
-    /// the terms. Nothing rendered the token: not this project's pages, not a
-    /// wallet, not an aggregator. It looked, from the outside, like the NFT
-    /// did not exist.
-    ///
-    /// ⚠️ THIS IS NOT `_escapeXml` AND MUST NEVER BE MERGED WITH IT. The two
-    /// documents forbid different characters and spell their escapes
-    /// differently: `&` is nothing to JSON and fatal to XML, `\n` is fatal to
-    /// JSON and ordinary whitespace in XML. One escaper serving both would be
-    /// wrong in both places while looking like the problem had been solved.
-    function _escapeJson(string memory s) private pure returns (string memory out) {
-        bytes memory b = bytes(s);
-        uint256 n = b.length;
-        // Written in assembly, and only because the plain Solidity version of
-        // these two loops came to 2_343 bytes against 1_331 of headroom --
-        // measured 6 September 2026, 25_588 against the EIP-170 ceiling of
-        // 24_576. The rules below are the same ones; what is gone is the
-        // bounds check on every byte written and the zero-fill of a buffer
-        // every byte of which is then overwritten.
-        assembly ("memory-safe") {
-            out := mload(0x40)
-            let dst := add(out, 0x20)
-            let src := add(b, 0x20)
-            for { let i := 0 } lt(i, n) { i := add(i, 1) } {
-                let c := byte(0, mload(add(src, i)))
-                switch c
-                // 0x5C is a backslash; the second byte is the escape letter.
-                case 0x22 { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x22) dst := add(dst, 2) } // "
-                case 0x5C { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x5C) dst := add(dst, 2) } // \\
-                case 0x0A { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x6E) dst := add(dst, 2) } // \n
-                case 0x0D { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x72) dst := add(dst, 2) } // \r
-                case 0x09 { mstore8(dst, 0x5C) mstore8(add(dst, 1), 0x74) dst := add(dst, 2) } // \t
-                default {
-                    switch lt(c, 0x20)
-                    // Everything else below 0x20 has no short form and needs
-                    // the six-byte one. Kept rather than dropped: the terms
-                    // are what an arbiter judges by, and quietly losing part
-                    // of them is worse than showing an escape.
-                    case 1 {
-                        mstore8(dst, 0x5C)                                              // \
-                        mstore8(add(dst, 1), 0x75)                                      // u
-                        mstore8(add(dst, 2), 0x30)                                      // 0
-                        mstore8(add(dst, 3), 0x30)                                      // 0
-                        mstore8(add(dst, 4), byte(shr(4, c), "0123456789abcdef"))
-                        mstore8(add(dst, 5), byte(and(c, 15), "0123456789abcdef"))
-                        dst := add(dst, 6)
-                    }
-                    default { mstore8(dst, c) dst := add(dst, 1) }
-                }
-            }
-            mstore(out, sub(dst, add(out, 0x20)))
-            mstore(0x40, and(add(dst, 31), not(31)))
+        require(RENDERER.code.length > 0, "Agreement: renderer not deployed");
+        // ⚠️ THE BIG NUMBER IS `_pot()`, NOT `amount`, AND THE READING IS TAKEN
+        // WHERE THE PAYOUTS TAKE IT. Until 20 September 2026 this line handed
+        // over `amount` — what the deal was signed for — while every other
+        // line of the same card was redrawn from live storage on every read.
+        // Measured on Base Sepolia deal 0xE25bED40…: 25 USDC in escrow (5
+        // signed, 20 added later and accepted), 5.00 on the card. The card was
+        // not stale; it was answering a different question from the one a
+        // person reading it asks.
+        //
+        // `pendingExtrasTotal` stays out — see `_pot()`.
+        try IAgreementRenderer(RENDERER).renderDeal(IAgreementRenderer.Deal({
+            deal:         address(this),
+            client:       client,
+            executor:     executor,
+            arbiter:      arbiter,
+            pot:          _pot(),
+            extrasTotal:  extrasTotal,
+            extrasCount:  acceptedExtrasCount,
+            deadlineDays: _deadlineDays,
+            status:       uint8(status()),
+            terms:        terms
+        })) returns (string memory uri) {
+            return uri;
+        } catch {
+            revert("Agreement: renderer refused");
         }
-    }
-
-    /// The deal's terms as XML character data: `&`, `<` and `>`.
-    ///
-    /// ⚠️ THE ORDER-OF-REPLACEMENT TRAP IS NOT AVOIDED HERE, IT IS ABSENT.
-    /// Doing this as successive string replacements has one right order --
-    /// `&` first, or the ampersands the later passes write get escaped again
-    /// -- and every other order is a bug that survives casual reading. This
-    /// pass reads each INPUT byte exactly once and never looks at its own
-    /// output, so no order exists to get wrong.
-    ///
-    /// Control bytes are turned into spaces rather than escaped, and that is
-    /// the one place this differs from `_escapeJson`: XML 1.0 cannot carry
-    /// 0x00-0x08, 0x0B, 0x0C or 0x0E-0x1F at all, not even as a numeric
-    /// character reference, so there is nothing to escape them INTO. A picture
-    /// carrying one is a picture no parser will open. Tab, newline and
-    /// carriage return are legal and pass through.
-    ///
-    /// ⚠️ Not the same function as `_escapeJson`; see the warning there.
-    function _escapeXml(string memory s) private pure returns (string memory out) {
-        bytes memory b = bytes(s);
-        uint256 n = b.length;
-        // Assembly for the same reason as `_escapeJson`; see the note there.
-        assembly ("memory-safe") {
-            out := mload(0x40)
-            let dst := add(out, 0x20)
-            let src := add(b, 0x20)
-            for { let i := 0 } lt(i, n) { i := add(i, 1) } {
-                let c := byte(0, mload(add(src, i)))
-                switch c
-                case 0x26 { mstore8(dst, 0x26) mstore8(add(dst, 1), 0x61) mstore8(add(dst, 2), 0x6D) mstore8(add(dst, 3), 0x70) mstore8(add(dst, 4), 0x3B) dst := add(dst, 5) } // &amp;
-                case 0x3C { mstore8(dst, 0x26) mstore8(add(dst, 1), 0x6C) mstore8(add(dst, 2), 0x74) mstore8(add(dst, 3), 0x3B) dst := add(dst, 4) } // &lt;
-                case 0x3E { mstore8(dst, 0x26) mstore8(add(dst, 1), 0x67) mstore8(add(dst, 2), 0x74) mstore8(add(dst, 3), 0x3B) dst := add(dst, 4) } // &gt;
-                default {
-                    // Tab (0x09), newline (0x0A) and carriage return (0x0D)
-                    // are the only control bytes XML 1.0 can carry; the rest
-                    // become spaces, because there is nothing to escape them
-                    // into.
-                    if and(lt(c, 0x20), iszero(or(eq(c, 0x09), or(eq(c, 0x0A), eq(c, 0x0D))))) {
-                        c := 0x20
-                    }
-                    mstore8(dst, c)
-                    dst := add(dst, 1)
-                }
-            }
-            mstore(out, sub(dst, add(out, 0x20)))
-            mstore(0x40, and(add(dst, 31), not(31)))
-        }
-    }
-
-    /// The finished JSON as part of an ADDRESS: the percent sign and the hash.
-    ///
-    /// ⚠️ WHAT A '#' DOES, MEASURED 6 SEPTEMBER 2026 AND NOT REASONED ABOUT.
-    /// `tokenURI` hands back `data:application/json;utf8,{...}`, and that is a
-    /// URI, so a URI parser reads it. Terms of "pay after review #2, budget
-    /// 50% now" render 2_873 characters; Node's WHATWG `new URL()` puts the
-    /// last 30 of them in `url.hash` -- an anchor, not data -- and what is
-    /// left ends in the middle of a string, so `JSON.parse` dies with
-    /// "Unterminated string in JSON at position 2824". Nothing renders. The
-    /// same shape of failure as the raw newline, under a different rule, in a
-    /// third document.
-    ///
-    /// ⚠️ AND WHY '%' IS NOT OPTIONAL, measured the same day. Terms of "budget
-    /// 50% now" are fine for a reader that splits on the comma, and kill a
-    /// reader that percent-decodes -- the correct way to read a URI -- with
-    /// URIError "URI malformed". Beyond that, encoding '#' alone would make
-    /// the two DIFFERENT inputs "%23" and "#" arrive as the same three
-    /// characters, and nothing downstream could tell them apart again. The
-    /// pair is the unit; neither half of it is any use alone.
-    ///
-    /// ⚠️ THE ORDER-OF-REPLACEMENT TRAP IS ABSENT HERE, NOT AVOIDED -- the
-    /// same property `_escapeXml` has, and it matters more here. Written as
-    /// successive replacements, '%' MUST be done first, or the escapes the
-    /// later passes write get re-encoded and '#' comes out as "%2523". This
-    /// pass reads each INPUT byte exactly once and never looks at its own
-    /// output, so there is no order to get wrong.
-    ///
-    /// ⚠️ IT IS APPLIED TO THE TERMS, NOT TO THE WHOLE DOCUMENT, and that is a
-    /// measurement rather than a preference. With ordinary terms the finished
-    /// document holds ZERO '#' and ZERO '%' -- the addresses are hex, the
-    /// numbers are decimal, the picture is base64 -- so the terms are the only
-    /// place either character can enter, and a document-wide pass of this same
-    /// rule would emit the same bytes for a pass over 2_800 of them instead of
-    /// 200. A document-wide pass that encoded everything a URI reserves would
-    /// be worse than useless: it would encode all 70 of the document's quotes
-    /// too, and every reader that does NOT percent-decode would stop seeing a
-    /// certificate at all -- including this project's own reader,
-    /// `frontend/src/lib/tokenUriImage.ts`, which splits on the first comma
-    /// and calls JSON.parse on the tail.
-    ///
-    /// ⚠️ Neither `_escapeJson` nor `_escapeXml`; see the roll call above.
-    function _escapeUri(string memory s) private pure returns (string memory out) {
-        bytes memory b = bytes(s);
-        uint256 n = b.length;
-        // Assembly for the same reason as the other two; see the note on
-        // `_escapeJson`.
-        assembly ("memory-safe") {
-            out := mload(0x40)
-            let dst := add(out, 0x20)
-            let src := add(b, 0x20)
-            for { let i := 0 } lt(i, n) { i := add(i, 1) } {
-                let c := byte(0, mload(add(src, i)))
-                // 0x25 is '%' and 0x23 is '#'. Both come out as "%" followed
-                // by their two hex digits.
-                switch or(eq(c, 0x25), eq(c, 0x23))
-                case 1 {
-                    mstore8(dst, 0x25)
-                    mstore8(add(dst, 1), byte(shr(4, c), "0123456789ABCDEF"))
-                    mstore8(add(dst, 2), byte(and(c, 15), "0123456789ABCDEF"))
-                    dst := add(dst, 3)
-                }
-                default { mstore8(dst, c) dst := add(dst, 1) }
-            }
-            mstore(out, sub(dst, add(out, 0x20)))
-            mstore(0x40, and(add(dst, 31), not(31)))
-        }
-    }
-
-    function _base64Encode(bytes memory data) private pure returns (string memory) {
-        bytes memory T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        uint256 len = data.length;
-        if (len == 0) return "";
-        uint256 outLen = 4 * ((len + 2) / 3);
-        bytes memory result = new bytes(outLen);
-        uint256 ri = 0;
-        for (uint256 i = 0; i < len;) {
-            uint256 a  = uint8(data[i]); i++;
-            uint256 b2 = i < len ? uint8(data[i]) : 0; if (i < len) i++;
-            uint256 c  = i < len ? uint8(data[i]) : 0; if (i < len) i++;
-            uint256 buf = (a << 16) | (b2 << 8) | c;
-            result[ri++] = T[buf >> 18];
-            result[ri++] = T[(buf >> 12) & 63];
-            result[ri++] = T[(buf >>  6) & 63];
-            result[ri++] = T[buf         & 63];
-        }
-        if (len % 3 == 1) { result[outLen - 1] = '='; result[outLen - 2] = '='; }
-        else if (len % 3 == 2) { result[outLen - 1] = '='; }
-        return string(result);
     }
 
     // -------- INTERNAL --------
@@ -2560,6 +2527,53 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         return diamond.code.length > 0;
     }
 
+    /// @dev Rule B's question, asked of the diamond: does `who` hold an
+    /// arbiter's bond right now?
+    ///
+    /// Reads ArbiterApplicationsFacet.getBondState(address), which is the one
+    /// MOUNTED view algebraically equal to `MarketPresence.holdsBond` — the
+    /// predicate the rule's other eleven doors use. `isArbiterActive` is not
+    /// equal to it (it misses a seat an appeal drained), `isRegisteredArbiter`
+    /// is not either (it catches seats that have posted nothing and are
+    /// allowed to trade).
+    ///
+    /// ⚠️ AN UNANSWERABLE DIAMOND IS READ AS "NO BOND", AND THAT DIRECTION IS
+    /// A DECISION, NOT AN OVERSIGHT. Three ways to get no answer: no code at
+    /// all, the selector not mounted, the facet reverting. All three mean this
+    /// diamond does not carry rule B — and a diamond that does not carry it
+    /// does not carry it at its other eleven doors either, so refusing here
+    /// would not be enforcing the rule, it would be enforcing its absence.
+    ///
+    /// What the tolerance costs, stated rather than hidden: an owner who
+    /// unmounts `getBondState` turns this door off. What refusing would cost
+    /// instead: a clone is nailed to its implementation for life, so a single
+    /// future cut that moved this selector would leave every deal born from
+    /// this implementation unable to START — the escrow of each of them
+    /// waiting out ACTIVATION_WINDOW and going home. The failure that is
+    /// recoverable by governance beats the one that is not recoverable at all.
+    ///
+    /// Gas starvation is closed separately, by the floor: see BOND_VIEW_GAS.
+    ///
+    /// A raw staticcall rather than a typed call, for the reason
+    /// `_verdictInFlight` gives at length: solc's extcodesize guard on a
+    /// high-level call reverts in THIS frame, where nothing can catch it, and
+    /// a codeless address answers a call with success and zero bytes back.
+    /// Hence the explicit length check — 96 bytes is three words, which is
+    /// what `(uint8, uint256, uint256)` occupies.
+    function _holdsArbiterBond(address who) private view returns (bool) {
+        if (!_diamondHasCode()) return false;
+        // Refuse to ask at all unless the full budget can be handed over.
+        if (gasleft() < BOND_VIEW_GAS_FLOOR) {
+            revert NotEnoughGasForDiamondCall(IArbiterBondView.getBondState.selector);
+        }
+        (bool ok, bytes memory data) = diamond.staticcall{gas: BOND_VIEW_GAS}(
+            abi.encodeWithSelector(IArbiterBondView.getBondState.selector, who)
+        );
+        if (!ok || data.length < 96) return false;
+        (uint8 bondState, , ) = abi.decode(data, (uint8, uint256, uint256));
+        return bondState >= BOND_STATE_SAGGING;
+    }
+
     /// @dev Refuse to make a capped diamond call unless the FULL cap can be
     /// handed over.
     ///
@@ -2622,42 +2636,5 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         if (_diamondHasCode()) {
             try IArbiterRegistry(diamond).clearDisputeClaim{gas: CLAIM_CLEAR_GAS}(address(this)) {} catch {}
         }
-    }
-
-    // -------- STRING UTILS --------
-
-    function _statusStr(Status s) private pure returns (string memory) {
-        if (s == Status.CREATED)   return "CREATED";
-        if (s == Status.FUNDED)    return "FUNDED";
-        if (s == Status.ACTIVE)    return "ACTIVE";
-        if (s == Status.COMPLETED) return "COMPLETED";
-        if (s == Status.DISPUTED)  return "DISPUTED";
-        if (s == Status.RESOLVED)  return "RESOLVED";
-        return "REFUNDED";
-    }
-
-    function _uint2str(uint256 v) private pure returns (string memory) {
-        if (v == 0) return "0";
-        uint256 temp = v;
-        uint256 digits;
-        while (temp != 0) { digits++; temp /= 10; }
-        bytes memory buf = new bytes(digits);
-        while (v != 0) { digits--; buf[digits] = bytes1(uint8(48 + v % 10)); v /= 10; }
-        return string(buf);
-    }
-
-    function _toHex(address addr) private pure returns (string memory) {
-        bytes memory b = abi.encodePacked(addr);
-        bytes memory hex_ = new bytes(42);
-        hex_[0] = '0'; hex_[1] = 'x';
-        for (uint256 i = 0; i < 20; i++) {
-            hex_[2 + i * 2]     = _hexChar(uint8(b[i]) >> 4);
-            hex_[3 + i * 2]     = _hexChar(uint8(b[i]) & 0xf);
-        }
-        return string(hex_);
-    }
-
-    function _hexChar(uint8 v) private pure returns (bytes1) {
-        return v < 10 ? bytes1(v + 48) : bytes1(v + 87);
     }
 }

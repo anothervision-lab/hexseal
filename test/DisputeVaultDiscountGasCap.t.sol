@@ -40,6 +40,7 @@ pragma solidity ^0.8.20;
 // derived from the thing it checks.
 
 import "./DiamondDeathEscrowBase.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
 
@@ -67,7 +68,7 @@ contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
 
         // The scene is only worth measuring if the branch is actually entered.
         assertGt(
-            ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a)), 0,
+            ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0,
             "no bounty was funded - the branch this cut made more expensive is not entered"
         );
         assertEq(
@@ -99,15 +100,15 @@ contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
     function testTheAbandonedDisputeReturnsTheBanksShareToTheBank() public {
         Agreement a = _smallDisputedDealWithAFundedBounty();
 
-        uint256 vaultBefore  = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore  = ArbiterVaultFacet(address(diamond)).getVaultBalance();
         uint256 clientBefore = usdc.balanceOf(client);
-        uint256 bounty       = ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a));
+        uint256 bounty       = ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a));
 
         vm.prank(address(a));
         ArbiterRegistryFacet(address(diamond)).clearDisputeClaim(address(a));
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + DISCOUNT,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + DISCOUNT,
             "the bank's share did not come back to the bank"
         );
         assertEq(
@@ -146,7 +147,7 @@ contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
         // branch under measurement never has a share to move.
         usdc.mint(owner, VAULT_SEED);
         usdc.approve(address(diamond), VAULT_SEED);
-        ArbiterRegistryFacet(address(diamond)).fundVault(VAULT_SEED);
+        ArbiterVaultFacet(address(diamond)).fundVault(VAULT_SEED);
 
         vm.prank(client);
         usdc.approve(address(diamond), type(uint256).max);
@@ -170,10 +171,10 @@ contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
         vm.prank(client);
         a.raiseDispute();
 
-        uint256 quote = ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(addr);
+        uint256 quote = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(addr);
         assertGt(quote, 0, "this deal needs no top-up - the scene cannot be built on it");
         usdc.mint(client, quote);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(addr);
+        ArbiterVaultFacet(address(diamond)).fundDispute(addr);
     }
 }

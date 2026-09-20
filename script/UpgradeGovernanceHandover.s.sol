@@ -94,6 +94,7 @@ import "forge-std/console.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract UpgradeGovernanceHandover is Script {
 
@@ -103,6 +104,15 @@ contract UpgradeGovernanceHandover is Script {
         "out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json";
     string internal constant ACCOUNTABILITY_ARTIFACT =
         "out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json";
+    /// ⚠️ THE REGISTRY FACET IS TWO CONTRACTS SINCE 16 SEPTEMBER 2026. It was
+    /// cut into ArbiterRegistryFacet and ArbiterVaultFacet, twenty-eight
+    /// selectors moving without one signature changing. THIS CUT IS ALREADY
+    /// SIGNED and its list is the record of what went on chain that day — the
+    /// list is not touched. What changed is only the question "what does the
+    /// registry facet implement", and since the split the honest answer is the
+    /// UNION of the two, which is byte for byte the set the single facet had.
+    string internal constant VAULT_ARTIFACT =
+        "out/ArbiterVaultFacet.sol/ArbiterVaultFacet.json";
 
     /// The number from a recorded decision, written here by a person
     /// rather than read from the facet. That is the whole point: the facet is
@@ -347,7 +357,7 @@ contract UpgradeGovernanceHandover is Script {
         // storage with no door left to walk through, while `setDAOAddress`
         // returns to taking effect immediately. Refuse rather than strand him.
         (bool ok, bytes memory ret) = diamond.staticcall(
-            abi.encodeWithSelector(ArbiterRegistryFacet.getPendingDAOAddress.selector)
+            abi.encodeWithSelector(ArbiterVaultFacet.getPendingDAOAddress.selector)
         );
         require(ok && ret.length >= 32, "rollback: the diamond does not answer getPendingDAOAddress()");
         require(
@@ -399,7 +409,7 @@ contract UpgradeGovernanceHandover is Script {
         bytes4[] memory addSels,
         bytes4[] memory accSels
     ) public view {
-        _assertSameSet(_concat(regSels, addSels), artifactSelectors(REGISTRY_ARTIFACT), "ArbiterRegistryFacet");
+        _assertSameSet(_concat(regSels, addSels), registryFacetAbi(), "ArbiterRegistryFacet");
         _assertSameSet(accSels, artifactSelectors(ACCOUNTABILITY_ARTIFACT), "ArbiterAccountabilityFacet");
 
         // And the two registry groups must be disjoint, or one of the two
@@ -412,6 +422,18 @@ contract UpgradeGovernanceHandover is Script {
                 );
             }
         }
+    }
+
+    /// What the facet THIS CUT MOUNTED implements today. One contract when the
+    /// cut was signed, two since 16 September 2026, and the union of the two is
+    /// the same set of functions — nothing was added or retired by the split, so
+    /// this answer does not drift from what the cut actually mounted.
+    ///
+    /// Read out of the two artifacts rather than frozen as a literal: a frozen
+    /// list would stop noticing a function the registry gains between now and
+    /// the split cut, which is exactly what the check above is for.
+    function registryFacetAbi() public view returns (bytes4[] memory) {
+        return _concat(artifactSelectors(REGISTRY_ARTIFACT), artifactSelectors(VAULT_ARTIFACT));
     }
 
     /// solc's own answer to "what does this facet expose", straight out of the
@@ -527,7 +549,7 @@ contract UpgradeGovernanceHandover is Script {
     /// before anything touches the corps.
     function assertTheHandoverDoorAnswersAndIsEmpty(address diamond) public view {
         (bool ok, bytes memory ret) = diamond.staticcall(
-            abi.encodeWithSelector(ArbiterRegistryFacet.getPendingDAOAddress.selector)
+            abi.encodeWithSelector(ArbiterVaultFacet.getPendingDAOAddress.selector)
         );
         require(ok && ret.length >= 32, "post-flight: the diamond does not answer getPendingDAOAddress()");
         require(
@@ -569,16 +591,17 @@ contract UpgradeGovernanceHandover is Script {
     /// ledger would look, from every other angle, exactly healthy.
     function snapshotArbitration(address diamond) public view returns (StorageSnapshot memory s) {
         ArbiterRegistryFacet reg = ArbiterRegistryFacet(diamond);
-        address[] memory arbiters = reg.getArbiters();
+        ArbiterVaultFacet reg_v = ArbiterVaultFacet(diamond);
+        address[] memory arbiters = reg_v.getArbiters();
         s.arbiterCount = arbiters.length;
         if (arbiters.length > 0) s.firstArbiter = arbiters[0];
-        s.chiefArbiter     = reg.getChiefArbiter();
-        s.daoAddress       = reg.getDAOAddress();
+        s.chiefArbiter     = reg_v.getChiefArbiter();
+        s.daoAddress       = reg_v.getDAOAddress();
         s.daoActive        = reg.isDaoActive();
-        s.vaultBalance     = reg.getVaultBalance();
-        s.treasurySlice    = reg.getTreasurySlice();
-        s.rewardPerDispute = reg.getRewardPerDispute();
-        s.arbiterFloor     = reg.getArbiterFloor();
+        s.vaultBalance     = reg_v.getVaultBalance();
+        s.treasurySlice    = reg_v.getTreasurySlice();
+        s.rewardPerDispute = reg_v.getRewardPerDispute();
+        s.arbiterFloor     = reg_v.getArbiterFloor();
         s.daoThreshold     = reg.getDaoThreshold();
         s.proposalTtl      = ArbiterAccountabilityFacet(diamond).getProposalTTL();
     }
@@ -694,43 +717,43 @@ contract UpgradeGovernanceHandover is Script {
         sels[18] = ArbiterRegistryFacet.resolveAppeal.selector;    // changed
 
         // Rewards
-        sels[19] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        sels[20] = ArbiterRegistryFacet.fundVault.selector;
-        sels[21] = ArbiterRegistryFacet.setRewardPerDispute.selector;
+        sels[19] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[20] = ArbiterVaultFacet.fundVault.selector;
+        sels[21] = ArbiterVaultFacet.setRewardPerDispute.selector;
         sels[22] = ArbiterRegistryFacet.setDAOAddress.selector;    // changed: proposes only
 
         // Views
         sels[23] = ArbiterRegistryFacet.isDaoActive.selector;      // changed: manual flag alone
         sels[24] = ArbiterRegistryFacet.getMinXPToRegister.selector;
         sels[25] = ArbiterRegistryFacet.getDaoThreshold.selector;  // changed: 100 000 -> 10 000
-        sels[26] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        sels[27] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        sels[28] = ArbiterRegistryFacet.getArbiters.selector;
-        sels[29] = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        sels[30] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        sels[31] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        sels[32] = ArbiterRegistryFacet.getVaultBalance.selector;
-        sels[33] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        sels[34] = ArbiterRegistryFacet.getDAOAddress.selector;
-        sels[35] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        sels[36] = ArbiterRegistryFacet.getAppealVotes.selector;
-        sels[37] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
+        sels[26] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[27] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[28] = ArbiterVaultFacet.getArbiters.selector;
+        sels[29] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        sels[30] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[31] = ArbiterVaultFacet.getPendingVerdict.selector;
+        sels[32] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[33] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[34] = ArbiterVaultFacet.getDAOAddress.selector;
+        sels[35] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[36] = ArbiterVaultFacet.getAppealVotes.selector;
+        sels[37] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
 
         // Dispute settlement fee — 80/20 arbiter/treasury
-        sels[38] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        sels[39] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        sels[40] = ArbiterRegistryFacet.getTreasurySlice.selector;
+        sels[38] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[39] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[40] = ArbiterVaultFacet.getTreasurySlice.selector;
 
         // Paid call for an arbiter: floor and the quote to reach it
-        sels[41] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        sels[42] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        sels[43] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
+        sels[41] = ArbiterVaultFacet.setArbiterFloor.selector;
+        sels[42] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[43] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
 
         // Paid call for an arbiter: payment and the soft refund
-        sels[44] = ArbiterRegistryFacet.fundDispute.selector;
-        sels[45] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        sels[46] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        sels[47] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        sels[44] = ArbiterVaultFacet.fundDispute.selector;
+        sels[45] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[46] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[47] = ArbiterVaultFacet.getRefundableBounty.selector;
 
         // The arbiter's chat key
         sels[48] = ArbiterRegistryFacet.setArbiterChatKey.selector;
@@ -760,7 +783,7 @@ contract UpgradeGovernanceHandover is Script {
     function registryAddSelectors() public pure returns (bytes4[] memory sels) {
         sels = new bytes4[](2);
         sels[0] = ArbiterRegistryFacet.acceptDAOAddress.selector;
-        sels[1] = ArbiterRegistryFacet.getPendingDAOAddress.selector;
+        sels[1] = ArbiterVaultFacet.getPendingDAOAddress.selector;
     }
 
     /// Thirty-five — the whole of today's ArbiterAccountabilityFacet, and

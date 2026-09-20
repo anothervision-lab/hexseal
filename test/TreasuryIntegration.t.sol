@@ -29,6 +29,7 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/Treasury.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 // ---------- MOCK USDC (a verbatim copy of the one in Extras) ----------
 
@@ -108,9 +109,10 @@ contract TreasuryIntegrationTest is Test {
         DiamondLoupeFacet    diamondLoupeFacet    = new DiamondLoupeFacet();
         OwnershipFacet       ownershipFacet       = new OwnershipFacet();
         ArbiterRegistryFacet arbiterRegistryFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet arbiterRegistryFacetVault = new ArbiterVaultFacet();
         ReputationFacet      reputationFacet      = new ReputationFacet();
 
-        bytes4[] memory regSels = new bytes4[](12);
+        bytes4[] memory regSels = new bytes4[](14);
         regSels[0]  = RegistryFacet.initRegistry.selector;
         regSels[1]  = RegistryFacet.register.selector;
         regSels[2]  = RegistryFacet.updateStatus.selector;
@@ -123,6 +125,12 @@ contract TreasuryIntegrationTest is Test {
         regSels[9]  = RegistryFacet.getActive.selector;
         regSels[10] = RegistryFacet.totalAgreements.selector;
         regSels[11] = RegistryFacet.authorizedFactory.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[12] = RegistryFacet.registerOffer.selector;
+        regSels[13] = RegistryFacet.notifyOfferAccepted.selector;
 
         bytes4[] memory facSels = new bytes4[](15);
         facSels[0]  = FactoryFacet.initFactory.selector;
@@ -141,37 +149,38 @@ contract TreasuryIntegrationTest is Test {
         facSels[13] = FactoryFacet.getFeeBps.selector;
         facSels[14] = FactoryFacet.deployAndFund.selector;
 
-        bytes4[] memory arbSels = new bytes4[](30);
+        bytes4[] memory arbSels = new bytes4[](18);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[3] = ArbiterRegistryFacet.claimDispute.selector;
         arbSels[4] = ArbiterRegistryFacet.releaseDisputeClaim.selector;
         arbSels[5] = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbSels[6] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        arbSels[7] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbSels[8] = ArbiterRegistryFacet.getArbiters.selector;
-        arbSels[9] = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        arbSels[10] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        arbSels[11] = ArbiterRegistryFacet.activateDAO.selector;
-        arbSels[12] = ArbiterRegistryFacet.applyAsArbiter.selector;
-        arbSels[13] = ArbiterRegistryFacet.isDaoActive.selector;
-        arbSels[14] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        arbSels[15] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        arbSels[16] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[17] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[19] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[20] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[21] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        arbSels[22] = ArbiterRegistryFacet.fundVault.selector;
-        arbSels[23] = ArbiterRegistryFacet.setRewardPerDispute.selector;
-        arbSels[24] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[25] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        arbSels[26] = ArbiterRegistryFacet.getVaultBalance.selector;
-        arbSels[27] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        arbSels[28] = ArbiterRegistryFacet.getDAOAddress.selector;
-        arbSels[29] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[6] = ArbiterRegistryFacet.activateDAO.selector;
+        arbSels[7] = ArbiterRegistryFacet.applyAsArbiter.selector;
+        arbSels[8] = ArbiterRegistryFacet.isDaoActive.selector;
+        arbSels[9] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
+        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        bytes4[] memory arbSelsVault = new bytes4[](12);
+        arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
+        arbSelsVault[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        arbSelsVault[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        arbSelsVault[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        arbSelsVault[6] = ArbiterVaultFacet.fundVault.selector;
+        arbSelsVault[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        arbSelsVault[8] = ArbiterVaultFacet.getPendingVerdict.selector;
+        arbSelsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
+        arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -220,7 +229,7 @@ contract TreasuryIntegrationTest is Test {
         repSels[6] = ReputationFacet.notifyExecutorFault.selector;
         repSels[7] = ReputationFacet.getCleanStreak.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](8);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](9);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet),        IDiamondCut.FacetCutAction.Add, regSels);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet),         IDiamondCut.FacetCutAction.Add, facSels);
         cut[2] = IDiamondCut.FacetCut(address(diamondCutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
@@ -231,6 +240,7 @@ contract TreasuryIntegrationTest is Test {
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
         cut[6] = IDiamondCut.FacetCut(address(reputationFacet),      IDiamondCut.FacetCutAction.Add, repSels);
+        cut[8] = IDiamondCut.FacetCut(address(arbiterRegistryFacetVault), IDiamondCut.FacetCutAction.Add, arbSelsVault);
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -291,7 +301,7 @@ contract TreasuryIntegrationTest is Test {
         treasury.distribute();
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(),
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(),
             treasury.VAULT_TARGET(),
             "the real vault was not filled to target"
         );

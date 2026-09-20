@@ -34,6 +34,7 @@ pragma solidity ^0.8.20;
 import "../FactoryFacet.sol";
 import "../DiamondProxy.sol";
 import "./IFactory.sol";
+import {MarketPresence} from "./MarketPresence.sol"; // "an arbiter is not a party"
 
 // ---------- STORAGE ----------
 
@@ -97,6 +98,22 @@ library ServiceBoardStorage {
         // executors. MAX_PENDING_PER_PAIR caps a single pair only, which a
         // fan-out walks around; this counter is what closes the fan-out.
         mapping(address => uint256) pendingRequestCount;
+
+        // ---- appended 18 September 2026: "an arbiter is not a player in the
+        //      market" (the owner's decision of 17 September) ----
+        //
+        // How many of this executor's services are still on the board — ACTIVE
+        // and PAUSED alike, because a paused service is a listing its owner can
+        // put back in one press, and the rule into the arbiter corps is about
+        // having nothing hanging, not about what is currently visible.
+        // `removeService` is the only exit and it works from both states.
+        mapping(address => uint256) openServiceCount;
+        // How many PENDING requests this EXECUTOR has been sent, across all his
+        // services. The mirror of `pendingRequestCount` above, which counts the
+        // same requests on the client's side: the rule counts a request as open
+        // for both of them, and each side has its own way out — the client
+        // cancels, the executor rejects.
+        mapping(address => uint256) incomingRequestCount;
     }
 
     function store() internal pure returns (Layout storage s) {
@@ -250,6 +267,11 @@ contract ServiceBoardFacet {
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
         if (region > 6) revert InvalidRegion();
 
+        // Rule B: a seat with a bond behind it does not sell work. Asked of
+        // `_msgSender()`, so the answer is about the person and not about the
+        // forwarder that relayed him.
+        MarketPresence.requireNotBondedArbiter(executor);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         // Posting a service: there is no deal amount yet, nothing to take a
         // percentage of. Exactly the anti-spam floor is paid, and it is not refunded.
@@ -271,6 +293,7 @@ contract ServiceBoardFacet {
             hiresCount:  0
         });
         s.executorServices[executor].push(serviceId);
+        s.openServiceCount[executor]++;
 
         // Anti-spam fee → feeRecipient (not refunded)
         _safeTransferFrom(fs.usdc, executor, fs.feeRecipient, fee);
@@ -299,6 +322,12 @@ contract ServiceBoardFacet {
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
         if (region > 6) revert InvalidRegion();
 
+        // Rule B, on the PARAMETER: this door is pressed by the relayer and the
+        // floor is pulled from `executor`'s wallet on his permit signature, so
+        // he is the person who would become a seller here. Checked before the
+        // paper is presented, so a refusal leaves his signature unspent.
+        MarketPresence.requireNotBondedArbiter(executor);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         // Posting a service: there is no deal amount yet, nothing to take a
         // percentage of. Exactly the anti-spam floor is paid, and it is not refunded.
@@ -322,6 +351,7 @@ contract ServiceBoardFacet {
             hiresCount:  0
         });
         sbl.executorServices[executor].push(serviceId);
+        sbl.openServiceCount[executor]++;
 
         _safeTransferFrom(fs.usdc, executor, fs.feeRecipient, fee);
         emit FeeCollected(serviceId, executor, FEE_KIND_SERVICE_LISTING, fee);
@@ -338,6 +368,7 @@ contract ServiceBoardFacet {
         if (svc.status == ServiceBoardStorage.ServiceStatus.REMOVED) revert ServiceNotActive();
 
         svc.status = ServiceBoardStorage.ServiceStatus.REMOVED;
+        _closeOpenService(s, svc.executor);
         emit ServiceRemoved(serviceId, sender);
     }
 
@@ -430,6 +461,15 @@ contract ServiceBoardFacet {
         if (svc.status != ServiceBoardStorage.ServiceStatus.ACTIVE) revert ServiceNotActive();
         if (client == svc.executor) revert SelfRequest();
 
+        // Rule B, BOTH SIDES: the client would become a party by sending this,
+        // and the executor named by the service would become one by accepting
+        // it. The second half is what shuts a listing that outlived its
+        // owner's seat — a service posted before the rule, whose executor has
+        // since taken a bonded seat, takes no new requests instead of
+        // collecting ones nobody may accept.
+        MarketPresence.requireNotBondedArbiter(client);
+        MarketPresence.requireNotBondedArbiter(svc.executor);
+
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (IRegistry(fs.diamond).hasActivePair(client, svc.executor)) revert ActiveDealExists();
         if (s.pendingRequestIdsByClientAndExecutor[client][svc.executor].length >= MAX_PENDING_PER_PAIR) revert TooManyPendingRequests();
@@ -462,6 +502,7 @@ contract ServiceBoardFacet {
         s.requestFunds[requestId]   = amount;
         s.requestFeeHeld[requestId] = fee;
         s.pendingRequestCount[client]++;
+        s.incomingRequestCount[svc.executor]++;
 
         emit ServiceRequested(requestId, serviceId, client, amount);
     }
@@ -489,6 +530,12 @@ contract ServiceBoardFacet {
 
         if (svc.status != ServiceBoardStorage.ServiceStatus.ACTIVE) revert ServiceNotActive();
         if (client == svc.executor) revert SelfRequest();
+
+        // Rule B, both sides, on the PARAMETER for the client: the relayer
+        // presses this and the money is pulled on `client`'s permit signature,
+        // so he is the party here. Checked before the paper is presented.
+        MarketPresence.requireNotBondedArbiter(client);
+        MarketPresence.requireNotBondedArbiter(svc.executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (IRegistry(fs.diamond).hasActivePair(client, svc.executor)) revert ActiveDealExists();
@@ -522,6 +569,7 @@ contract ServiceBoardFacet {
         st.requestFunds[requestId]   = amount;
         st.requestFeeHeld[requestId] = fee;
         st.pendingRequestCount[client]++;
+        st.incomingRequestCount[svc.executor]++;
 
         emit ServiceRequested(requestId, serviceId, client, amount);
     }
@@ -540,9 +588,19 @@ contract ServiceBoardFacet {
         if (sender != svc.executor) revert NotExecutor();
         if (req.status != ServiceBoardStorage.RequestStatus.PENDING) revert RequestNotPending();
 
+        // Rule B, BOTH SIDES. This is the line where the two of them become the
+        // two parties of a deal: the executor pressing, and the client who sent
+        // the request — who may have taken a bonded seat since (or whose
+        // request predates the rule). Neither is locked in by the refusal: the
+        // executor has `rejectRequest`, the client has `cancelRequest`, and the
+        // escrow comes back on both.
+        MarketPresence.requireNotBondedArbiter(sender);
+        MarketPresence.requireNotBondedArbiter(req.client);
+
         // Effects first
         req.status = ServiceBoardStorage.RequestStatus.ACCEPTED;
         _decrementPendingCount(s, req.client);
+        _closeIncomingRequest(s, sender);
         svc.hiresCount++;
 
         uint256 held = s.requestFunds[requestId];
@@ -602,6 +660,12 @@ contract ServiceBoardFacet {
             if (siblingReq.status != ServiceBoardStorage.RequestStatus.PENDING) continue;
             siblingReq.status = ServiceBoardStorage.RequestStatus.SUPERSEDED;
             _decrementPendingCount(s, client);
+            // The sibling was sent to THIS executor — the pair list is keyed by
+            // him — so his incoming count loses one too. The implicit closing
+            // branch: nobody pressed anything about this request, and its two
+            // counters still have to come down or a request that no longer
+            // exists keeps a person out of the corps for ever.
+            _closeIncomingRequest(s, sender);
             uint256 siblingRefund = s.requestFunds[siblingId];
             s.requestFunds[siblingId] = 0;
 
@@ -633,6 +697,7 @@ contract ServiceBoardFacet {
 
         req.status = ServiceBoardStorage.RequestStatus.REJECTED;
         _decrementPendingCount(s, req.client);
+        _closeIncomingRequest(s, svc.executor);
         _removePendingPair(req.client, svc.executor, requestId);
         uint256 refund = s.requestFunds[requestId];
         s.requestFunds[requestId] = 0;
@@ -666,6 +731,7 @@ contract ServiceBoardFacet {
 
         req.status = ServiceBoardStorage.RequestStatus.CANCELLED;
         _decrementPendingCount(s, req.client);
+        _closeIncomingRequest(s, svc.executor);
         _removePendingPair(req.client, svc.executor, requestId);
         uint256 refund = s.requestFunds[requestId];
         s.requestFunds[requestId] = 0;
@@ -806,6 +872,26 @@ contract ServiceBoardFacet {
     function _decrementPendingCount(ServiceBoardStorage.Layout storage s, address clientAddr) internal {
         uint256 c = s.pendingRequestCount[clientAddr];
         if (c != 0) s.pendingRequestCount[clientAddr] = c - 1;
+    }
+
+    /// One request less waiting on this executor, and one service less on the
+    /// board. Both saturating, and by the same argument as
+    /// `_decrementPendingCount` above it: services and requests that existed
+    /// before these counters did never incremented them, so the first exit of
+    /// one of those would read zero — and a plain `--` there is a Panic(0x11)
+    /// on `rejectRequest` / `cancelRequest` / `removeService`, that is, on the
+    /// doors that hand a client his escrow back. The cut back-fills the live
+    /// numbers so the clamp is not reached in the steady state; it is the answer
+    /// to "and if the back-fill missed one", and that answer must not be
+    /// "somebody's money stays in the diamond".
+    function _closeIncomingRequest(ServiceBoardStorage.Layout storage s, address executorAddr) internal {
+        uint256 c = s.incomingRequestCount[executorAddr];
+        if (c != 0) s.incomingRequestCount[executorAddr] = c - 1;
+    }
+
+    function _closeOpenService(ServiceBoardStorage.Layout storage s, address executorAddr) internal {
+        uint256 c = s.openServiceCount[executorAddr];
+        if (c != 0) s.openServiceCount[executorAddr] = c - 1;
     }
 
     function _removePendingPair(address clientAddr, address executorAddr, uint256 requestId) internal {

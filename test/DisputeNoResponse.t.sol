@@ -43,12 +43,14 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {FactoryStorage} from "../src/FactoryFacet.sol";
 import {MinimalForwarder} from "../src/MinimalForwarder.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
     /// ArbiterTwoFacetBench). `facet` deliberately keeps its old name: every
     /// vm.store(address(facet), ...) below keeps hitting the very same storage.
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
     ArbiterAccountabilityFacet accFacet;
 
     address arbiter;
@@ -79,7 +81,7 @@ contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
     uint256 constant SLOT_CLAIMED_AT_BY = 22;
 
     function setUp() public {
-        (facet, accFacet) = _deployArbiterBench();
+        (facet, accFacet, facetVault) = _deployArbiterBench();
         arbiter = address(0xA1);
         otherArbiter = address(0xA2);
         _makeArbiter(arbiter);
@@ -247,7 +249,7 @@ contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
             "the disputeClaims offset in struct Data has drifted"
         );
         vm.store(address(facet), claimSlot, bytes32(0));
-        assertEq(facet.getDisputeClaimer(agreement), address(0), "the claim must be released");
+        assertEq(facetVault.getDisputeClaimer(agreement), address(0), "the claim must be released");
 
         assertEq(accFacet.getDisputeClaimedAt(agreement), 0,
             "there is no claimer, so the anchor must stay silent whichever road released the claim");
@@ -554,7 +556,7 @@ contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
         // The check is mandatory: with a wrong slot the seating silently fails to
         // take, every measurement below would fail on NotArbiter, and they would
         // read as "the time of claiming was checked".
-        assertTrue(facet.isRegisteredArbiter(who), "failed to seat the arbiter");
+        assertTrue(facetVault.isRegisteredArbiter(who), "failed to seat the arbiter");
     }
 
     /// Sets the time of claiming to zero, as on disputes claimed BEFORE the cut.

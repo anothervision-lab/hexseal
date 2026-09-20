@@ -26,6 +26,7 @@ pragma solidity ^0.8.20;
 // arithmetic ran out of somebody else's money.
 
 import "./MoneyPathBase.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract DisputeVaultDiscountTest is MoneyPathBase {
 
@@ -40,7 +41,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     function _fundVault(uint256 amount) internal {
         usdc.mint(owner, amount);
         usdc.approve(address(diamond), type(uint256).max);
-        ArbiterRegistryFacet(address(diamond)).fundVault(amount);
+        ArbiterVaultFacet(address(diamond)).fundVault(amount);
     }
 
     /// A second client with its own wallet: the registry refuses a second live
@@ -60,11 +61,11 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     }
 
     function _quote(Agreement a) internal view returns (uint256) {
-        return ArbiterRegistryFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        return ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
     }
 
     function _bounty(Agreement a) internal view returns (uint256) {
-        return ArbiterRegistryFacet(address(diamond)).getDisputeBounty(address(a));
+        return ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a));
     }
 
     function _subsidy(Agreement a) internal view returns (uint256) {
@@ -72,7 +73,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     }
 
     function _vault() internal view returns (uint256) {
-        return ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        return ArbiterVaultFacet(address(diamond)).getVaultBalance();
     }
 
     // ------------------------------------------------------------
@@ -81,7 +82,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
     function testTheDefaultIsThreeDollarsUntilSomebodySetsIt() public view {
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDisputeDiscount(),
+            ArbiterVaultFacet(address(diamond)).getDisputeDiscount(),
             DEFAULT_DISCOUNT,
             "three dollars out of the box, with nothing written to storage"
         );
@@ -99,7 +100,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), 4_600_000, "the party paid $4.60, not $7.60");
@@ -120,7 +121,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _assertDiamondBalances("verdict executed");
 
         vm.prank(arbiterAddr);
-        ArbiterRegistryFacet(address(diamond)).withdrawArbiterReward();
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         assertEq(usdc.balanceOf(arbiterAddr), ARBITER_FLOOR, "and it came out in real money");
         assertEq(_vault(), 47_000_000, "the bank did not get its $3 back: it was spent");
         _assertDiamondBalances("after the arbiter was paid");
@@ -138,7 +139,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         uint256 quoted = _quote(a);
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), quoted, "charged exactly what was quoted");
@@ -160,7 +161,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), FULL_TOPUP, "the party paid all of it");
@@ -179,7 +180,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertEq(_quote(a), FULL_TOPUP - 1_000_000, "$1 off, because $1 is all there was");
 
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         assertEq(_subsidy(a), 1_000_000);
@@ -204,7 +205,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         assertEq(_quote(a), FULL_TOPUP - DEFAULT_DISCOUNT);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
         assertEq(_subsidy(a), DEFAULT_DISCOUNT);
         assertEq(_vault(), 0);
@@ -240,7 +241,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertEq(_quote(a2), FULL_TOPUP - DEFAULT_DISCOUNT, "so does the second");
 
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a1));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a1));
         _trackDeal(address(a1));
 
         // No verdict, no finalization, nothing resolved -- and the second quote
@@ -254,7 +255,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         uint256 before = usdc.balanceOf(c2);
         vm.prank(c2);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a2));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a2));
         _trackDeal(address(a2));
         assertEq(before - usdc.balanceOf(c2), FULL_TOPUP, "and paid it");
         assertEq(_subsidy(a2), 0);
@@ -286,13 +287,13 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _activate(a1);
         vm.prank(client); a1.raiseDispute();
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a1));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a1));
         _trackDeal(address(a1));
 
         Agreement a2 = _disputedDeal(c2, AMOUNT);
         assertEq(_quote(a2), FULL_TOPUP - 500_000, "fifty cents is what is left");
         vm.prank(c2);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a2));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a2));
         _trackDeal(address(a2));
 
         assertEq(_subsidy(a1), DEFAULT_DISCOUNT);
@@ -316,7 +317,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         uint256 paid = before - usdc.balanceOf(client);
         assertEq(paid, FULL_TOPUP - DEFAULT_DISCOUNT, "$4.60 out of his own pocket");
         _trackDeal(address(a));
@@ -353,7 +354,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
             uint256 walletBefore = usdc.balanceOf(milker);
             vm.prank(milker);
-            ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+            ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
             uint256 paid = walletBefore - usdc.balanceOf(milker);
             _trackDeal(address(a));
 
@@ -385,7 +386,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _activate(a);
         vm.prank(client); a.raiseDispute();
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         _claimByArbiter(a);
@@ -395,9 +396,13 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         vm.warp(block.timestamp + FINALIZE_DELAY + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
 
-        assertEq(_vault(), DEFAULT_DISCOUNT, "the bank got its share back");
+        // Its $3 back, PLUS the arbiter's forfeited 80% of the $3 dispute fee
+        // on this $100 pot ($2.40): since 17 September 2026 an overturned
+        // arbiter's share goes to the bank, no longer to the treasury. Both
+        // literals, neither read off the contract.
+        assertEq(_vault(), DEFAULT_DISCOUNT + 2_400_000, "the bank got its share back, and the forfeited fee share on top");
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(client),
+            ArbiterVaultFacet(address(diamond)).getRefundableBounty(client),
             FULL_TOPUP - DEFAULT_DISCOUNT,
             "the payer is owed his $4.60 and not a cent of the bank's $3"
         );
@@ -421,12 +426,12 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         assertEq(_quote(a), FULL_TOPUP - DEFAULT_DISCOUNT);
 
-        ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(5_000_000);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeDiscount(), 5_000_000);
+        ArbiterVaultFacet(address(diamond)).setDisputeDiscount(5_000_000);
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeDiscount(), 5_000_000);
         assertEq(_quote(a), FULL_TOPUP - 5_000_000, "a $5 discount, one transaction later");
 
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
         assertEq(_subsidy(a), 5_000_000);
         assertEq(_vault(), 45_000_000);
@@ -436,7 +441,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     function testTheDiscountIsTheOwnersAloneToMove() public {
         vm.prank(stranger);
         vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
-        ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(9_000_000);
+        ArbiterVaultFacet(address(diamond)).setDisputeDiscount(9_000_000);
     }
 
     /// A dispute already funded keeps the split it was funded with: both halves
@@ -447,10 +452,10 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _activate(a);
         vm.prank(client); a.raiseDispute();
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
-        ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(9_000_000);
+        ArbiterVaultFacet(address(diamond)).setDisputeDiscount(9_000_000);
 
         assertEq(_bounty(a), FULL_TOPUP, "the promise to the arbiter is unchanged");
         assertEq(_subsidy(a), DEFAULT_DISCOUNT, "and so is the bank's share of it");
@@ -485,7 +490,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertGt(quoted, 0, "and the quote never collapses into the 'nothing to pay' zero");
 
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         assertEq(_bounty(a), gross, "the arbiter is still promised the whole $2.80");
@@ -506,7 +511,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     /// ordinary pot. The party pays a coin, never nothing, and never a negative.
     function testAnEnormousDiscountStillLeavesTheDisputeCostingSomething() public {
         _fundVault(500_000_000);
-        ArbiterRegistryFacet(address(diamond)).setDisputeDiscount(400_000_000); // $400
+        ArbiterVaultFacet(address(diamond)).setDisputeDiscount(400_000_000); // $400
 
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
@@ -516,7 +521,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
         assertEq(before - usdc.balanceOf(client), 1);
@@ -536,7 +541,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertEq(_quote(a), 0, "nothing to pay");
         vm.prank(client);
         vm.expectRevert(ArbiterRegistryFacet.TopUpNotNeeded.selector);
-        ArbiterRegistryFacet(address(diamond)).fundDispute(address(a));
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         assertEq(_vault(), 50_000_000, "and the bank was never touched");
     }
 }

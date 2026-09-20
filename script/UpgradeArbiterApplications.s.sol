@@ -68,6 +68,7 @@ import "forge-std/console.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterApplicationsFacet} from "../src/facets/ArbiterApplicationsFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 /// `getApplicationWindow()` declared `view` rather than `pure`. In the facet it
 /// really is pure — it returns a constant. THROUGH THE DIAMOND the same call
@@ -354,9 +355,10 @@ contract UpgradeArbiterApplications is Script {
     /// these three would move with it.
     function snapshotArbiterStorage(address diamond) public view returns (StorageSnapshot memory s) {
         ArbiterRegistryFacet f = ArbiterRegistryFacet(diamond);
-        s.arbiterCount = f.getArbiters().length;
-        s.vaultBalance = f.getVaultBalance();
-        s.chiefArbiter = f.getChiefArbiter();
+        ArbiterVaultFacet f_v = ArbiterVaultFacet(diamond);
+        s.arbiterCount = f_v.getArbiters().length;
+        s.vaultBalance = f_v.getVaultBalance();
+        s.chiefArbiter = f_v.getChiefArbiter();
     }
 
     function assertStorageContinuity(StorageSnapshot memory beforeCut, StorageSnapshot memory afterCut)
@@ -421,7 +423,7 @@ contract UpgradeArbiterApplications is Script {
     /// `assertAddListCoversTheWholeFacet` and against the live chain in
     /// `assertAllUnmounted`.
     function addSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](15);
+        sels = new bytes4[](16);
 
         // The applicant's own doors — both gasless (ERC-2771). Whoever is worth
         // seating has a record of deals, not necessarily a balance of ETH.
@@ -469,6 +471,12 @@ contract UpgradeArbiterApplications is Script {
         // to pay that gas with. Not retired by the DAO ratchet, for the same
         // reason `postArbiterBond` is not.
         sels[14] = ArbiterApplicationsFacet.postArbiterBondWithPermit.selector;
+
+        // Where a seat's bond stands — unposted, sagging after a lost appeal, or
+        // whole — and what a top-up would take (17 September 2026, the appeal
+        // economics). The live diamond gets it through the appeal-economics
+        // cut, not through this script.
+        sels[15] = ArbiterApplicationsFacet.getBondState.selector;
     }
 
     // ════════════════════════════════════════════════════════════════════

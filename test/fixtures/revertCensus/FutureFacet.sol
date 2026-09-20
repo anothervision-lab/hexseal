@@ -32,3 +32,26 @@ contract FutureFacet {
         return n;
     }
 }
+
+/**
+ * The SECOND spelling of a throw, added 14 September 2026.
+ *
+ * ⚠️ WHY IT IS HERE. `revert FutureFacet.CutInTomorrowAndForgotten()` and
+ * `revert CutInTomorrowAndForgotten()` are one throw and one selector; only a
+ * text scan can tell them apart, and until this date the census could not read
+ * the first form at all. The cost fell on the money-press census next door —
+ * nine qualified sites in `src/facets/ArbiterApplicationsFacet.sol` were read as
+ * no sites at all, and a refusal reachable from both bond buttons had never
+ * been counted, let alone worded. Here it cost only a column: `revertedFrom`
+ * reported fewer sites than exist, and `shared/unreachable-reverts.json` holds
+ * that field EXACTLY, so a blind scan makes a stale ledger look correct.
+ *
+ * No new error is declared: adding one would change what the orphan test above
+ * expects, and this fixture answers a different question — not "is a new error
+ * found" but "is a throw of a KNOWN error found when it is spelled the long way".
+ */
+contract QualifiedThrowFacet {
+    function throwTheNeighboursError(uint256 n) external pure {
+        if (n == 0) revert FutureFacet.CutInTomorrowAndForgotten();
+    }
+}

@@ -109,10 +109,35 @@ extra_output = ["storageLayout"]
 # snapshot's SOURCE with comments stripped, which the compiler's own
 # metadata.sources[...] hash cannot answer: that one covers the whole text,
 # comments included. Read-only, inside the repository, like the two above.
+#
+# ./src answers a question none of the three above can, and only one lock asks
+# it: "is there anything in this tree that spends the arbiter payroll pot".
+# That is a claim about a function which DOES NOT EXIST, and no call proves an
+# absence -- an ABI says what the code can do, never what it cannot. The lock
+# (test/TreasuryLinkUpgrade.t.sol, test_TheStreamFillsAPotThatStillHasNoDoor)
+# enumerates every .sol under ./src and finds the pot's field in exactly the two
+# files that hold it today, so the day decision 73's payout is written the test
+# goes red and its author has to come and say so. Read-only, inside the
+# repository, and the same source the compiler already read.
+#
+# ./broadcast holds forge's own receipts for every script that was ever
+# broadcast from this machine, and it answers the one question no file inside
+# the repository can: HAS A CUT BEEN SIGNED SINCE THE CENSUS WAS READ. A census
+# is a picture with a block number on it; a receipt is a block number the tool
+# wrote, not a person, and nobody edits it. test/CensusFreshness.t.sol compares
+# the two, so "the owner signed a cut and nobody re-read the census" stops being
+# a silence and becomes a red.
+#
+# ⚠️ ./broadcast IS GITIGNORED (.gitignore:38). On the machine where cuts are
+# actually signed it is present and the lock measures; on a fresh clone and in
+# CI it is absent and the lock SKIPS rather than passes, because "did not look"
+# must not read as "looked and was happy". Read-only, like the four above.
 fs_permissions = [
     { access = "read", path = "./out" },
+    { access = "read", path = "./src" },
     { access = "read", path = "./test/fixtures" },
     { access = "read", path = "./test/legacy" },
+    { access = "read", path = "./broadcast" },
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

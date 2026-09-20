@@ -44,8 +44,10 @@ import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {UpgradeArbiterApplications} from "../script/UpgradeArbiterApplications.s.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
 
-contract ArbiterApplicationsUpgradeTest is Test {
+contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     UpgradeArbiterApplications upgrade;
     DeployFull  deploy;
     DiamondProxy diamond;
@@ -72,56 +74,26 @@ contract ArbiterApplicationsUpgradeTest is Test {
     // 11 September decisions in one transaction; re-running the applications
     // cut against it is refused by its own assertAllUnmounted before any money
     // moves.
-    uint256 constant ADDED_SELECTORS = 15;
+    //
+    // SIXTEEN since 17 September 2026: `getBondState(address)`, the read that
+    // tells a sagging seat from one that never paid. It reaches the live
+    // diamond through the appeal-economics cut, not through this script.
+    uint256 constant ADDED_SELECTORS = 16;
 
-    /// ⚠️ ONE PENDING DELTA, NAMED RATHER THAN FOLDED IN. Since 25 August 2026
-    /// the tree also carries script/UpgradeBoardFeeDelivery.s.sol, which ADDS
-    /// two FactoryFacet selectors — `getUndeliveredFees` and
-    /// `withdrawUndeliveredFees` — so that a fee the recipient refuses becomes
-    /// a debt instead of holding a person's refund hostage. Until that cut is
-    /// signed, a local rig built out of DeployFull's own lists is exactly two
-    /// selectors ahead of the chain the census describes.
+    /// The one selector DealMetadataFacet ever answered, written out here
+    /// rather than borrowed from DeployFull.
     ///
-    /// Kept as its own constant instead of being absorbed into the census
-    /// numbers: the census still says what the chain said, the difference is
-    /// stated out loud, and any OTHER drift still fails here. It goes back to
-    /// zero the day that cut lands and the census is re-read.
-    /// ⚠️ AND SINCE 26 AUGUST 2026 THERE IS A SECOND ONE, counted into the same
-    /// constant: `setDAOAddress` became a proposal and gives
-    /// the named successor his own door, adding `acceptDAOAddress` and
-    /// `getPendingDAOAddress` on ArbiterRegistryFacet. No cut signed for that
-    /// either, so the local rig now stands FOUR selectors ahead of the census,
-    /// not two.
-    /// ⚠️ AND SINCE 29 AUGUST 2026 A THIRD, counted into the same constant:
-    /// the arbiter vault gained a discount on a dispute top-up whose
-    /// size is a stored number, adding `setDisputeDiscount` and
-    /// `getDisputeDiscount` on ArbiterRegistryFacet and `getDisputeSubsidy` on
-    /// ArbiterAccountabilityFacet. No cut signed for that either, so the local
-    /// rig now stands SEVEN selectors ahead of the census, not four.
-    /// ⚠️ AND SINCE 31 AUGUST 2026 A FOURTH, counted into the same constant:
-    /// RegistryFacet gains `notifyWorkHandedIn()`, so the diamond can see that
-    /// work was handed in -- `markDone()` used to emit only on the clone, while
-    /// the one standing observer is pinned to the diamond. No cut signed for
-    /// that either, so the local rig now stands EIGHT selectors ahead of the
-    /// census, not seven.
-    /// 8 -> 12 on 3 September 2026: the emergency brake (decision 17) adds four
-    /// selectors to FactoryFacet — `pauseNewDeals()`, `resumeNewDeals()`,
-    /// `newDealsPausedUntil()` and the `NEW_DEALS_PAUSE_DURATION()` getter — and
-    /// no cut has been signed for them. This cut touches neither that facet nor
-    /// those functions; it ships with script/UpgradeEmergencyBrake.s.sol.
-    uint256 constant PENDING_LOCAL_ADDS    = 12;
-
-    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
-    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
-    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
-    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
-    ///
-    /// It gets a constant of its OWN rather than turning the twelve into a
-    /// thirteen. The two ride in one transaction but they are two decisions,
-    /// and a number that covers both can no longer say which one drifted. Drop
-    /// item 138 from the cut and exactly this line goes to zero. This cut
-    /// touches neither that facet nor that function.
-    uint256 constant PENDING_FEE_CAP_ADDS  = 1;
+    /// ⚠️ 14 SEPTEMBER 2026: the owner signed the cut that unmounted this facet
+    /// from the live diamond, and DeployFull stopped mounting it in the same
+    /// commit. This rig is NOT wrong to keep it — it rehearses a cut against a
+    /// diamond shaped the way the chain was AT THAT TIME, and at that time the
+    /// facet was mounted. What it may no longer do is ask DeployFull what that
+    /// shape was: DeployFull describes the chain of today, this rig describes
+    /// the chain of its own moment, and the two have parted company.
+    function _dealMetadataFacetSelectors() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](1);
+        sels[0] = DealMetadataFacet.getDealTokenURI.selector;
+    }
 
     function setUp() public {
         upgrade = new UpgradeArbiterApplications();
@@ -194,8 +166,8 @@ contract ArbiterApplicationsUpgradeTest is Test {
             "the local pre-cut diamond has a different number of facets than the live one"
         );
         assertEq(
-            _routed(), CHAIN_ROUTED_BEFORE + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS,
-            "the local pre-cut diamond routes a different number of selectors than the live one, beyond the pending cut"
+            _routed(), CHAIN_ROUTED_BEFORE,
+            "the local pre-cut diamond routes a different number of selectors than the live one"
         );
     }
 
@@ -256,8 +228,8 @@ contract ArbiterApplicationsUpgradeTest is Test {
             // the census side, and they stay THREE — the bond pair, the seat
             // door and the permit door are three decisions, and a single 4
             // could no longer say which of them drifted.
-            _routed(), 214 + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS + 2 + 1 + 1,
-            "214 routed selectors after the cut, plus the pending cuts' adds"
+            _routed(), CHAIN_ROUTED_BEFORE + ADDED_SELECTORS,
+            "the cut did not move the routed count by exactly its own Add group"
         );
     }
 
@@ -312,7 +284,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
         }
         assertEq(_routed(), routedAfterCut - ADDED_SELECTORS, "the rollback removed a different number of selectors");
         assertEq(
-            _routed(), CHAIN_ROUTED_BEFORE + PENDING_LOCAL_ADDS + PENDING_FEE_CAP_ADDS,
+            _routed(), CHAIN_ROUTED_BEFORE,
             "the rollback did not restore the pre-cut shape"
         );
     }
@@ -345,7 +317,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
         );
         d = new DiamondProxy(address(this), initCuts, address(0), "");
 
-        IDiamondCut.FacetCut[] memory rest = new IDiamondCut.FacetCut[](7);
+        IDiamondCut.FacetCut[] memory rest = new IDiamondCut.FacetCut[](8);
         rest[0] = IDiamondCut.FacetCut(
             address(new JobBoardFacet()), IDiamondCut.FacetCutAction.Add, deploy.jobBoardFacetSelectors()
         );
@@ -361,7 +333,7 @@ contract ArbiterApplicationsUpgradeTest is Test {
             deploy.arbiterAccountabilityFacetSelectors()
         );
         rest[4] = IDiamondCut.FacetCut(
-            address(new DealMetadataFacet()), IDiamondCut.FacetCutAction.Add, deploy.dealMetadataFacetSelectors()
+            address(new DealMetadataFacet()), IDiamondCut.FacetCutAction.Add, _dealMetadataFacetSelectors()
         );
         rest[5] = IDiamondCut.FacetCut(
             address(new JobReceiptFacet()), IDiamondCut.FacetCutAction.Add, deploy.jobReceiptFacetSelectors()
@@ -369,7 +341,85 @@ contract ArbiterApplicationsUpgradeTest is Test {
         rest[6] = IDiamondCut.FacetCut(
             address(new ReputationFacet()), IDiamondCut.FacetCutAction.Add, deploy.reputationFacetSelectors()
         );
+        // The money and the plain reads (16 September 2026 split). They were in
+        // the registry's list until that day and are in the census as ordinary
+        // arbiter selectors; without this entry the rig would simply be missing
+        // twenty-eight selectors the chain routes, which is what it said.
+        rest[7] = IDiamondCut.FacetCut(
+            address(new ArbiterVaultFacet()), IDiamondCut.FacetCutAction.Add, deploy.arbiterVaultFacetSelectors()
+        );
         IDiamondCut(address(d)).diamondCut(rest, address(0), "");
+
+        // ⚠️ AND THEN CONFORMED TO THE CENSUS, BY SET DIFFERENCE AND WITHOUT A
+        // NUMBER.
+        //
+        // The facets above are today's, and today's facets have grown since
+        // 24 August. Until 14 September that growth was carried as two
+        // allowance constants -- PENDING_LOCAL_ADDS, which had been raised from
+        // 2 to 4 to 7 to 8 to 12 by five separate cuts, and PENDING_FEE_CAP_ADDS
+        // -- and every assertion about this rig's size was written as "the
+        // census, plus those". That is the arithmetic that let ten selectors of
+        // drift pass unnoticed elsewhere in this repository: a sum that is
+        // raised whenever it disagrees can no longer disagree.
+        //
+        // The census is the complete list of what the chain routed at block
+        // 45897877. Whatever this checkout mounts that the census does not hold
+        // comes off, however much that is; then the two sets are proved equal.
+        // A cut landing in the tree changes the size of the difference and
+        // nothing else.
+        bytes4[] memory census = _chainCensus();
+        IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
+        uint256 routed;
+        for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
+
+        bytes4[] memory scratch = new bytes4[](routed);
+        uint256 n;
+        for (uint256 i = 0; i < all.length; i++) {
+            for (uint256 j = 0; j < all[i].functionSelectors.length; j++) {
+                bytes4 sel = all[i].functionSelectors[j];
+                if (!_censusHolds(census, sel)) scratch[n++] = sel;
+            }
+        }
+        if (n > 0) {
+            bytes4[] memory extra = new bytes4[](n);
+            for (uint256 i = 0; i < n; i++) extra[i] = scratch[i];
+            IDiamondCut.FacetCut[] memory strip = new IDiamondCut.FacetCut[](1);
+            strip[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
+            IDiamondCut(address(d)).diamondCut(strip, address(0), "");
+        }
+        for (uint256 i = 0; i < census.length; i++) {
+            require(
+                IDiamondLoupe(address(d)).facetAddress(census[i]) != address(0),
+                string.concat(
+                    "the rig is MISSING a selector the chain routed at this census: ",
+                    vm.toString(census[i]),
+                    " - this checkout no longer builds it, and a stand rehearsing a past cut has to mount it itself"
+                )
+            );
+        }
+
+        // ⚠️ AND FINALLY BACK INTO THE CHAIN'S SHAPE (16 September 2026). The
+        // split put twenty-eight of the arbiter selectors on a second contract
+        // without touching a signature, so the SET proved equal just above is
+        // right either way — but the chain still answers all fifty-nine from one
+        // address, and the cut rehearsed here refuses a Replace group spread
+        // over two. The rig is put back into that shape rather than the refusal
+        // being loosened.
+        //
+        // ⚠️ THIS CALL STAYS, and the line that stood here saying it would come
+        // out the day the split landed was wrong. The rig is conformed to THIS
+        // STAND'S census, read before the split, when one host routed all
+        // fifty-nine arbiter selectors; the split landing on Base Sepolia
+        // (17 September 2026, block 46 946 562) does not change that past.
+        // Measured 18 September 2026 on EmergencyBrakeUpgrade: without this
+        // call setUp reverts "the conformed rig has a different number of
+        // facets than the live chain had" and the suite does not run.
+        _mountArbiterAsOneHost(address(d));
+    }
+
+    function _censusHolds(bytes4[] memory census, bytes4 sel) internal pure returns (bool) {
+        for (uint256 i = 0; i < census.length; i++) if (census[i] == sel) return true;
+        return false;
     }
 
     function _chainCensus() internal view returns (bytes4[] memory out) {

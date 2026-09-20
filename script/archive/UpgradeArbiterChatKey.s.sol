@@ -6,6 +6,7 @@ import "forge-std/console.sol";
 import {ArbiterRegistryFacet} from "../../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../../src/facets/ArbiterAccountabilityFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../../src/DiamondProxy.sol";
+import {ArbiterVaultFacet} from "../../src/facets/ArbiterVaultFacet.sol";
 
 /**
  * The arbiter's chat keys on chain.
@@ -259,9 +260,10 @@ contract UpgradeArbiterChatKey is Script {
     /// than quietly staying at the default.
     function snapshotArbiterStorage(address diamond) public view returns (StorageSnapshot memory s) {
         ArbiterRegistryFacet f = ArbiterRegistryFacet(diamond);
-        s.arbiterCount = f.getArbiters().length;
-        s.vaultBalance = f.getVaultBalance();
-        s.arbiterFloor = f.getArbiterFloor();
+        ArbiterVaultFacet f_v = ArbiterVaultFacet(diamond);
+        s.arbiterCount = f_v.getArbiters().length;
+        s.vaultBalance = f_v.getVaultBalance();
+        s.arbiterFloor = f_v.getArbiterFloor();
     }
 
     /// The three values taken BEFORE and AFTER the cut must match literally —
@@ -314,7 +316,8 @@ contract UpgradeArbiterChatKey is Script {
     /// about the exception to "the loop closes itself").
     function findArbitersWithOpenClaimsMissingKeys(address diamond) public view returns (address[] memory flagged) {
         ArbiterRegistryFacet f = ArbiterRegistryFacet(diamond);
-        address[] memory arbiters = f.getArbiters();
+        ArbiterVaultFacet f_v = ArbiterVaultFacet(diamond);
+        address[] memory arbiters = f_v.getArbiters();
         // getOpenClaimCount moved into the accountability facet on 16 August 2026.
         // The address is the same — it is the diamond; the cast only names the ABI.
         // The cut was executed on 10 August and is not rewritten.
@@ -416,48 +419,48 @@ contract UpgradeArbiterChatKey is Script {
         sels[18] = ArbiterRegistryFacet.resolveAppeal.selector;
 
         // Rewards
-        sels[19] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        sels[20] = ArbiterRegistryFacet.fundVault.selector;
-        sels[21] = ArbiterRegistryFacet.setRewardPerDispute.selector;
+        sels[19] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[20] = ArbiterVaultFacet.fundVault.selector;
+        sels[21] = ArbiterVaultFacet.setRewardPerDispute.selector;
         sels[22] = ArbiterRegistryFacet.setDAOAddress.selector;
 
         // Views
         sels[23] = ArbiterRegistryFacet.isDaoActive.selector;
         sels[24] = ArbiterRegistryFacet.getMinXPToRegister.selector;
         sels[25] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        sels[26] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        sels[27] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        sels[28] = ArbiterRegistryFacet.getArbiters.selector;
-        sels[29] = ArbiterRegistryFacet.getDisputeClaimer.selector;
+        sels[26] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[27] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[28] = ArbiterVaultFacet.getArbiters.selector;
+        sels[29] = ArbiterVaultFacet.getDisputeClaimer.selector;
         sels[30] = ArbiterAccountabilityFacet.getArbiterDeals.selector;
-        sels[31] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        sels[32] = ArbiterRegistryFacet.getPendingVerdict.selector;
+        sels[31] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[32] = ArbiterVaultFacet.getPendingVerdict.selector;
         sels[33] = ArbiterAccountabilityFacet.getArbiterReward.selector;
-        sels[34] = ArbiterRegistryFacet.getVaultBalance.selector;
-        sels[35] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        sels[36] = ArbiterRegistryFacet.getDAOAddress.selector;
+        sels[34] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[35] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[36] = ArbiterVaultFacet.getDAOAddress.selector;
         sels[37] = ArbiterAccountabilityFacet.getArbiterMistakeStreak.selector;
-        sels[38] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        sels[39] = ArbiterRegistryFacet.getAppealVotes.selector;
-        sels[40] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
+        sels[38] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[39] = ArbiterVaultFacet.getAppealVotes.selector;
+        sels[40] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
         sels[41] = ArbiterAccountabilityFacet.getArbiterBond.selector;
         sels[42] = ArbiterAccountabilityFacet.getOpenClaimCount.selector;
 
         // The dispute fee (3% of the disputed amount) — split 80/20 arbiter/treasury
-        sels[43] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        sels[44] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        sels[45] = ArbiterRegistryFacet.getTreasurySlice.selector;
+        sels[43] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[44] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[45] = ArbiterVaultFacet.getTreasurySlice.selector;
 
         // The paid arbiter call: the floor and the quote for the top-up to it
-        sels[46] = ArbiterRegistryFacet.setArbiterFloor.selector;
-        sels[47] = ArbiterRegistryFacet.getArbiterFloor.selector;
-        sels[48] = ArbiterRegistryFacet.quoteDisputeTopUp.selector;
+        sels[46] = ArbiterVaultFacet.setArbiterFloor.selector;
+        sels[47] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[48] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
 
         // The paid arbiter call: payment and the soft refund of the top-up
-        sels[49] = ArbiterRegistryFacet.fundDispute.selector;
-        sels[50] = ArbiterRegistryFacet.getDisputeBounty.selector;
-        sels[51] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        sels[52] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        sels[49] = ArbiterVaultFacet.fundDispute.selector;
+        sels[50] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[51] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[52] = ArbiterVaultFacet.getRefundableBounty.selector;
 
         // getArbiterChatKeys/setArbiterChatKey and the new claimDispute go into Add,
         // not here (see addSelectors()).

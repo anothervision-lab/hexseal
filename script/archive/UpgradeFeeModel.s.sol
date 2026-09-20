@@ -196,6 +196,7 @@ import "../../src/facets/JobBoardFacet.sol";
 import "../../src/facets/ServiceBoardFacet.sol";
 import "../../src/RegistryFacet.sol";
 import "../../src/facets/DealMetadataFacet.sol";
+import {ArbiterVaultFacet} from "../../src/facets/ArbiterVaultFacet.sol";
 
 contract UpgradeFeeModel is Script {
 
@@ -555,37 +556,37 @@ contract UpgradeFeeModel is Script {
         sels[17] = ArbiterRegistryFacet.raiseAppeal.selector;
         sels[18] = ArbiterRegistryFacet.voteOnAppeal.selector;
         sels[19] = ArbiterRegistryFacet.resolveAppeal.selector;
-        sels[20] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        sels[21] = ArbiterRegistryFacet.fundVault.selector;
-        sels[22] = ArbiterRegistryFacet.setRewardPerDispute.selector;
+        sels[20] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[21] = ArbiterVaultFacet.fundVault.selector;
+        sels[22] = ArbiterVaultFacet.setRewardPerDispute.selector;
         sels[23] = ArbiterRegistryFacet.setDAOAddress.selector;
         sels[24] = ArbiterRegistryFacet.isDaoActive.selector;
         sels[25] = ArbiterRegistryFacet.getMinXPToRegister.selector;
         sels[26] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        sels[27] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        sels[28] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        sels[29] = ArbiterRegistryFacet.getArbiters.selector;
-        sels[30] = ArbiterRegistryFacet.getDisputeClaimer.selector;
+        sels[27] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[28] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[29] = ArbiterVaultFacet.getArbiters.selector;
+        sels[30] = ArbiterVaultFacet.getDisputeClaimer.selector;
         sels[31] = ArbiterAccountabilityFacet.getArbiterDeals.selector;
-        sels[32] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        sels[33] = ArbiterRegistryFacet.getPendingVerdict.selector;
+        sels[32] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[33] = ArbiterVaultFacet.getPendingVerdict.selector;
         sels[34] = ArbiterAccountabilityFacet.getArbiterReward.selector;
-        sels[35] = ArbiterRegistryFacet.getVaultBalance.selector;
-        sels[36] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        sels[37] = ArbiterRegistryFacet.getDAOAddress.selector;
+        sels[35] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[36] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[37] = ArbiterVaultFacet.getDAOAddress.selector;
         sels[38] = ArbiterAccountabilityFacet.getArbiterMistakeStreak.selector;
-        sels[39] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        sels[40] = ArbiterRegistryFacet.getAppealVotes.selector;
-        sels[41] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
+        sels[39] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[40] = ArbiterVaultFacet.getAppealVotes.selector;
+        sels[41] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
         sels[42] = ArbiterAccountabilityFacet.getArbiterBond.selector;
         sels[43] = ArbiterAccountabilityFacet.getOpenClaimCount.selector;
     }
 
     function arbiterRegistryFacetAddSelectors() public pure returns (bytes4[] memory sels) {
         sels = new bytes4[](3);
-        sels[0] = ArbiterRegistryFacet.creditDisputeFee.selector;
-        sels[1] = ArbiterRegistryFacet.withdrawTreasurySlice.selector;
-        sels[2] = ArbiterRegistryFacet.getTreasurySlice.selector;
+        sels[0] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[1] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[2] = ArbiterVaultFacet.getTreasurySlice.selector;
     }
 
     // JobBoardFacet — 12 Replace (unchanged) + 1 Add (fee-held getter)

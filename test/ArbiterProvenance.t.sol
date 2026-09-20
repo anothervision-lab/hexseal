@@ -17,12 +17,14 @@ import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
     /// ArbiterTwoFacetBench). `facet` deliberately keeps its old name: every
     /// vm.store(address(facet), ...) below keeps hitting the very same storage.
     ArbiterRegistryFacet facet;
+    ArbiterVaultFacet facetVault;
     ArbiterAccountabilityFacet accFacet;
 
     address owner;
@@ -47,7 +49,7 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     bytes32 constant OWNER_SLOT = 0x178642b411f9f4783b21ef338f3e96db6c1272d763f0b7500ec93464dafb8604;
 
     function setUp() public {
-        (facet, accFacet) = _deployArbiterBench();
+        (facet, accFacet, facetVault) = _deployArbiterBench();
         owner = address(0x0);
         chief = address(0xC4);
         seat1 = address(0xA1);
@@ -180,7 +182,7 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
         vm.prank(chief);
         facet.addArbiter(chief);            // the chief seats THEMSELVES
 
-        assertTrue(facet.isRegisteredArbiter(chief), "setup: the chief took a seat");
+        assertTrue(facetVault.isRegisteredArbiter(chief), "setup: the chief took a seat");
         assertEq(accFacet.getSeatedBy(chief), chief, "setup: they seated themselves");
         assertEq(accFacet.getSeatedCountBy(chief), 1, "setup: the seating counter counted them");
 

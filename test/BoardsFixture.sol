@@ -174,7 +174,7 @@ abstract contract BoardsFixture is Test {
         JobReceiptFacet jobReceiptFacet = new JobReceiptFacet();
 
         // --- Registry selectors ---
-        bytes4[] memory regSels = new bytes4[](12);
+        bytes4[] memory regSels = new bytes4[](14);
         regSels[0] = RegistryFacet.initRegistry.selector;
         regSels[1] = RegistryFacet.register.selector;
         regSels[2] = RegistryFacet.updateStatus.selector;
@@ -187,6 +187,12 @@ abstract contract BoardsFixture is Test {
         regSels[9] = RegistryFacet.getActive.selector;
         regSels[10] = RegistryFacet.totalAgreements.selector;
         regSels[11] = RegistryFacet.authorizedFactory.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[12] = RegistryFacet.registerOffer.selector;
+        regSels[13] = RegistryFacet.notifyOfferAccepted.selector;
 
         // --- Factory selectors ---
         bytes4[] memory facSels = new bytes4[](27);

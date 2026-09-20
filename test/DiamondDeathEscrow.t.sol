@@ -11,6 +11,7 @@ pragma solidity ^0.8.20;
 // in test/DiamondDeathGasCaps.t.sol.
 
 import "./DiamondDeathEscrowBase.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
     // ============================================================
@@ -251,7 +252,7 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
     //
     // The only exit from a disputed deal, and the guard in front of it runs
     // BEFORE any money moves. It used to be a bare
-    // `IArbiterRegistryFacet(diamond).hasSubmittedVerdict(...)`, which made an
+    // `IArbiterVaultFacet(diamond).hasSubmittedVerdict(...)`, which made an
     // unreachable diamond mean "a verdict exists" and stranded the pot for
     // ever. It now reads through Agreement._verdictInFlight: a gas-capped
     // low-level staticcall whose failure means "no verdict", so the money

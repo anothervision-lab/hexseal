@@ -41,10 +41,12 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ArbiterApplicationsFacet.sol";
 import "../src/facets/DealMetadataFacet.sol";
+import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {UpgradeJobBoardApplicantGate} from "../script/UpgradeJobBoardApplicantGate.s.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     UpgradeJobBoardApplicantGate upgrade;
@@ -57,106 +59,36 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     /// that a facet which silently grows or loses a function stops here instead
     /// of at the signature.
     uint256 constant CHAIN_FACETS      = 13;
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 8 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains `postArbiterBond()` and
-    /// `isArbiterActive(address)`, shipped by
-    /// script/UpgradeArbiterBondRequired.s.sol. Its own constant, so that
-    /// landing it takes exactly this line to zero.
-    uint256 constant PENDING_ARBITER_BOND_ADDS = 2;
 
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains the door that takes back
-    /// a GRANTED SEAT NOTHING HAS BEEN EARNED IN —
-    /// `revokeUnprovenSeat(address,string)`, shipped by
-    /// script/UpgradeUnprovenSeatRevocationAndBondPermit.s.sol.
+    /// ⚠️ ELEVEN CONSTANTS WERE DELETED HERE ON 14 SEPTEMBER 2026, and what
+    /// they were for is the finding.
     ///
-    /// One selector, and a constant of its OWN for the same reason the line
-    /// above has one: it rides in its own transaction and is its own decision,
-    /// and a number that covers several can no longer say which of them drifted.
-    /// Land that cut and exactly this line goes to zero.
-    uint256 constant PENDING_UNPROVEN_SEAT_ADDS = 1;
-
-    /// ⚠️ AND ONE MORE PENDING CUT SINCE 11 SEPTEMBER 2026, on a facet this one
-    /// does not touch: `ArbiterApplicationsFacet` gains a SECOND bond door,
-    /// `postArbiterBondWithPermit(uint256,uint8,bytes32,bytes32)`, which takes
-    /// the same 50 USDC on a signed EIP-2612 paper instead of on an allowance
-    /// granted beforehand. Granting an allowance is a transaction sent to USDC,
-    /// which does not trust our forwarder, so that step could never be made
-    /// gasless from our side — and the arbiter it is asked of has earned nothing
-    /// in the protocol yet to pay the gas with.
+    /// Nine of them said "this cut has not landed yet" and two said "my census
+    /// is older than the chain". Together they were the whole expected side of
+    /// one test -- `test_AFreshDeployHasTheSameShapeAsTheLiveChain` -- which
+    /// asked whether a diamond built from script/DeployFull.s.sol still looked
+    /// like the live one. The test was GREEN on 14 September while a
+    /// from-scratch deployment would have produced a diamond with no treasury
+    /// link at all: no fee split, no arbiter vault, no payroll stream.
     ///
-    /// It rides in the SAME transaction as the line above, and still gets a
-    /// constant of its OWN, for the reason every line here has one: they are two
-    /// decisions, and a number covering both can no longer say which of them
-    /// drifted. Land that cut and exactly this line goes to zero.
-    uint256 constant PENDING_BOND_PERMIT_ADDS = 1;
+    /// It was green because it compared the script against THIS census, taken
+    /// on 25 August, plus the eleven allowances. 214 + 17 came to exactly what
+    /// the script built, and both sides were nine selectors behind the chain.
+    /// Every cut had answered its red by writing one more line here instead of
+    /// re-reading the census. That is a ratchet turned into a budget.
+    ///
+    /// The test is gone; the question belongs to
+    /// test/DeployFullMatchesChain.t.sol, which asks it against a census read
+    /// at the CURRENT block, and to test/CensusFreshness.t.sol, which asks
+    /// forge's own receipts whether a cut has been signed since that census was
+    /// read. Neither has a number anybody can raise.
+    ///
+    /// Removing them left NOTHING in this file undefined, which is the proof
+    /// they were load-bearing for exactly one lock -- the one that could not
+    /// have worked.
 
     uint256 constant CHAIN_ROUTED      = 214;
     uint256 constant JOBBOARD_SELECTORS = 13;
-
-    /// ⚠️ ONE PENDING DELTA, NAMED RATHER THAN FOLDED IN. Since 25 August 2026
-    /// the tree also carries script/UpgradeBoardFeeDelivery.s.sol, which ADDS
-    /// two FactoryFacet selectors — `getUndeliveredFees` and
-    /// `withdrawUndeliveredFees` — so that a fee the recipient refuses becomes
-    /// a debt instead of holding a person's refund hostage. Until that cut is
-    /// signed, a from-scratch deploy is exactly two selectors ahead of the
-    /// chain this census describes. The two are checked BY NAME below, so the
-    /// allowance cannot absorb a different drift of the same size.
-    uint256 constant PENDING_FACTORY_ADDS = 2;
-
-    /// ⚠️ A SECOND PENDING DELTA, named the same way and for the same reason.
-    /// Since 26 August 2026 the tree also carries the handover: `setDAOAddress`
-    /// PROPOSES a successor and the named address takes office by sending
-    /// `acceptDAOAddress()` itself, which ADDS two ArbiterRegistryFacet
-    /// selectors — that one and `getPendingDAOAddress`. No cut has been signed
-    /// for it either, so a from-scratch deploy is two further selectors ahead
-    /// of the chain. Checked by name below, so the allowance cannot absorb a
-    /// different drift of the same size.
-    uint256 constant PENDING_DAO_HANDOVER_ADDS = 2;
-
-    /// ⚠️ A THIRD PENDING DELTA (29 August 2026), named the same
-    /// way and for the same reason. The arbiter vault now takes a fixed amount
-    /// off a dispute top-up — a discount, not cover — and its size is a stored
-    /// number, so the registry gains `setDisputeDiscount` and
-    /// `getDisputeDiscount`, and the accountability facet gains
-    /// `getDisputeSubsidy`. No cut has been signed for any of the three, so a
-    /// from-scratch deploy stands three further selectors ahead of the chain.
-    /// Checked by name below where the neighbours are.
-    uint256 constant PENDING_DISCOUNT_ADDS = 3;
-
-    /// ⚠️ A FOURTH PENDING DELTA (31 August 2026), named the same way and for the same
-    /// reason. `Agreement.markDone()` used to touch the diamond not at all: it
-    /// stamped the clone and emitted `MarkedDone` THERE, while the one standing
-    /// observer is pinned to the diamond. So the transition that starts the
-    /// two-day auto-approve clock -- after which silence hands the executor the
-    /// whole pot -- was invisible from the only address anybody watches.
-    /// RegistryFacet gains `notifyWorkHandedIn()`, which writes nothing and
-    /// emits `WorkHandedIn`. It ships with
-    /// script/UpgradeRegistryHandInSignal.s.sol and is NOT cut into the chain
-    /// yet; this cut touches neither that facet nor that function.
-    uint256 constant PENDING_HAND_IN_ADDS = 1;
-
-    /// ⚠️ A PENDING DELTA OF 3 SEPTEMBER 2026, named the same way and for the
-    /// same reason. The marketplace gets an emergency brake that lets go by
-    /// itself (decision 17): FactoryFacet gains `pauseNewDeals()`,
-    /// `resumeNewDeals()`, `newDealsPausedUntil()` and the
-    /// `NEW_DEALS_PAUSE_DURATION()` getter, and both boards' `whenNotPaused`
-    /// stops reading a `paused` bool that has had no writer since 24 June 2026.
-    /// No cut has been signed for it, so a from-scratch deploy now stands four
-    /// further selectors ahead of this census. Ships with
-    /// script/UpgradeEmergencyBrake.s.sol.
-    uint256 constant PENDING_BRAKE_ADDS = 4;
-
-    /// ⚠️ AND ITEM 138, RIDING IN THAT SAME CUT (3 September 2026).
-    /// FactoryFacet's 20% fee ceiling stops being a bare `2_000` written twice
-    /// -- once in `initFeeModel`, once in `setFeeBps` -- and becomes
-    /// `MAX_FEE_BPS`, a public constant, so its getter is a selector.
-    ///
-    /// It gets a constant of its OWN rather than turning the brake's four into
-    /// a five. The two ride in one transaction but they are two decisions, and
-    /// a number that covers both can no longer say which one drifted. Drop item
-    /// 138 from the cut and exactly this line goes to zero.
-    uint256 constant PENDING_FEE_CAP_ADDS = 1;
 
     /// `applicantGeneration` is field 8 of `JobBoardStorage.Layout` — see the
     /// same constant, and the same refusal to take it on trust, in
@@ -172,16 +104,70 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     // THE INDEPENDENT ORACLES
     // ══════════════════════════════════════════════════════════════════════
 
+    /// The three the job board grew AFTER this cut (18 September 2026, "an
+    /// arbiter is not a player in the market"): `getOpenMarketItems`,
+    /// `pruneClosedApplications`, `getAppliedJobIds`. By SIGNATURE TEXT, never
+    /// read off the later script's lists.
+    ///
+    /// ⚠️ WHY THIS FILE NEEDS AN ALLOWANCE AT ALL, when its whole point was
+    /// that the facet gains nothing. This cut is a RECORD: it was broadcast on
+    /// 25 August 2026, and its thirteen selectors are what was mounted that
+    /// day. The facet has grown since, and demanding that a 25 August record
+    /// equal today's ABI is demanding that the past match the present — the
+    /// same argument test/BoardFeeDeliveryUpgrade.t.sol and
+    /// test/UpgradeFeeModelSelectors.t.sol already carry for other facets. The
+    /// SCRIPT's own `assertReplaceListCoversTheWholeFacet` stays strict and
+    /// keeps refusing, which is right: re-running it today would deploy a job
+    /// board with sixteen functions and mount thirteen, shipping three dead
+    /// ones.
+    function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](3);
+        sels[0] = bytes4(keccak256("getOpenMarketItems(address)"));
+        sels[1] = bytes4(keccak256("pruneClosedApplications(address,uint256)"));
+        sels[2] = bytes4(keccak256("getAppliedJobIds(address)"));
+    }
+
+    function _concat(bytes4[] memory a, bytes4[] memory b) internal pure returns (bytes4[] memory out) {
+        out = new bytes4[](a.length + b.length);
+        for (uint256 i = 0; i < a.length; i++) out[i] = a[i];
+        for (uint256 i = 0; i < b.length; i++) out[a.length + i] = b[i];
+    }
+
+    function _isIn(bytes4[] memory set, bytes4 sel) internal pure returns (bool) {
+        for (uint256 i = 0; i < set.length; i++) if (set[i] == sel) return true;
+        return false;
+    }
+
+    /// The allowance held to its own two conditions, so that a failure names
+    /// which one broke: every selector in it is implemented by the facet today,
+    /// and none of them is one this cut mounted.
+    function test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted() public {
+        UpgradeJobBoardApplicantGate u = _upgrade();
+        bytes4[] memory grown = _grownAfterThisCut();
+        bytes4[] memory abiSels = u.artifactSelectors();
+        bytes4[] memory replaced = u.replaceSelectors();
+        for (uint256 i = 0; i < grown.length; i++) {
+            assertTrue(_isIn(abiSels, grown[i]), "the allowance is stale: JobBoardFacet no longer implements it");
+            assertFalse(_isIn(replaced, grown[i]), "the allowance covers a selector this cut REPLACED");
+        }
+    }
+
     /// The script's hand-written Replace list against solc's output for the
     /// facet. A function the facet gains and nobody mounts would otherwise ship
     /// dead: present in the ABI, routed nowhere, discovered by the first person
     /// whose button did nothing.
     function test_ReplaceListCoversExactlyTheCompiledFacet() public {
         UpgradeJobBoardApplicantGate u = _upgrade();
-        u.assertReplaceListCoversTheWholeFacet(u.replaceSelectors());
+        // The strict version lives on in the script and still refuses; here the
+        // later growth is named and added, see `_grownAfterThisCut`.
+        u.assertReplaceListCoversTheWholeFacet(_concat(u.replaceSelectors(), _grownAfterThisCut()));
 
         assertEq(u.replaceSelectors().length, JOBBOARD_SELECTORS, "the cut no longer replaces thirteen selectors");
-        assertEq(u.artifactSelectors().length, JOBBOARD_SELECTORS, "the facet no longer exposes thirteen functions");
+        assertEq(
+            u.artifactSelectors().length,
+            JOBBOARD_SELECTORS + _grownAfterThisCut().length,
+            "the facet no longer exposes thirteen functions plus the named later growth"
+        );
     }
 
     /// THE PROOF OF THE Replace/Add SPLIT, and the reason there is no Add group.
@@ -231,6 +217,9 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
         bytes4[] memory mounted = _jobBoardCensus();
 
         for (uint256 i = 0; i < fromArtifact.length; i++) {
+            // The named later growth is exactly the set that is NOT on the chain
+            // yet and does need an Add group — in its own cut, not in this one.
+            if (_isIn(_grownAfterThisCut(), fromArtifact[i])) continue;
             bool found;
             for (uint256 j = 0; j < mounted.length; j++) {
                 if (fromArtifact[i] == mounted[j]) { found = true; break; }
@@ -281,7 +270,7 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     function test_TheCutAndTheFreshDeployMountTheSameThirteen() public {
         DeployFull deploy = new DeployFull();
         bytes4[] memory fromDeploy = deploy.jobBoardFacetSelectors();
-        bytes4[] memory sels = _upgrade().replaceSelectors();
+        bytes4[] memory sels = _concat(_upgrade().replaceSelectors(), _grownAfterThisCut());
 
         assertEq(fromDeploy.length, sels.length, "DeployFull and this cut disagree on how many JobBoard selectors exist");
         for (uint256 i = 0; i < fromDeploy.length; i++) {
@@ -292,60 +281,27 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
             assertTrue(found, "DeployFull mounts a JobBoard selector this cut does not replace");
         }
     }
-
-    /// The shape of a diamond built the way the live one was built, against the
-    /// shape a person read off the live one. Neither number is computed from the
-    /// other.
-    function test_AFreshDeployHasTheSameShapeAsTheLiveChain() public {
-        DiamondProxy d = _deployFullShapedDiamond();
-        assertEq(
-            IDiamondLoupe(address(d)).facetAddresses().length, CHAIN_FACETS,
-            "a from-scratch diamond has a different number of facets than the live one"
-        );
-        uint256 routed;
-        IDiamondLoupe.Facet[] memory all = IDiamondLoupe(address(d)).facets();
-        for (uint256 i = 0; i < all.length; i++) routed += all[i].functionSelectors.length;
-        assertEq(
-            routed, CHAIN_ROUTED + PENDING_FACTORY_ADDS + PENDING_DAO_HANDOVER_ADDS + PENDING_DISCOUNT_ADDS
-                + PENDING_ARBITER_BOND_ADDS + PENDING_UNPROVEN_SEAT_ADDS + PENDING_BOND_PERMIT_ADDS
-                + PENDING_HAND_IN_ADDS + PENDING_BRAKE_ADDS + PENDING_FEE_CAP_ADDS,
-            "a from-scratch diamond routes a different number of selectors than the live one, beyond the pending cuts"
-        );
-
-        // And the allowance is spent on the two selectors it was granted for,
-        // not on whichever two happen to be there. Without this, any later pair
-        // of additions would slip through a gate that only counts.
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(FactoryFacet.getUndeliveredFees.selector) != address(0),
-            "the pending allowance is granted for getUndeliveredFees, and it is not mounted"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(FactoryFacet.withdrawUndeliveredFees.selector) != address(0),
-            "the pending allowance is granted for withdrawUndeliveredFees, and it is not mounted"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(ArbiterRegistryFacet.acceptDAOAddress.selector) != address(0),
-            "the second pending allowance is granted for acceptDAOAddress, and it is not mounted"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(ArbiterRegistryFacet.getPendingDAOAddress.selector) != address(0),
-            "the second pending allowance is granted for getPendingDAOAddress, and it is not mounted"
-        );
-
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(ArbiterRegistryFacet.setDisputeDiscount.selector) != address(0),
-            "the third pending allowance is granted for setDisputeDiscount, and it is not mounted"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(ArbiterRegistryFacet.getDisputeDiscount.selector) != address(0),
-            "the third pending allowance is granted for getDisputeDiscount, and it is not mounted"
-        );
-        assertTrue(
-            IDiamondLoupe(address(d)).facetAddress(ArbiterAccountabilityFacet.getDisputeSubsidy.selector) != address(0),
-            "the third pending allowance is granted for getDisputeSubsidy, and it is not mounted"
-        );
-
-    }
+    // ⚠️ A TEST WAS REMOVED HERE ON 14 SEPTEMBER 2026, AND WHERE IT WENT
+    // MATTERS MORE THAN WHAT IT SAID.
+    //
+    // `test_AFreshDeployHasTheSameShapeAsTheLiveChain` asked whether a diamond built from
+    // script/DeployFull.s.sol still matches the live chain. That is a real
+    // question and it now has exactly one owner:
+    // test/DeployFullMatchesChain.t.sol, which asks it against the census read
+    // at the CURRENT block.
+    //
+    // It could never be answered here. This stand's census is a BEFORE picture
+    // of one past cut, so the only way to compare today's deploy script with it
+    // was "old census, plus a hand-kept allowance for every cut that has landed
+    // since". That sum is what turned the ratchet into a budget: on
+    // 14 September the sibling of this test in
+    // test/JobBoardApplicantGateUpgrade.t.sol was GREEN while a from-scratch
+    // deployment would have produced a diamond with no treasury link at all,
+    // because the stale census and the nine accumulated allowances added up to
+    // exactly what the script built.
+    //
+    // A stand rehearsing a PAST cut is the wrong place to ask a question about
+    // the PRESENT chain, and no amount of care with the allowance fixes that.
 
     // ══════════════════════════════════════════════════════════════════════
     // THE CUT ITSELF, APPLIED TO A DIAMOND HOLDING PRE-UPGRADE JOBS
@@ -367,8 +323,11 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
 
         bytes4[] memory sels = u.replaceSelectors();
 
-        // Pre-flight, exactly as run() calls it.
-        u.assertReplaceListCoversTheWholeFacet(sels);
+        // Pre-flight, as run() calls it — with the growth this cut predates
+        // named and added, see `_grownAfterThisCut`. The script's own version
+        // stays strict and still refuses; this is the test admitting that the
+        // facet has three functions more than a 25 August record can mount.
+        u.assertReplaceListCoversTheWholeFacet(_concat(sels, _grownAfterThisCut()));
         address previousFacet = u.assertAllMountedOnOneFacet(sels, address(diamond));
         u.assertNothingIsLeftBehind(sels, previousFacet, address(diamond));
 
@@ -548,9 +507,10 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
                 address(new JobBoardFacet()),
                 address(new ServiceBoardFacet()),
                 address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
                 address(new ArbiterAccountabilityFacet()),
                 address(new ArbiterApplicationsFacet()),
-                address(new DealMetadataFacet()),
+                address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
                 address(new ReputationFacet())
             ),

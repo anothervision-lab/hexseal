@@ -11,9 +11,10 @@ import "../src/facets/ServiceBoardFacet.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
 import "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ArbiterApplicationsFacet.sol";
-import "../src/facets/DealMetadataFacet.sol";
+import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 /// Anti-drift gate for script/DeployFull.s.sol.
 ///
@@ -50,7 +51,7 @@ import "../src/JobReceiptFacet.sol";
 ///   - `buildInitCuts`/`buildRemainingCuts` wire a correct selector set to the
 ///     wrong `FacetCut.facetAddress`
 ///   - the actual `DiamondProxy` this script would produce does not end up with
-///     exactly 13 facets, exactly 221 routed selectors, and consistent
+///     exactly 13 facets, exactly 239 routed selectors, and consistent
 ///     `facetAddress(sel)` <-> `facets()` routing in both directions
 ///     (177 -> 179, 15 Aug 2026: the arbiter-accountability branch added
 ///     getSeatedBy/getSeatedCountBy to ArbiterRegistryFacet; 179 -> 180,
@@ -245,8 +246,9 @@ contract DeployFullSelectorsTest is Test {
     address constant JOB_BOARD      = address(0x1006);
     address constant SERVICE_BOARD  = address(0x1007);
     address constant ARBITER_FACET  = address(0x1008);
+    address constant ARBITER_VAULT_FACET = address(0x1014);
     address constant ACCOUNTABILITY_FACET = address(0x100C);
-    address constant META_FACET     = address(0x1009);
+    address constant TREASURY_LINK  = address(0x1009);
     address constant RECEIPT_FACET  = address(0x100A);
     address constant REPUTATION_FACET = address(0x100B);
     address constant APPLICATIONS_FACET   = address(0x100D);
@@ -343,8 +345,8 @@ contract DeployFullSelectorsTest is Test {
         _assertSameSelectorSet(deploy.arbiterApplicationsFacetSelectors(), _abiSelectors("ArbiterApplicationsFacet"), "ArbiterApplicationsFacet");
     }
 
-    function testDealMetadataFacetSelectors() public view {
-        _assertSameSelectorSet(deploy.dealMetadataFacetSelectors(), _abiSelectors("DealMetadataFacet"), "DealMetadataFacet");
+    function testTreasuryLinkFacetSelectors() public view {
+        _assertSameSelectorSet(deploy.treasuryLinkFacetSelectors(), _abiSelectors("TreasuryLinkFacet"), "TreasuryLinkFacet");
     }
 
     function testJobReceiptFacetSelectors() public view {
@@ -378,7 +380,7 @@ contract DeployFullSelectorsTest is Test {
             deploy.serviceBoardFacetSelectors(),
             deploy.arbiterRegistryFacetSelectors(),
             deploy.arbiterAccountabilityFacetSelectors(),
-            deploy.dealMetadataFacetSelectors(),
+            deploy.treasuryLinkFacetSelectors(),
             deploy.jobReceiptFacetSelectors(),
             deploy.reputationFacetSelectors()
         ];
@@ -436,10 +438,10 @@ contract DeployFullSelectorsTest is Test {
 
     function testBuildRemainingCutsMatchesIndividualSelectors() public view {
         IDiamondCut.FacetCut[] memory cuts = deploy.buildRemainingCuts(
-            JOB_BOARD, SERVICE_BOARD, ARBITER_FACET, ACCOUNTABILITY_FACET, APPLICATIONS_FACET,
-            META_FACET, RECEIPT_FACET, REPUTATION_FACET
+            JOB_BOARD, SERVICE_BOARD, ARBITER_FACET, ARBITER_VAULT_FACET, ACCOUNTABILITY_FACET, APPLICATIONS_FACET,
+            TREASURY_LINK, RECEIPT_FACET, REPUTATION_FACET
         );
-        assertEq(cuts.length, 8, "buildRemainingCuts: expected 8 FacetCut entries");
+        assertEq(cuts.length, 9, "buildRemainingCuts: expected 9 FacetCut entries");
 
         assertEq(cuts[0].facetAddress, JOB_BOARD);
         _assertSameSelectorSet(cuts[0].functionSelectors, deploy.jobBoardFacetSelectors(), "cuts2[0] JobBoardFacet");
@@ -456,14 +458,20 @@ contract DeployFullSelectorsTest is Test {
         assertEq(cuts[4].facetAddress, APPLICATIONS_FACET);
         _assertSameSelectorSet(cuts[4].functionSelectors, deploy.arbiterApplicationsFacetSelectors(), "cuts2[4] ArbiterApplicationsFacet");
 
-        assertEq(cuts[5].facetAddress, META_FACET);
-        _assertSameSelectorSet(cuts[5].functionSelectors, deploy.dealMetadataFacetSelectors(), "cuts2[5] DealMetadataFacet");
+        assertEq(cuts[5].facetAddress, TREASURY_LINK);
+        _assertSameSelectorSet(cuts[5].functionSelectors, deploy.treasuryLinkFacetSelectors(), "cuts2[5] TreasuryLinkFacet");
 
         assertEq(cuts[6].facetAddress, RECEIPT_FACET);
         _assertSameSelectorSet(cuts[6].functionSelectors, deploy.jobReceiptFacetSelectors(), "cuts2[6] JobReceiptFacet");
 
         assertEq(cuts[7].facetAddress, REPUTATION_FACET);
         _assertSameSelectorSet(cuts[7].functionSelectors, deploy.reputationFacetSelectors(), "cuts2[7] ReputationFacet");
+
+        // The ninth group since 16 September 2026: the money and the plain reads
+        // carved out of ArbiterRegistryFacet. A group of its own because one
+        // FacetCut element carries exactly one address.
+        assertEq(cuts[8].facetAddress, ARBITER_VAULT_FACET);
+        _assertSameSelectorSet(cuts[8].functionSelectors, deploy.arbiterVaultFacetSelectors(), "cuts2[8] ArbiterVaultFacet");
 
         for (uint256 i = 0; i < cuts.length; i++) {
             assertTrue(cuts[i].action == IDiamondCut.FacetCutAction.Add, "cuts2: all entries must be Add");
@@ -482,7 +490,7 @@ contract DeployFullSelectorsTest is Test {
     //
     // This deploys all thirteen real facets, builds the diamond exactly the way
     // run() does, and asserts the diamond that comes out the other end has
-    // exactly 13 facets, exactly 218 routed selectors, and that
+    // exactly 13 facets, exactly 239 routed selectors, and that
     // facetAddress(sel) and facets() agree with each other in both directions.
     // This is the only check in the suite that would catch a selector set
     // wired to the wrong facet address — diamondCut() itself does not validate
@@ -496,9 +504,10 @@ contract DeployFullSelectorsTest is Test {
         JobBoardFacet          jobBoard     = new JobBoardFacet();
         ServiceBoardFacet      serviceBoard = new ServiceBoardFacet();
         ArbiterRegistryFacet   arbiterFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet   vaultFacet   = new ArbiterVaultFacet();
         ArbiterAccountabilityFacet accFacet = new ArbiterAccountabilityFacet();
         ArbiterApplicationsFacet appFacet   = new ArbiterApplicationsFacet();
-        DealMetadataFacet      metaFacet    = new DealMetadataFacet();
+        TreasuryLinkFacet      treasuryLink = new TreasuryLinkFacet();
         JobReceiptFacet        receiptFacet = new JobReceiptFacet();
         ReputationFacet        repFacet     = new ReputationFacet();
 
@@ -508,13 +517,15 @@ contract DeployFullSelectorsTest is Test {
         DiamondProxy diamond = new DiamondProxy(address(this), initCuts, address(0), "");
 
         IDiamondCut.FacetCut[] memory cuts2 = deploy.buildRemainingCuts(
-            address(jobBoard), address(serviceBoard), address(arbiterFacet), address(accFacet),
-            address(appFacet), address(metaFacet), address(receiptFacet), address(repFacet)
+            address(jobBoard), address(serviceBoard), address(arbiterFacet), address(vaultFacet), address(accFacet),
+            address(appFacet), address(treasuryLink), address(receiptFacet), address(repFacet)
         );
         IDiamondCut(address(diamond)).diamondCut(cuts2, address(0), "");
 
         IDiamondLoupe.Facet[] memory facetsList = IDiamondLoupe(address(diamond)).facets();
-        assertEq(facetsList.length, 13, "diamond should end up with exactly 13 distinct facet addresses");
+        // Fourteen since the 16 September 2026 split: the same selector set as
+        // before, one more address answering part of it.
+        assertEq(facetsList.length, 14, "diamond should end up with exactly 14 distinct facet addresses");
 
         uint256 totalRouted;
         for (uint256 i = 0; i < facetsList.length; i++) {
@@ -590,12 +601,67 @@ contract DeployFullSelectorsTest is Test {
         // the bond door that takes a signed EIP-2612 paper instead of an
         // allowance granted beforehand. The allowance door stays mounted beside
         // it — whoever has already approved the diamond keeps his way in.
-        assertEq(totalRouted, 231, "diamond should route exactly 231 selectors total");
+        // 231 -> 239 on 14 September 2026, and this one is not a feature
+        // landing — it is the first time this number was ever compared with the
+        // chain's. Two corrections in one commit, in opposite directions:
+        //
+        //   -1  DealMetadataFacet's `getDealTokenURI`. The owner signed the cut
+        //       that unmounted it from the live diamond that morning
+        //       (broadcast/RemoveDealMetadataFacet.s.sol, receipt status 0x1,
+        //       block 0x2ca11f6). This script went on mounting it, so a fresh
+        //       deployment would have put the dead facet back.
+        //
+        //   +9  TreasuryLinkFacet, ALL of it. It was cut into the live diamond
+        //       on 4 September 2026 and never back-ported here, so this script
+        //       has been one whole facet short for ten days: a diamond built
+        //       from it would have had no treasury link at all — no fee split,
+        //       no arbiter vault, no payroll stream, and the four getters
+        //       reverting rather than answering.
+        //
+        // 231 - 1 + 9 = 239, and 13 - 1 + 1 = 13 facets, which is what the live
+        // diamond routes and holds today, measured the same day. The two sets
+        // are now equal, and DeployFullMatchesChain.t.sol is the arm that says
+        // so against a census taken off the chain rather than off this file.
+        // 239 -> 243 on 17 September 2026: four ArbiterVaultFacet selectors of
+        // the appeal economics — withdrawAppealShare, getAppealShareOwed,
+        // getAppealLedger, quoteAppealDeposit. Not on the chain yet; they are
+        // named as pending in DeployFullMatchesChain.t.sol `_pendingCut()`.
+        // 243 -> 246 the same day, second pass: settleAppealDebts and
+        // getAppealDebts on the vault, getBondState on the applications facet.
+        // All seven reached the chain the same evening, in the one diamondCut of
+        // script/SplitArbiterVaultFacet.s.sol (block 46 946 562), and the chain
+        // census was re-read at 14 facets / 246: `_pendingCut()` is empty again.
+        // 246 -> 250 on 18 September 2026, "an arbiter is not a player in the
+        // market": getOpenDealCount on the registry, and getOpenMarketItems,
+        // pruneClosedApplications and getAppliedJobIds on the job board — the
+        // reads a screen needs to show what is in the way, and the press that
+        // bounds the one count that is a scan. The rule itself mounts nothing:
+        // it lives inside doors that are already routed.
+        // 250 -> 256 on 18 September 2026, the three decisions of that day:
+        // abandonClaim and getAppealPanel on the arbiter registry (a dead
+        // dispute claim comes off by anybody's hand; the movable appeal
+        // quorum), and registerOffer, notifyOfferAccepted,
+        // syncOfferAcceptance and isOfferPending on the deal registry (a
+        // direct hire is an offer, not an assignment). Two of the three rules
+        // mount nothing of their own — the quorum is arithmetic inside
+        // raiseAppeal — so six selectors carry three decisions.
+        //
+        // ALL TEN OF THOSE LAST TWO PARAGRAPHS REACHED THE CHAIN on
+        // 19 September 2026, in the one diamondCut of
+        // script/UpgradeArbiterNotAParty.s.sol (block 47 027 947, tx
+        // 0xc5b2d580…). The chain census was re-read at 14 facets / 256
+        // selectors, and `_pendingCut()` in DeployFullMatchesChain.t.sol is
+        // EMPTY again — tree and chain now agree on all 256 with no allowance
+        // standing between them. Until that day both paragraphs ended "not on
+        // the chain yet", which is why they are corrected here rather than left:
+        // a note that quietly stops being true is the failure this whole pair
+        // of stands exists to catch.
+        assertEq(totalRouted, 256, "diamond should route exactly 256 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.
         address[] memory addrs = IDiamondLoupe(address(diamond)).facetAddresses();
-        assertEq(addrs.length, 13, "facetAddresses() should also report exactly 13 facets");
+        assertEq(addrs.length, 14, "facetAddresses() should also report exactly 14 facets");
         for (uint256 i = 0; i < addrs.length; i++) {
             bool found = false;
             for (uint256 j = 0; j < facetsList.length; j++) {

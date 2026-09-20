@@ -21,6 +21,7 @@ pragma solidity ^0.8.20;
 // someone else their XP or their fee.
 
 import "./DiamondDeathEscrowBase.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
     // ============================================================
@@ -270,8 +271,8 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         assertFalse(_registrySyncFailedFired(), "no stale-registry fallback");
         assertGt(ReputationFacet(address(diamond)).getXP(client), 0, "the winner's XP landed");
         assertGt(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance()
-                + ArbiterRegistryFacet(address(diamond)).getTreasurySlice(),
+            ArbiterVaultFacet(address(diamond)).getVaultBalance()
+                + ArbiterVaultFacet(address(diamond)).getTreasurySlice(),
             0,
             "the dispute fee was credited, not starved out"
         );
@@ -343,7 +344,7 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         assertEq(_registryStatus(a), 2, "registry must say REFUNDED");
         assertFalse(_registrySyncFailedFired(), "no stale-registry fallback");
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDisputeClaimer(address(a)),
+            ArbiterVaultFacet(address(diamond)).getDisputeClaimer(address(a)),
             address(0),
             "the claim was cleared, not starved out"
         );
@@ -485,7 +486,7 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         vm.prank(arbiterAddr);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), true);
         vm.warp(block.timestamp + 3 days);
-        _burnOn(ArbiterRegistryFacet.creditDisputeFee.selector);
+        _burnOn(ArbiterVaultFacet.creditDisputeFee.selector);
 
         uint256 clientBefore = usdc.balanceOf(client);
         (bool ok, ) = address(diamond).call{gas: BURNED_FINALIZE_GAS}(
@@ -681,8 +682,8 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
 
             if (ok) {
                 assertGt(
-                    ArbiterRegistryFacet(address(diamond)).getVaultBalance()
-                        + ArbiterRegistryFacet(address(diamond)).getTreasurySlice(),
+                    ArbiterVaultFacet(address(diamond)).getVaultBalance()
+                        + ArbiterVaultFacet(address(diamond)).getTreasurySlice(),
                     0,
                     "a resolution that went through must not have skipped the dispute fee"
                 );

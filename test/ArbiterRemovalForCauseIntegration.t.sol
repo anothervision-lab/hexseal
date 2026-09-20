@@ -18,7 +18,7 @@ pragma solidity ^0.8.20;
 // device comes from test/Diamond.t.sol::_disputeAndOverturn).
 //
 // Removal from arbiterList belongs here too: it is readable only through
-// ArbiterRegistryFacet.getArbiters(), which the light ArbiterAccountabilityFacet
+// ArbiterVaultFacet.getArbiters(), which the light ArbiterAccountabilityFacet
 // bench does not have — here it does, because this is a real diamond.
 //
 // test_WholeChain... below is the "whole chain" case. It and it alone proves that a
@@ -46,6 +46,7 @@ import "../src/facets/DealMetadataFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract MockUSDCIntegration {
     mapping(address => uint256) public balanceOf;
@@ -104,11 +105,20 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
     /// an expression over a library constant and an enum value derives the
     /// expectation from the thing under test — shift the base or permute the enum and
     /// both sides of the comparison move together while the lock stays silent. Here
-    /// the expectation is taken from outside the code: 252 is 'the path is not
-    /// named', 253 an overturn, 254 a timeout, 255 the votes.
-    uint8 constant AUTO_OVERTURN = 253;
-    uint8 constant AUTO_TIMEOUT  = 254;
-    uint8 constant AUTO_APPEAL   = 255;
+    /// the expectation is taken from outside the code: 240 is 'the path is not
+    /// named', 241 an overturn, 242 a timeout, 243 the votes, 244 a dead claim
+    /// taken off him.
+    ///
+    /// ⚠️ THESE NUMBERS WERE 253/254/255 UNTIL 18 SEPTEMBER 2026 and were changed
+    /// BY HAND, which is the only way a literal may ever change. The base moved
+    /// from 252 to 240 because the range at 252 held four codes and the enum had
+    /// grown to five paths; the fifth encoded to 256 and reverted the removal door.
+    /// Retyping them is meant to be conscious work: if this block could have been
+    /// regenerated, it would have followed the bug down without a word.
+    uint8 constant AUTO_OVERTURN         = 241;
+    uint8 constant AUTO_TIMEOUT          = 242;
+    uint8 constant AUTO_APPEAL           = 243;
+    uint8 constant AUTO_CLAIM_ABANDONED  = 244;
 
     /// ArbiterRegistryStorage.POSITION — the same namespace test/ArbiterSuspension.t.sol
     /// reads (ARB_BASE is there too), and the bond slot 12 was obtained there by
@@ -141,6 +151,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         JobBoardFacet jobBoard       = new JobBoardFacet();
         ServiceBoardFacet serviceBoard = new ServiceBoardFacet();
         ArbiterRegistryFacet arbiterFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet vaultFacet   = new ArbiterVaultFacet();
         ArbiterAccountabilityFacet accFacet = new ArbiterAccountabilityFacet();
         ArbiterApplicationsFacet appFacet = new ArbiterApplicationsFacet();
         DealMetadataFacet metaFacet  = new DealMetadataFacet();
@@ -153,7 +164,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         diamond = new DiamondProxy(owner, initCuts, address(0), "");
 
         IDiamondCut.FacetCut[] memory remainingCuts = deploy.buildRemainingCuts(
-            address(jobBoard), address(serviceBoard), address(arbiterFacet), address(accFacet),
+            address(jobBoard), address(serviceBoard), address(arbiterFacet), address(vaultFacet), address(accFacet),
             address(appFacet), address(metaFacet), address(receiptFacet), address(repFacet)
         );
         IDiamondCut(address(diamond)).diamondCut(remainingCuts, address(0), "");
@@ -337,7 +348,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "two real overturns must bring the counter to the threshold"
         );
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "at the threshold the demotion has not fired yet: the arbiter is alive"
         );
 
@@ -348,7 +359,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "a removal on a cause reached by the production path must go through"
         );
     }
@@ -365,7 +376,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(second);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getArbiters().length, 2);
+        assertEq(ArbiterVaultFacet(address(diamond)).getArbiters().length, 2);
 
         _disputeAndOverturn(address(0x201), address(0x202));
         _disputeAndOverturn(address(0x203), address(0x204));
@@ -376,7 +387,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             ""
         );
 
-        address[] memory list = ArbiterRegistryFacet(address(diamond)).getArbiters();
+        address[] memory list = ArbiterVaultFacet(address(diamond)).getArbiters();
         assertEq(list.length, 1, "the removed one must disappear from arbiterList and not only from isArbiter");
         assertEq(list[0], second, "the arbiter left is the one who was not removed");
     }
@@ -400,24 +411,24 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "the threshold on its own does not switch governance on"
         );
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDAOAddress(), address(0),
+            ArbiterVaultFacet(address(diamond)).getDAOAddress(), address(0),
             "setup: there is no successor yet"
         );
 
         address dao = address(0xDA0);
         ArbiterRegistryFacet(address(diamond)).setDAOAddress(dao);
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getDAOAddress(), address(0),
+            ArbiterVaultFacet(address(diamond)).getDAOAddress(), address(0),
             "a proposal does not confer rights yet"
         );
         vm.prank(dao);
         ArbiterRegistryFacet(address(diamond)).acceptDAOAddress();
         ArbiterRegistryFacet(address(diamond)).activateDAO();
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDAOAddress(), dao);
+        assertEq(ArbiterVaultFacet(address(diamond)).getDAOAddress(), dao);
 
         _disputeAndOverturn(address(0x301), address(0x302));
         _disputeAndOverturn(address(0x303), address(0x304));
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         // The successor lays his own accusation: past handover the owner
         // cannot, since the door travels with the right (17 August 2026).
@@ -429,7 +440,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "a successor appointed out of the orphaned state really did remove an arbiter"
         );
     }
@@ -513,7 +524,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
 
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
     }
 
     /// A RECORD WITH NO TERM IS THE ONLY THING STILL JUDGED BY THE MIRROR, AND BOTH
@@ -561,7 +572,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
     }
 
     /// ⚠️ A MEASUREMENT SHOWED AN EMPTY PLACE HERE, AND THIS TEST CLOSES IT.
@@ -609,7 +620,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
     }
 
     /// An accusation laid down by THE CHAIN must carry the term in the record —
@@ -740,7 +751,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who),
             "the accusation went stale and was not extended: the person left of their own accord"
         );
     }
@@ -756,7 +767,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
 
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
     }
 
     /// Door number two (resignAsArbiter): the proposal must disappear ENTIRELY and
@@ -815,7 +826,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the removal happened"
         );
 
@@ -847,7 +858,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             arbiter, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("evidence"), address(0),
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         // The owner repairs a mistaken removal — a real road, not a hypothetical one.
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
@@ -857,7 +868,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
         _postRealBond(arbiter);
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         vm.prank(arbiter);
         vm.expectRevert(ArbiterAccountabilityFacet.NothingToAnswer.selector);
@@ -934,7 +945,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the chain's accusation reached a removal"
         );
 
@@ -979,7 +990,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "setup: the chain has accused"
         );
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: they are still in the corps: accused, not removed"
         );
 
@@ -1130,7 +1141,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the automatic path removed the arbiter"
         );
         assertTrue(
@@ -1187,7 +1198,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "the window is in place: it was not lifted by a side door either"
         );
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "and the removed one did not come back into the corps"
         );
     }
@@ -1206,7 +1217,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         _addFreshArbiter(who);
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
 
         vm.prank(chief);
         ArbiterRegistryFacet(address(diamond)).addArbiter(who);
@@ -1219,7 +1230,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         _postRealBond(who);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(who),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who),
             "they left of their own accord, so the chief may bring them back: a removal has nothing to do with it"
         );
     }
@@ -1338,7 +1349,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "the successor walked the whole road themselves: proposed, waited, removed"
         );
         assertFalse(
@@ -1448,7 +1459,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the removal happened"
         );
 
@@ -1484,7 +1495,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agreementAddr).finalized,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agreementAddr).finalized,
             "after the window the verdict executes: the suspension is temporary here too"
         );
     }
@@ -1500,7 +1511,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agreementAddr).finalized,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agreementAddr).finalized,
             "without a removal the same verdict on the same 24 hours executes"
         );
     }
@@ -1546,7 +1557,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "the returned person works as an ordinary arbiter and not as a mute one"
         );
     }
@@ -1602,7 +1613,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         _grantSelfRegistrationGate(arbiter);
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter), "setup: the self-enrolment went through");
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter), "setup: the self-enrolment went through");
 
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getRemovalReply(arbiter),
@@ -1657,7 +1668,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the self-enrolment went through and they are back in the corps"
         );
 
@@ -1705,7 +1716,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.warp(removedAtTs + 24 hours);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agreementAddr).finalized,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agreementAddr).finalized,
             "the removal was undone by the owner, and the returned arbiter's verdict executes in the ordinary way"
         );
     }
@@ -1882,7 +1893,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "one verdict, one mistake"
         );
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "still seated after one bad verdict"
         );
     }
@@ -1951,7 +1962,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "a third overturn no longer removes: it accuses"
         );
         (, , , address by, bool live) =
@@ -2096,7 +2107,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         // later change added the writing of a proposal to this branch — revert-free by
         // construction, and here is the proof that it arrived.
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "a third mistake by timeout no longer removes: it accuses"
         );
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter));
@@ -2167,7 +2178,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "the votes overturned the verdict: a third mistake in a row, and it accuses rather than removes"
         );
         (, , , address by, bool live) =
@@ -2254,7 +2265,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(STRANGER);
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         (, , , , , , , , , , , uint256 count, uint256 lastAt, uint8 cause)
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
@@ -2308,7 +2319,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(STRANGER);
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         (, , , , , , , , , , , uint256 count, , uint8 cause)
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
@@ -2317,6 +2328,81 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "the card names the path: it was A TIMEOUT that removed them");
         assertTrue(cause != AUTO_OVERTURN,
             "and it must differ from an overturn by the owner");
+    }
+
+    /// Road FOUR on the card — the one that could not reach the card at all between
+    /// the morning and the evening of 18 September 2026.
+    ///
+    /// ⚠️ WHAT THIS SCENE IS ACTUALLY FOR. `abandonClaim` books its mistake with a
+    /// path of its own (DemotionPath.ClaimAbandoned, value 4), and the permanent
+    /// record encodes a path as `AUTO_REMOVAL_BASE + path`. With the base at 252 that
+    /// sum was 256, which a uint8 does not hold — so `recordAutomaticRemoval` would
+    /// have stopped with Panic 0x11 and taken `executeChainRemoval` down with it, for
+    /// exactly the arbiter this door exists to unseat. Not a cosmetic defect: the
+    /// charge stands, the seat stays taken, the bond stays frozen under it, and NO
+    /// transaction from anybody can finish the removal. It would have cleared itself
+    /// only by the proposal going stale, leaving a man the chain had judged still
+    /// seated and still judging.
+    ///
+    /// The three scenes above could not have caught it and are not at fault: each of
+    /// them plays ONE path, and the paths they play are the three that fit. This one
+    /// plays the fourth, end to end — third mistake, accusation, the full pause, the
+    /// execution, and the card read afterwards.
+    function test_AutoDemotionByAbandonedClaimRecordsItsOwnPath() public {
+        _disputeAndOverturn(address(0x7B1), address(0x7B2));
+        _disputeAndOverturn(address(0x7B3), address(0x7B4));
+
+        address cli = address(0x7B5);
+        address exec = address(0x7B6);
+        usdc.mint(cli, 1_000_000 * 10 ** 6);
+        vm.prank(cli);
+        usdc.approve(address(diamond), 10 * 10 ** 6);
+        vm.prank(address(diamond));
+        address agr = FactoryFacet(address(diamond)).deployAgreement(
+            cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0
+        );
+        vm.prank(cli);
+        usdc.approve(agr, AMOUNT);
+        vm.prank(cli);
+        Agreement(agr).fund();
+        vm.prank(exec);
+        Agreement(agr).activate();
+        vm.prank(cli);
+        Agreement(agr).raiseDispute();
+        _claimDisputeAs(agr, arbiter);
+
+        // Neither party ever comes back. DISPUTE_WINDOW = 4 days, and this door opens
+        // strictly after it — the mirror of the gate in releaseDisputeClaim.
+        vm.warp(vm.getBlockTimestamp() + 4 days + 1);
+
+        // A STRANGER presses, which is the whole point of the door: nobody with a
+        // stake in the deal is required for the dead claim to come off.
+        vm.prank(STRANGER);
+        ArbiterRegistryFacet(address(diamond)).abandonClaim(agr);
+
+        // The third mistake in a row accuses; the pause is served in full, exactly as
+        // on the other three roads.
+        vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
+        vm.prank(STRANGER);
+        ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
+
+        // ⚠️ THE LINE THAT WOULD HAVE BEEN RED BEFORE THE BASE MOVED: the call above
+        // reverted with Panic 0x11, so the seat was never given up.
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            "the chain could not unseat him at all: the removal reverted on the encoding of his own path");
+
+        // And the record is read AFTER the seat is gone — which is when it matters,
+        // because a removed arbiter is exactly who someone looks up.
+        (, , , , , , , , , , , uint256 count, uint256 lastAt, uint8 cause)
+            = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
+        assertEq(count, 1, "an abandoned claim removed them: the counter grew, as on every other road");
+        assertEq(lastAt, vm.getBlockTimestamp(), "the moment recorded is the moment of THE REMOVAL");
+        assertEq(cause, AUTO_CLAIM_ABANDONED,
+            "the card names the path: a dead claim was taken off him, and that is what the record must say");
+        assertTrue(cause != AUTO_TIMEOUT,
+            "and it must differ from a timeout the deal announced -- the same missed window reached from the other side, told apart on purpose");
+        assertTrue(cause != AUTO_OVERTURN && cause != AUTO_APPEAL,
+            "and from both roads where a verdict was actually overturned");
     }
 
     /// Road three on the card: THE VOTES overturned it on appeal. The most loaded with
@@ -2380,7 +2466,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(STRANGER);
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         (, , , , , , , , , , , uint256 count, , uint8 cause)
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
@@ -2406,7 +2492,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the self-enrolment went through"
         );
 
@@ -2462,7 +2548,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "the bond he posted himself did not land"
         );
 
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         // The sixth field of the event is bondForfeited. A zero here is what a reader
         // of the chain will see on any removal today.
@@ -2481,7 +2567,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + 50 * 10 ** 6,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + 50 * 10 ** 6,
             "the forfeit is still worth nothing: the arbiter vault did not grow"
         );
     }
@@ -2507,7 +2593,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         _threeOverturnsOnDistinctDisputes(judged);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(judged),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(judged),
             "the seat survives the automatic road"
         );
         assertTrue(
@@ -2550,7 +2636,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         address judged = arbiter;
         _giveBond(judged, ARBITER_BOND);
         _threeOverturnsOnDistinctDisputes(judged);
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
 
@@ -2558,7 +2644,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(judged);
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(judged),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(judged),
             "there is no seat"
         );
         assertEq(
@@ -2566,7 +2652,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "the bond burns ON THE REMOVAL and not on the accusation"
         );
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + ARBITER_BOND,
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + ARBITER_BOND,
             "and it goes into the arbiter vault, as at the manual door"
         );
         assertEq(
@@ -2612,7 +2698,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter),
             "setup: the door is free again"
         );
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         // And the evidence still serves: the holder of the right proves the cause with it.
         _proposeAndWait(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0));
@@ -2621,7 +2707,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "the counter that outlived the accusation proved the cause to a human"
         );
     }
@@ -2641,7 +2727,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "and nothing happened behind the refusal"
         );
     }
@@ -2675,7 +2761,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "a human accusation is executed by the holder of the right, and only by them"
         );
     }
@@ -2756,7 +2842,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
         assertFalse(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter));
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "they never stopped being an arbiter"
         );
     }
@@ -2816,7 +2902,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         _threeOverturnsOnDistinctDisputes(arbiter);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "without the door there is no removal"
         );
         assertTrue(
@@ -2836,7 +2922,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.prank(STRANGER);
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
     }
 
     /// The timeout road lays down a DIFFERENT cause — Timeouts, not OverturnedVerdicts.
@@ -2860,7 +2946,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "the timeout road must be recorded as the cause Timeouts and not as overturns"
         );
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "and the seat survives too: the road has nothing to do with it"
         );
     }
@@ -3050,7 +3136,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter),
             "and the suspension is lifted: a vindicated arbiter does not sit locked up"
         );
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         // And there is nothing left to press the button with.
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
@@ -3446,7 +3532,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "you did it, you answer for it: good work afterwards does not cancel an accusation"
         );
     }
@@ -3513,7 +3599,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "the panel said they were right, and the button against them is gone"
         );
     }
@@ -3562,7 +3648,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "and nothing happened behind the refusal"
         );
 
@@ -3582,7 +3668,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, address(0),
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
     }
 
     /// ⚠️ A DEAD ACCUSATION QUENCHES NOTHING. The vindication branch looked at

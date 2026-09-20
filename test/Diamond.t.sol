@@ -9,6 +9,7 @@ import "../src/AgreementDeployer.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract MockUSDC {
     mapping(address => uint256) public balanceOf;
@@ -139,10 +140,11 @@ contract DiamondTest is Test {
         DiamondLoupeFacet diamondLoupeFacet = new DiamondLoupeFacet();
         OwnershipFacet ownershipFacet = new OwnershipFacet();
         ArbiterRegistryFacet arbiterRegistryFacet = new ArbiterRegistryFacet();
+        ArbiterVaultFacet arbiterRegistryFacetVault = new ArbiterVaultFacet();
         ReputationFacet reputationFacet = new ReputationFacet();
         
         // RegistryFacet selectors
-        bytes4[] memory registrySelectors = new bytes4[](12);
+        bytes4[] memory registrySelectors = new bytes4[](14);
         registrySelectors[0] = RegistryFacet.initRegistry.selector;
         registrySelectors[1] = RegistryFacet.register.selector;
         registrySelectors[2] = RegistryFacet.updateStatus.selector;
@@ -155,6 +157,12 @@ contract DiamondTest is Test {
         registrySelectors[9] = RegistryFacet.getActive.selector;
         registrySelectors[10] = RegistryFacet.totalAgreements.selector;
         registrySelectors[11] = RegistryFacet.authorizedFactory.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        registrySelectors[12] = RegistryFacet.registerOffer.selector;
+        registrySelectors[13] = RegistryFacet.notifyOfferAccepted.selector;
         
         // FactoryFacet selectors
         bytes4[] memory factorySelectors = new bytes4[](13);
@@ -192,52 +200,53 @@ contract DiamondTest is Test {
         ownerSelectors[3] = OwnershipFacet.pendingOwner.selector;
 
         // ArbiterRegistryFacet selectors
-        bytes4[] memory arbiterSelectors = new bytes4[](42);
+        bytes4[] memory arbiterSelectors = new bytes4[](24);
         arbiterSelectors[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbiterSelectors[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbiterSelectors[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbiterSelectors[3] = ArbiterRegistryFacet.claimDispute.selector;
         arbiterSelectors[4] = ArbiterRegistryFacet.releaseDisputeClaim.selector;
         arbiterSelectors[5] = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbiterSelectors[6] = ArbiterRegistryFacet.getChiefArbiter.selector;
-        arbiterSelectors[7] = ArbiterRegistryFacet.isRegisteredArbiter.selector;
-        arbiterSelectors[8] = ArbiterRegistryFacet.getArbiters.selector;
-        arbiterSelectors[9] = ArbiterRegistryFacet.getDisputeClaimer.selector;
-        arbiterSelectors[10] = ArbiterRegistryFacet.getClaimCommitment.selector;
-        arbiterSelectors[11] = ArbiterRegistryFacet.activateDAO.selector;
-        arbiterSelectors[12] = ArbiterRegistryFacet.applyAsArbiter.selector;
-        arbiterSelectors[13] = ArbiterRegistryFacet.isDaoActive.selector;
-        arbiterSelectors[14] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        arbiterSelectors[15] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        arbiterSelectors[16] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbiterSelectors[17] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbiterSelectors[18] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbiterSelectors[19] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbiterSelectors[20] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbiterSelectors[21] = ArbiterRegistryFacet.withdrawArbiterReward.selector;
-        arbiterSelectors[22] = ArbiterRegistryFacet.fundVault.selector;
-        arbiterSelectors[23] = ArbiterRegistryFacet.setRewardPerDispute.selector;
-        arbiterSelectors[24] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbiterSelectors[25] = ArbiterRegistryFacet.getPendingVerdict.selector;
-        arbiterSelectors[26] = ArbiterRegistryFacet.getVaultBalance.selector;
-        arbiterSelectors[27] = ArbiterRegistryFacet.getRewardPerDispute.selector;
-        arbiterSelectors[28] = ArbiterRegistryFacet.getDAOAddress.selector;
-        arbiterSelectors[29] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbiterSelectors[30] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbiterSelectors[31] = ArbiterRegistryFacet.resignAsArbiter.selector;
-        arbiterSelectors[32] = ArbiterRegistryFacet.hasSubmittedVerdict.selector;
-        arbiterSelectors[33] = ArbiterRegistryFacet.raiseAppeal.selector;
-        arbiterSelectors[34] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        arbiterSelectors[35] = ArbiterRegistryFacet.resolveAppeal.selector;
-        arbiterSelectors[36] = ArbiterRegistryFacet.getAppealVotes.selector;
-        arbiterSelectors[37] = ArbiterRegistryFacet.hasVotedOnAppeal.selector;
-        // The second step of handing over the DAO address (26 August 2026).
-        arbiterSelectors[38] = ArbiterRegistryFacet.acceptDAOAddress.selector;
-        arbiterSelectors[39] = ArbiterRegistryFacet.getPendingDAOAddress.selector;
-        // The claimable pot and its button. Mounted here (31 August 2026) because
-        // a won appeal whose deposit cannot be pushed now lands in it.
-        arbiterSelectors[40] = ArbiterRegistryFacet.withdrawDisputeBounty.selector;
-        arbiterSelectors[41] = ArbiterRegistryFacet.getRefundableBounty.selector;
+        arbiterSelectors[6] = ArbiterRegistryFacet.activateDAO.selector;
+        arbiterSelectors[7] = ArbiterRegistryFacet.applyAsArbiter.selector;
+        arbiterSelectors[8] = ArbiterRegistryFacet.isDaoActive.selector;
+        arbiterSelectors[9] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        arbiterSelectors[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        arbiterSelectors[11] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbiterSelectors[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbiterSelectors[13] = ArbiterRegistryFacet.overturnVerdict.selector;
+        arbiterSelectors[14] = ArbiterRegistryFacet.freezeVerdict.selector;
+        arbiterSelectors[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        arbiterSelectors[16] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbiterSelectors[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbiterSelectors[18] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        arbiterSelectors[19] = ArbiterRegistryFacet.resignAsArbiter.selector;
+        arbiterSelectors[20] = ArbiterRegistryFacet.raiseAppeal.selector;
+        arbiterSelectors[21] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        arbiterSelectors[22] = ArbiterRegistryFacet.resolveAppeal.selector;
+        arbiterSelectors[23] = ArbiterRegistryFacet.acceptDAOAddress.selector;
+        bytes4[] memory arbiterSelectorsVault = new bytes4[](20);
+        arbiterSelectorsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        arbiterSelectorsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbiterSelectorsVault[2] = ArbiterVaultFacet.getArbiters.selector;
+        arbiterSelectorsVault[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        arbiterSelectorsVault[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        arbiterSelectorsVault[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        arbiterSelectorsVault[6] = ArbiterVaultFacet.fundVault.selector;
+        arbiterSelectorsVault[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        arbiterSelectorsVault[8] = ArbiterVaultFacet.getPendingVerdict.selector;
+        arbiterSelectorsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
+        arbiterSelectorsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        arbiterSelectorsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        arbiterSelectorsVault[12] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        arbiterSelectorsVault[13] = ArbiterVaultFacet.getAppealVotes.selector;
+        arbiterSelectorsVault[14] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
+        arbiterSelectorsVault[15] = ArbiterVaultFacet.getPendingDAOAddress.selector;
+        arbiterSelectorsVault[16] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        arbiterSelectorsVault[17] = ArbiterVaultFacet.getRefundableBounty.selector;
+        // The panel's pay and a settled appeal's ledger (17 September 2026).
+        arbiterSelectorsVault[18] = ArbiterVaultFacet.getAppealShareOwed.selector;
+        arbiterSelectorsVault[19] = ArbiterVaultFacet.getAppealLedger.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -276,7 +285,7 @@ contract DiamondTest is Test {
         reputationSelectors[6] = ReputationFacet.notifyExecutorFault.selector;
         reputationSelectors[7] = ReputationFacet.getCleanStreak.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](8);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](9);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, registrySelectors);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet), IDiamondCut.FacetCutAction.Add, factorySelectors);
         cut[2] = IDiamondCut.FacetCut(address(diamondCutFacet), IDiamondCut.FacetCutAction.Add, cutSelectors);
@@ -287,6 +296,7 @@ contract DiamondTest is Test {
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
         cut[6] = IDiamondCut.FacetCut(address(reputationFacet), IDiamondCut.FacetCutAction.Add, reputationSelectors);
+        cut[8] = IDiamondCut.FacetCut(address(arbiterRegistryFacetVault), IDiamondCut.FacetCutAction.Add, arbiterSelectorsVault);
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
         Agreement agreementImpl = new Agreement();
@@ -997,7 +1007,7 @@ contract DiamondTest is Test {
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(candidate));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ARBITER_BOND);
     }
 
@@ -1044,7 +1054,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(candidate),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate),
             "he did not get into the corps"
         );
         assertEq(
@@ -1059,10 +1069,10 @@ contract DiamondTest is Test {
         _bondSeat(flakyArbiter);
 
         _disputeAndOverturn(address(uint160(42100)), address(uint160(42200)), flakyArbiter);
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
 
         _disputeAndOverturn(address(uint160(42101)), address(uint160(42201)), flakyArbiter);
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
 
         _disputeAndOverturn(address(uint160(42102)), address(uint160(42202)), flakyArbiter);
 
@@ -1073,7 +1083,7 @@ contract DiamondTest is Test {
         // streak of judging mistakes has not ended just because the chain noticed
         // it. The button does not need the counter anyway — it reads the RECORD and
         // fires at zero, and ten lines below it is pressed in this very scene.
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
         assertEq(ReputationFacet(address(diamond)).getXP(flakyArbiter), 2500);
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(flakyArbiter), 3);
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(flakyArbiter));
@@ -1084,7 +1094,7 @@ contract DiamondTest is Test {
         vm.prank(address(uint160(42999)));
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(flakyArbiter);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(flakyArbiter), 0);
     }
 
@@ -1139,7 +1149,7 @@ contract DiamondTest is Test {
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         _disputeAndOverturn(address(uint160(45800)), address(uint160(45900)), candidate);
         _disputeAndOverturn(address(uint160(45801)), address(uint160(45901)), candidate);
@@ -1157,9 +1167,9 @@ contract DiamondTest is Test {
         vm.prank(address(uint160(45999)));
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(candidate);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(candidate));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + ARBITER_BOND);
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + ARBITER_BOND);
     }
 
     function testResignAsArbiterRefundsBondAndClearsStatus() public {
@@ -1176,7 +1186,7 @@ contract DiamondTest is Test {
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(candidate));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
         assertEq(usdc.balanceOf(candidate), balanceAfterApply + ARBITER_BOND);
     }
@@ -1356,7 +1366,7 @@ contract DiamondTest is Test {
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(candidate));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
     }
 
     function testFinalizedVerdictResetsMistakeStreak() public {
@@ -1413,7 +1423,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreement2);
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(recoveringArbiter), 0);
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(recoveringArbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(recoveringArbiter));
     }
 
     // ============ AGREEMENT TIMEOUT INTEGRATION ============
@@ -1546,7 +1556,7 @@ contract DiamondTest is Test {
         // Agreement calls notifyArbiterTimeout inside an EMPTY try/catch, and a
         // revert in the new branch would have been swallowed in silence — "not
         // punished" would have looked exactly like "punished".
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(flakyArbiter));
         assertEq(ReputationFacet(address(diamond)).getXP(flakyArbiter), 2500);
 
@@ -1554,7 +1564,7 @@ contract DiamondTest is Test {
         vm.prank(address(uint160(51999)));
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(flakyArbiter);
 
-        assertFalse(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
     }
 
     function testAgreementRevertIfNotClientFund() public {
@@ -2084,8 +2094,8 @@ contract DiamondTest is Test {
         address newArbiter = address(0x10);
         ArbiterRegistryFacet(address(diamond)).addArbiter(newArbiter);
         _bondSeat(newArbiter);
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(newArbiter));
-        address[] memory list = ArbiterRegistryFacet(address(diamond)).getArbiters();
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(newArbiter));
+        address[] memory list = ArbiterVaultFacet(address(diamond)).getArbiters();
         assertEq(list.length, 2); // arbiter from setUp + new
     }
 
@@ -2110,11 +2120,11 @@ contract DiamondTest is Test {
     function testArbiterRegistryChiefCanAdd() public {
         address chief = address(0x20);
         ArbiterRegistryFacet(address(diamond)).setChiefArbiter(chief);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getChiefArbiter(), chief);
+        assertEq(ArbiterVaultFacet(address(diamond)).getChiefArbiter(), chief);
 
         vm.prank(chief);
         ArbiterRegistryFacet(address(diamond)).addArbiter(address(0x21));
-        assertTrue(ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(address(0x21)));
+        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(address(0x21)));
     }
 
     function testArbiterCommitRevertIfNotRegistered() public {
@@ -2241,14 +2251,14 @@ contract DiamondTest is Test {
 
         _claimDispute(agreementAddr);
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeClaimer(agreementAddr), arbiter);
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeClaimer(agreementAddr), arbiter);
         // After claimDispute the Diamond (not the individual arbiter) becomes the Agreement's arbiter
         assertEq(Agreement(agreementAddr).arbiter(), address(diamond));
 
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).releaseDisputeClaim(agreementAddr);
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeClaimer(agreementAddr), address(0));
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeClaimer(agreementAddr), address(0));
         assertEq(Agreement(agreementAddr).arbiter(), address(0));
     }
 
@@ -2268,7 +2278,7 @@ contract DiamondTest is Test {
 
         // Owner (address(this)) releases — not the arbiter
         ArbiterRegistryFacet(address(diamond)).releaseDisputeClaim(agreementAddr);
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeClaimer(agreementAddr), address(0));
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeClaimer(agreementAddr), address(0));
     }
 
     function testArbiterDealsHistoryTracked() public {
@@ -2608,7 +2618,7 @@ contract DiamondTest is Test {
         _resolveDispute(agreementAddr, true);
 
         // After resolution, the claim should be cleared by Agreement's callback
-        assertEq(ArbiterRegistryFacet(address(diamond)).getDisputeClaimer(agreementAddr), address(0));
+        assertEq(ArbiterVaultFacet(address(diamond)).getDisputeClaimer(agreementAddr), address(0));
     }
 
     function testRaiseAppeal_LosingExecutorCanAppeal() public {
@@ -2700,7 +2710,7 @@ contract DiamondTest is Test {
         vm.expectRevert(ArbiterRegistryFacet.VerdictFrozenError.selector);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
-        ArbiterRegistryStorage.PendingVerdict memory v = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory v = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertFalse(v.appealed);
     }
 
@@ -2714,7 +2724,7 @@ contract DiamondTest is Test {
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
-        ArbiterRegistryStorage.PendingVerdict memory before = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory before = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertEq(before.votesOverturn, 0);
         assertEq(before.votesUphold, 0);
 
@@ -2724,7 +2734,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
 
         // Successful vote incremented the right tally (overturn) and left the other untouched.
-        ArbiterRegistryStorage.PendingVerdict memory afterVote = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory afterVote = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertEq(afterVote.votesOverturn, 1);
         assertEq(afterVote.votesUphold, 0);
 
@@ -2733,7 +2743,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
 
         // Repeat-vote revert must not have double-counted.
-        ArbiterRegistryStorage.PendingVerdict memory afterRevert = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory afterRevert = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertEq(afterRevert.votesOverturn, 1);
         assertEq(afterRevert.votesUphold, 0);
     }
@@ -2759,7 +2769,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // a3 votes to uphold — different arbiter, no revert
 
         // Both votes recorded distinctly in the tally.
-        ArbiterRegistryStorage.PendingVerdict memory v = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory v = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertEq(v.votesOverturn, 1);
         assertEq(v.votesUphold, 1);
 
@@ -2925,16 +2935,16 @@ contract DiamondTest is Test {
 
         // It landed in the claimable, whole.
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor),
+            ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
             20 * 10**6,
             "the undelivered deposit was written down nowhere"
         );
 
         // And the existing button really pays it out.
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).withdrawDisputeBounty();
+        ArbiterVaultFacet(address(diamond)).withdrawDisputeBounty();
         assertEq(usdc.balanceOf(executor), balAfterPaying + 20 * 10**6, "claim did not pay");
-        assertEq(ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor), 0);
+        assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor), 0);
     }
 
     /// A reply of 1..31 bytes must stay soft. abi.decode panics on it by itself,
@@ -2961,7 +2971,7 @@ contract DiamondTest is Test {
         vm.clearMockedCalls();
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor),
+            ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
             20 * 10**6,
             "a short reply was not treated as undelivered"
         );
@@ -3037,15 +3047,21 @@ contract DiamondTest is Test {
             ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
             vm.clearMockedCalls();
 
+            // ⚠️ The won appeal was refunded out of the ruling arbiter's bond
+            // (17 September 2026), so his seat now sags below the norm and
+            // refuses the second verdict with BondNotPosted until topped up.
+            // This scene is about the refund pot, not the seat: top it up.
+            _bondSeat(arbiter);
+
             if (i == 0) {
-                firstPot = ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor);
+                firstPot = ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor);
                 assertEq(firstPot, 20 * 10**6, "first deposit did not land in the pot");
             }
         }
 
         // Both are there. `+=`, not `=`.
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getRefundableBounty(executor),
+            ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
             40 * 10**6,
             "the second undelivered deposit overwrote the first"
         );
@@ -3096,7 +3112,7 @@ contract DiamondTest is Test {
         );
         vm.store(address(diamond), bytes32(uint256(base) + 6), bytes32(amount));
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).appealDeposit, amount,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).appealDeposit, amount,
             "the appealDeposit offset missed: the record did not change"
         );
     }
@@ -3115,7 +3131,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).appealDeposit,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).appealDeposit,
             20 * 10**6,
             "the record holds exactly what was taken from the person"
         );
@@ -3156,10 +3172,15 @@ contract DiamondTest is Test {
         );
     }
 
-    /// AND THE FORFEIT TOO. A losing appellant loses exactly what is recorded: the
-    /// arbiter vault grows by seven, not by twenty. Half without the other half is
-    /// worth nothing — should these two branches diverge, the diamond would start
-    /// either overpaying or underpaying out of somebody else's money.
+    /// AND THE FORFEIT TOO. A losing appellant loses exactly what is recorded.
+    /// Half without the other half is worth nothing — should these two branches
+    /// diverge, the diamond would start either overpaying or underpaying out of
+    /// somebody else's money.
+    ///
+    /// ⚠️ Since 17 September 2026 a lost appeal's deposit pays the panel, so
+    /// what follows the record is the panel's share: seven over three votes,
+    /// 2.333333 each, and the one base unit left over into the vault. Twenty
+    /// would have been 6.666666 and two units.
     function test_TheForfeitFollowsTheRecordAndNotTheConstant() public {
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
@@ -3171,7 +3192,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
         _setStoredAppealDeposit(agr, 7 * 10**6);
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
@@ -3182,8 +3203,12 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
         assertEq(
-            ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + 7 * 10**6,
-            "the vault took what was recorded, not today's constant"
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + 1,
+            "the vault took the remainder of what was recorded, not of today's price"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 2_333_333,
+            "the panel is paid out of what was recorded, not out of today's price"
         );
     }
 
@@ -3262,7 +3287,7 @@ contract DiamondTest is Test {
             "and it must not count as an overturned verdict either"
         );
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).overturned,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).overturned,
             "and the flag every reader trusts must stay false"
         );
     }
@@ -3305,7 +3330,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).clientWins,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
             "the panel restored the arbiter's own ruling, as it could before"
         );
         assertEq(
@@ -3335,11 +3360,11 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
 
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).overturned,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).overturned,
             "the flag stays false, so a later panel vote cannot be read as an acquittal"
         );
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).clientWins,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
             "and the arbiter's ruling stands untouched"
         );
     }
@@ -3476,7 +3501,7 @@ contract DiamondTest is Test {
         // The panel restored the arbiter's own ruling — proof the vote went
         // AGAINST the owner, not against the arbiter.
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).clientWins,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
             "scene is not the one: the panel must have restored the arbiter's ruling"
         );
 
@@ -3485,7 +3510,7 @@ contract DiamondTest is Test {
             "the panel said there was no judicial mistake, so no mark may stand"
         );
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "and he keeps his seat"
         );
 
@@ -3576,7 +3601,7 @@ contract DiamondTest is Test {
             "setup: the removal spent the evidence it was built on"
         );
         assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "setup: the chain's own accusation, executed, unseated him"
         );
 
@@ -3670,7 +3695,7 @@ contract DiamondTest is Test {
             "and the chain never accused him once: the streak never reached three"
         );
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "and he keeps his seat, which is correct: no rung of this item unseats anyone"
         );
         assertEq(
@@ -3764,7 +3789,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
         assertTrue(
-            ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr).clientWins,
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
             "scene is not the one: the panel must have restored the arbiter's ruling"
         );
         assertEq(
@@ -3835,7 +3860,13 @@ contract DiamondTest is Test {
         );
     }
 
-    function testResolveAppeal_UpholdForfeitsDepositNoPenalty() public {
+    /// ⚠️ REWRITTEN ON PURPOSE, 17 September 2026 (the owner's appeal
+    /// economics). Until then this was `testResolveAppeal_UpholdForfeitsDepositNoPenalty`
+    /// and asserted "the vault grows by the whole $20". Now the deposit pays the
+    /// PANEL, equally, including the one arbiter who voted the other way — a
+    /// vote is paid for being cast, not for which side it took — and only the
+    /// remainder of the division goes to the vault. All three amounts literal.
+    function testResolveAppeal_UpholdPaysThePanelNoPenalty() public {
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
 
@@ -3845,7 +3876,7 @@ contract DiamondTest is Test {
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
@@ -3856,7 +3887,11 @@ contract DiamondTest is Test {
 
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + 20 * 10**6);
+        // $20 over three votes: 6.666666 each, two base units left for the vault.
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + 2, "only the remainder of the division");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 6_666_666, "an upholding voter is paid");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 6_666_666, "an upholding voter is paid");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a4), 6_666_666, "and so is the one who voted to overturn");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization.
@@ -3883,7 +3918,7 @@ contract DiamondTest is Test {
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
@@ -3895,15 +3930,17 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
 
         // Confirm the tally really is a 2-vs-2 tie before resolving.
-        (uint256 uphold, uint256 overturnVotes) = ArbiterRegistryFacet(address(diamond)).getAppealVotes(agr);
+        (uint256 uphold, uint256 overturnVotes) = ArbiterVaultFacet(address(diamond)).getAppealVotes(agr);
         assertEq(uphold, 2);
         assertEq(overturnVotes, 2);
 
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
-        // Tie at quorum -> uphold path taken: deposit forfeited to the vault, ruling arbiter
-        // not penalized.
-        assertEq(ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + 20 * 10**6);
+        // Tie at quorum -> uphold path taken: the ruling arbiter is not penalized.
+        // Since 17 September 2026 the deposit pays the four voters equally
+        // ($5 each, nothing left over) instead of going to the vault.
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "four votes divide $20 with no remainder");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a5), 5 * 10**6, "each of four voters is owed $5");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization, not the executor.
@@ -3912,6 +3949,11 @@ contract DiamondTest is Test {
         assertEq(uint8(Agreement(agr).status()), uint8(Agreement.Status.RESOLVED));
     }
 
+    /// ⚠️ REWRITTEN ON PURPOSE, 17 September 2026 (the no-quorum refund).
+    /// Until then this asserted "the vault grows by $20": a man paid for a
+    /// review nobody gave, and the money went where it never comes back from.
+    /// The verdict still stands by default — but the deposit goes home whole,
+    /// and the lone voter is paid nothing, because no panel sat.
     function testResolveAppeal_NoQuorumUpholdsByDefaultAtWindowClose() public {
         (address a2,,) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
@@ -3922,7 +3964,8 @@ contract DiamondTest is Test {
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
 
-        uint256 vaultBefore = ArbiterRegistryFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 execBefore  = usdc.balanceOf(executor);
 
         // Only 1 of 3 needed votes cast — quorum never reached.
         vm.prank(a2);
@@ -3932,8 +3975,11 @@ contract DiamondTest is Test {
 
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
-        assertEq(ArbiterRegistryFacet(address(diamond)).getVaultBalance(), vaultBefore + 20 * 10**6);
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "the vault takes nothing from an unheard appeal");
+        assertEq(usdc.balanceOf(executor) - execBefore, 20 * 10**6, "the whole deposit goes back to the appellant");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 0, "a lone vote is not a panel and is not paid");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
+        assertTrue(ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins, "the verdict stands by default");
     }
 
     function testResolveAppeal_RevertsBeforeQuorumOrWindowClose() public {
@@ -4057,11 +4103,11 @@ contract DiamondTest is Test {
         address agr = _disputeToVerdict(client, executor, true);
 
         ArbiterRegistryFacet(address(diamond)).freezeVerdict(agr);
-        ArbiterRegistryStorage.PendingVerdict memory frozen = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory frozen = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertTrue(frozen.frozen);
 
         ArbiterRegistryFacet(address(diamond)).unfreezeVerdict(agr);
-        ArbiterRegistryStorage.PendingVerdict memory unfrozen = ArbiterRegistryFacet(address(diamond)).getPendingVerdict(agr);
+        ArbiterRegistryStorage.PendingVerdict memory unfrozen = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertFalse(unfrozen.frozen);
     }
 

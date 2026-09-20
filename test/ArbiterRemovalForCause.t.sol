@@ -62,7 +62,7 @@ pragma solidity ^0.8.20;
 //
 // isRegisteredArbiterHere/getMistakeStreakOf/getNoResponseAtHere were taken off —
 // exactly the defect getChiefArbiterAddress had been (duplicates of the already
-// mounted ArbiterRegistryFacet.isRegisteredArbiter/getArbiterMistakeStreak/
+// mounted ArbiterVaultFacet.isRegisteredArbiter/getArbiterMistakeStreak/
 // getNoResponseAt). The post-conditions "no longer an arbiter" are read through
 // _isArbiterRaw (a vm.load of slot 0, already proved live: EVERY test in this file
 // rests on it through setUp). The offsets of arbiterMistakeStreak and
@@ -79,6 +79,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {FactoryStorage} from "../src/FactoryFacet.sol";
 import {MinimalForwarder} from "../src/MinimalForwarder.sol";
+import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract ArbiterRemovalForCauseTest is Test {
     ArbiterAccountabilityFacet acc;
@@ -555,13 +556,27 @@ contract ArbiterRemovalForCauseTest is Test {
         vm.store(address(reg), daoSlot, vm.load(address(reg), daoSlot) | bytes32(uint256(1) << 160));
 
         assertTrue(reg.isDaoActive(), "setup: governance is switched on by both sides");
-        assertEq(reg.getDAOAddress(), address(0), "setup: there is no successor");
+
+        // ⚠️ READ OUT OF STORAGE, NOT THROUGH A GETTER, and that is forced rather
+        // than preferred: `getDAOAddress` and `isRegisteredArbiter` moved to
+        // ArbiterVaultFacet on 16 September 2026 (the EIP-170 split), while `reg`
+        // here is a STANDALONE facet and not a diamond — there is no routing in
+        // this object to carry a call next door. The two slots are the ones the
+        // moved getters read: daoAddress shares ARB_BASE + 5 with the flag set
+        // above (lower 160 bits), and isArbiter is field 0 of the struct, the same
+        // mapping this file already writes by hand at the top of _seat().
+        assertEq(
+            address(uint160(uint256(vm.load(address(reg), daoSlot)))),
+            address(0),
+            "setup: there is no successor"
+        );
 
         // The SEATING door is open to the owner in this state — it is already so, and
         // it is with that door that the removal door must agree.
         reg.addArbiter(address(0xA7));
-        assertTrue(
-            reg.isRegisteredArbiter(address(0xA7)),
+        assertEq(
+            uint256(vm.load(address(reg), keccak256(abi.encode(address(0xA7), uint256(ARB_BASE))))),
+            1,
             "seating works with a live DAO and no successor, so removal must too"
         );
     }
