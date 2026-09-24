@@ -183,7 +183,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// Held to "real, and not in this cut's Replace group" by
     /// test_TheGrowthBeyondThisCutIsRealAndBelongsToAnotherFacet.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](8);
+        sels = new bytes4[](11);
         sels[0] = bytes4(keccak256("withdrawAppealShare(address)"));
         sels[1] = bytes4(keccak256("getAppealShareOwed(address,address)"));
         sels[2] = bytes4(keccak256("getAppealLedger(address)"));
@@ -195,6 +195,14 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // that the appeal quorum moves with the corps.
         sels[6] = bytes4(keccak256("abandonClaim(address)"));
         sels[7] = bytes4(keccak256("getAppealPanel(address)"));
+        // And the three of 22 September 2026, when the seat stopped being
+        // hostage money and the bond moved to the CASE: the arbiter's door to
+        // collect the bond of a case that ended without his verdict, and the
+        // two reads a screen needs beside that button. All three on
+        // ArbiterVaultFacet.
+        sels[8] = bytes4(keccak256("withdrawCaseBond(address)"));
+        sels[9] = bytes4(keccak256("getCaseBond(address)"));
+        sels[10] = bytes4(keccak256("getJudgingCount(address)"));
     }
 
     /// The compiled pair minus the named growth. Every name must actually be in
@@ -301,6 +309,22 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // a selector no NAMED facet implemented, which is what this lock exists
         // to refuse — and it was right to go red: the name was simply missing.
         bytes4[] memory jobBoardAbi = _abiOf("out/JobBoardFacet.sol/JobBoardFacet.json");
+        // Added 20 September 2026, and for the same reason the line above it
+        // was: the handover's second condition put getHandoverReadiness() on
+        // the accountability facet — every term of the condition, its floor and
+        // the verdict, out of the same function activateDAO() calls. The other
+        // selector of that rule, getLiveDeals(), is already covered by
+        // registryAbi above. Without this line the surplus carried a selector no
+        // NAMED facet implemented, and the lock was right to go red: the name
+        // was simply missing.
+        bytes4[] memory accountabilityAbi = _abiOf("out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json");
+        // Added 20 September 2026, third time for the third time's reason: the
+        // corps stopped asking for experience and now asks only for a run of
+        // clean deals, so getStreakStanding() went onto the reputation facet —
+        // the streak, the deals that bought none of it, and the rule behind
+        // both, in one read. Without this line the surplus carried a selector no
+        // NAMED facet implemented, and the lock was right to go red.
+        bytes4[] memory reputationAbi = _abiOf("out/ReputationFacet.sol/ReputationFacet.json");
         bytes4[] memory arbiterAbi  = upgrade.artifactSelectors();
         bytes4[] memory queued      = _grownAfterThisCut();
 
@@ -324,7 +348,8 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
             assertTrue(
                 _contains(registryAbi, grown[i]) || _contains(factoryAbi, grown[i])
                     || _contains(treasuryAbi, grown[i]) || _contains(appsAbi, grown[i])
-                    || _contains(jobBoardAbi, grown[i]),
+                    || _contains(jobBoardAbi, grown[i]) || _contains(accountabilityAbi, grown[i])
+                    || _contains(reputationAbi, grown[i]),
                 string.concat(
                     "the rig carries a selector no named facet of this checkout implements: ",
                     vm.toString(grown[i])
@@ -738,6 +763,12 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
             remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
             IDiamondCut(address(d)).diamondCut(remove, address(0), "");
         }
+
+        // The three application doors this checkout stopped building on
+        // 22 September 2026, put back where the census still has them. See
+        // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
+        // applications facet that is already here rather than on a stub.
+        _mountRemovedApplicationDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

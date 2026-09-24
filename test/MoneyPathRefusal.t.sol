@@ -537,10 +537,17 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         vm.prank(client); a.raiseDispute();
         _claimByArbiter(a);
 
+        // The bond this case carries is on the diamond from the claim and goes
+        // home at finalization, so it is named rather than left to turn the
+        // subtraction below into an underflow (22 September 2026).
+        (uint256 caseBond, ) = ArbiterVaultFacet(address(diamond)).getCaseBond(address(a));
         uint256 d0 = usdc.balanceOf(address(diamond));
         _submitAndFinalize(a, true);
 
-        assertEq(usdc.balanceOf(address(diamond)) - d0, 3_000_000, "the fee arrived at once");
+        assertEq(
+            usdc.balanceOf(address(diamond)) + caseBond - d0, 3_000_000,
+            "the fee arrived at once, and the bond left with the verdict"
+        );
         assertEq(a.undeliveredFee(), 0, "nothing deferred on the healthy path");
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
         _assertDiamondBalances("healthy diamond, fee taken");

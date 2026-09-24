@@ -62,8 +62,9 @@ import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
+import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 
-contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench {
+contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadinessSeed {
     ArbiterRegistryFacet facet;
     ArbiterVaultFacet facetVault;
 
@@ -108,6 +109,7 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench {
         facet.setDAOAddress(address(0xDA0));
         vm.prank(address(0xDA0));
         facet.acceptDAOAddress();
+        _seedHandoverLiveness(address(facet));
         facet.activateDAO();
     }
 
@@ -211,16 +213,23 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench {
         facet.setDAOAddress(address(0xDA0));
         vm.prank(address(0xDA0));
         facet.acceptDAOAddress();
+        _seedHandoverLiveness(address(facet));
 
         facet.activateDAO();
         assertTrue(facet.isDaoActive(), "exactly at the threshold, switching on goes through");
     }
 
     /// A literal written down by a person rather than derived from the thing under
-    /// test. The decision named the number out loud: ten thousand unique addresses
-    /// that CLOSED a deal.
-    function test_TheThresholdIsTenThousand() public view {
-        assertEq(facet.getDaoThreshold(), 10_000, "the handover threshold is 10 000");
+    /// test. The decision named the number out loud: one thousand unique addresses
+    /// that CLOSED a deal and took XP for it.
+    ///
+    /// ⚠️ 10 000 → 1 000 on 20 September 2026, and the scene above
+    /// (test_ActivateDaoPassesExactlyAtTheThreshold) would agree with ANY value
+    /// of the constant — it takes the number from `getDaoThreshold()`. This line
+    /// is the only thing in the suite that would notice the constant moving on
+    /// its own, which is exactly why it is written out by hand.
+    function test_TheThresholdIsOneThousand() public view {
+        assertEq(facet.getDaoThreshold(), 1_000, "the handover threshold is 1 000");
     }
 
     // ---------- the two steps of handing over the DAO address ----------
@@ -450,56 +459,59 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench {
     }
 
     // ============================================================
-    //  HALF OF THIS FACET
+    //  THE CHIEF AND THE ONE DOOR OF THIS FACET HE USED TO HAVE
     //
-    //  The chief stops existing while the DAO is active, because otherwise they
-    //  become IRREMOVABLE: setChiefArbiter is the only writer of the slot and the
-    //  only way to zero it, and it is itself closed under the DAO. What is checked
-    //  here is the one function of this facet under onlyOwnerOrChief — addArbiter.
-    //  The four functions of the other half (suspension, lifting a suspension,
-    //  proposing a removal, withdrawing a proposal) live in the
-    //  ArbiterRemovalForCause suite.
+    //  ⚠️ HE LOST IT ON 22 SEPTEMBER 2026, and this section is what is left
+    //  to say about it. `addArbiter` was the only function of this facet under
+    //  `onlyOwnerOrChief`; the owner's decision made it `onlyOwner`, on the
+    //  argument that it is the one entrance into the corps that measures
+    //  nothing — a name and a press — and it was held by a man who had himself
+    //  been appointed.
+    //
+    //  The abolition of the ROLE under live governance is unchanged and still
+    //  matters: the chief's four remaining rights (suspension, lifting a
+    //  suspension, proposing a removal, withdrawing a proposal) live in
+    //  ArbiterAccountabilityFacet and are guarded by ITS copy of the modifier.
+    //  Those scenes are in the ArbiterRemovalForCause suite.
     // ============================================================
 
-    function test_ChiefCanAddArbiterBeforeDao() public {
+    /// The chief is refused BEFORE the DAO, which is the whole change: the door
+    /// was his until 22 September 2026 and is the owner's now.
+    function test_ChiefCannotAddArbiterEvenBeforeTheDao() public {
         facet.setChiefArbiter(address(0xC4));
-        vm.prank(address(0xC4));
-        facet.addArbiter(address(0xA1));
-        assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "before the DAO the chief seats as before");
-    }
-
-    /// The refusal has to be NotOwnerOrChief and not SeatingHandedOver: the modifier
-    /// stands BEFORE the body, and the distinction here is not cosmetic —
-    /// SeatingHandedOver would mean "the chief still exists, the door is simply
-    /// closed to everybody", that is, all their OTHER rights (in the neighbouring
-    /// facet) are still theirs. What is checked is the abolition of the role, not
-    /// the closing of one door.
-    function test_ChiefLosesAddArbiterAfterDao() public {
-        facet.setChiefArbiter(address(0xC4));
-        _activateDaoWithSuccessor();
+        assertFalse(facet.isDaoActive(), "setup: governance is on, so this proves less");
 
         vm.prank(address(0xC4));
-        vm.expectRevert(ArbiterRegistryFacet.NotOwnerOrChief.selector);
+        vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
         facet.addArbiter(address(0xA1));
+        assertFalse(facetVault.isRegisteredArbiter(address(0xA1)), "the chief seated him anyway");
+
+        // The owner's press on the same man goes through, so the refusal is
+        // about who pressed.
+        facet.addArbiter(address(0xA1));
+        assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "the owner lost the door too");
     }
 
-    /// THE DISCRIMINATOR BETWEEN THE TWO REFUSALS, and it survived by a change of
-    /// scene rather than of meaning. The state used to be chosen by an earned
-    /// threshold (the chief already powerless, the owner still seating); now it is
-    /// taken after governance is switched on, where two parties get DIFFERENT
-    /// refusals to one and the same call: the chief gets NotOwnerOrChief from the
-    /// modifier (the role is abolished), the owner gets SeatingHandedOver from the
-    /// ratchet in the body (the role is theirs, the door has moved away).
+    /// THE DISCRIMINATOR BETWEEN THE TWO REFUSALS, and it survived the change.
+    /// After governance is switched on, two parties get DIFFERENT refusals to
+    /// one and the same call: a chief gets `NotOwner` from the modifier, the
+    /// owner gets `SeatingHandedOver` from the ratchet in the body.
     ///
-    /// One refusal for both would mean that abolition of the role is not told apart
-    /// from the closing of one door — and those are two different statements about
-    /// what the human has left.
+    /// One refusal for both would mean "you are not allowed" and "the door has
+    /// moved away" could not be told apart — two different statements about
+    /// what the person has left.
+    ///
+    /// ⚠️ THE CHIEF'S HALF NOW SAYS `NotOwner` AND NOT `NotOwnerOrChief`, and
+    /// the loss is worth naming: the refusal used to carry "the role is
+    /// abolished" and now carries "this was never yours". For this door that is
+    /// the truth; the abolition of the role is still measured, on the doors he
+    /// actually has, in the ArbiterRemovalForCause suite.
     function test_ChiefAndOwnerGetDifferentRefusalsAfterGovernanceIsOn() public {
         facet.setChiefArbiter(address(0xC4));
         _activateDaoWithSuccessor();
 
         vm.prank(address(0xC4));
-        vm.expectRevert(ArbiterRegistryFacet.NotOwnerOrChief.selector);
+        vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
         facet.addArbiter(address(0xA1));
 
         vm.expectRevert(ArbiterRegistryFacet.SeatingHandedOver.selector);

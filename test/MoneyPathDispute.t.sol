@@ -40,14 +40,14 @@ contract MoneyPathDisputeTest is MoneyPathBase {
     }
 
     function testTheArbiterFloorNeedsNoTopUpOnceThePotIsBigEnough() public {
-        // 80% of 3% reaches $10 when the pot reaches $416.67.
-        Agreement small = _hireDirectly(100_000_000); // $100 -> arbiter would get $2.40
+        // 90% of 3% reaches $10 when the pot reaches $370.37.
+        Agreement small = _hireDirectly(100_000_000); // $100 -> arbiter would get $2.70
         _activate(small);
         vm.prank(client); small.raiseDispute();
         assertEq(
             ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(small)),
-            7_600_000,
-            "$10 floor less the $2.40 the levy already yields"
+            7_300_000,
+            "$10 floor less the $2.70 the levy already yields"
         );
 
         address c2 = address(0x31); usdc.mint(c2, BAG);
@@ -77,7 +77,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         vm.prank(client); a.raiseDispute();
 
         uint256 topUp = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
-        assertEq(topUp, 7_600_000, "$7.60 to reach the $10 floor");
+        assertEq(topUp, 7_300_000, "$7.30 to reach the $10 floor");
 
         uint256 clientBefore = usdc.balanceOf(client);
         vm.prank(client);
@@ -91,8 +91,8 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         _submitAndFinalize(a, true); // the client wins on the merits
 
         uint256 levy = AMOUNT * 300 / 10_000;        // $3.00
-        uint256 arbiterShare = levy * 8_000 / 10_000; // $2.40
-        uint256 treasuryShare = levy - arbiterShare;  // $0.60
+        uint256 arbiterShare = levy * 9_000 / 10_000; // $2.70
+        uint256 treasuryShare = levy - arbiterShare;  // $0.30
 
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
         assertEq(
@@ -104,19 +104,22 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), treasuryShare);
         _assertDiamondBalances("after the verdict was executed");
 
-        // The winner's own arithmetic: $100 in, $97 back, $7.60 spent to be heard.
+        // The winner's own arithmetic: $100 in, $97 back, $7.30 spent to be heard.
         assertEq(
             usdc.balanceOf(client),
             clientBefore - topUp + (AMOUNT - levy),
             "the client is out the top-up and the levy despite winning"
         );
-        assertEq(topUp + levy, 10_600_000, "$10.60 to win a $100 argument");
+        assertEq(topUp + levy, 10_300_000, "$10.30 to win a $100 argument");
 
         // Both owed halves really come out.
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-        assertEq(usdc.balanceOf(arbiterAddr), ARBITER_FLOOR, "arbiter paid the floor");
+        // His purse is in this number since 22 September 2026: the rig funds him
+        // so he can post the bond each CASE asks for, and this deal's bond came
+        // home at finalization.
+        assertEq(usdc.balanceOf(arbiterAddr) - CASE_BOND_PURSE, ARBITER_FLOOR, "arbiter paid the floor");
         assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond empty but for the arbiter's bond");
         _assertDiamondBalances("after withdrawals");
     }
@@ -131,7 +134,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
-        uint256 topUp = 7_600_000;
+        uint256 topUp = 7_300_000;
         usdc.setBlacklisted(client, true);
         vm.warp(block.timestamp + DISPUTE_WINDOW + 1);
 
@@ -189,7 +192,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         assertEq(a.undeliveredPayout(), AMOUNT - AMOUNT / 4, "the rest is owed to the blocked executor");
         assertEq(
             ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
-            7_600_000,
+            7_300_000,
             "the top-up became a claim"
         );
         _assertDiamondBalances("blocked payer, claimable top-up");
@@ -198,7 +201,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         uint256 e0 = usdc.balanceOf(executor);
         vm.prank(executor);
         ArbiterVaultFacet(address(diamond)).withdrawDisputeBounty();
-        assertEq(usdc.balanceOf(executor) - e0, 7_600_000, "and it was collectable later");
+        assertEq(usdc.balanceOf(executor) - e0, 7_300_000, "and it was collectable later");
         _assertDiamondBalances("after the claim was taken");
 
         // Three doors in this scene, not two: the top-up on the diamond, and
@@ -300,8 +303,12 @@ contract MoneyPathDisputeTest is MoneyPathBase {
             "only the vault remains, less the discount it gave and the arbiter's bond"
         );
         assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), 47_000_000);
+        // ⚠️ HIS PURSE IS IN THIS NUMBER SINCE 22 SEPTEMBER 2026. The rig funds
+        // him so he can post the bond each CASE asks for, and this deal's bond
+        // came home at finalization — so what he holds is the purse plus the
+        // floor, not the floor alone.
         assertEq(
-            usdc.balanceOf(arbiterAddr),
+            usdc.balanceOf(arbiterAddr) - CASE_BOND_PURSE,
             ARBITER_FLOOR,
             "and the arbiter got the whole floor anyway"
         );

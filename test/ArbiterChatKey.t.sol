@@ -380,6 +380,12 @@ contract ArbiterChatKeyTest is Test, ArbiterTwoFacetBench {
 
         _commitAndClaim(agr1, arb, bytes32(uint256(0x9)), box, sign); // first claim — the key is new, the event fires
 
+        // One case at a time since 22 September 2026: the first is let go
+        // before the second is taken. A release does not touch the keys, which
+        // are written per ARBITER and not per case, so the scene is unchanged.
+        vm.prank(arb);
+        facet.releaseDisputeClaim(address(agr1));
+
         vm.recordLogs();
         _commitAndClaim(agr2, arb, bytes32(uint256(0xA)), box, sign); // the same key, a second dispute
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -410,6 +416,15 @@ contract ArbiterChatKeyTest is Test, ArbiterTwoFacetBench {
         MockDisputedAgreement agr2 = new MockDisputedAgreement(address(0xC2), address(0xE2));
 
         _commitAndClaim(agr1, arb, bytes32(uint256(0x9)), bytes32(uint256(0x33)), bytes32(uint256(0x44)));
+
+        // ⚠️ THE FIRST CASE IS LET GO BEFORE THE SECOND IS TAKEN (22 September
+        // 2026). An arbiter reads one case at a time now, so a scene that
+        // claimed two in a row stopped being about chat keys and started
+        // failing on `AlreadyJudgingACase`. Letting go is the cheapest way to
+        // free the slot and changes nothing this scene measures: the keys are
+        // written per ARBITER, not per case, and a release does not touch them.
+        vm.prank(arb);
+        facet.releaseDisputeClaim(address(agr1));
 
         vm.recordLogs();
         _commitAndClaim(agr2, arb, bytes32(uint256(0xA)), bytes32(uint256(0x55)), bytes32(uint256(0x44))); // a new boxKey

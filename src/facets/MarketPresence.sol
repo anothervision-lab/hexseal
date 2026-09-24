@@ -7,28 +7,38 @@ pragma solidity ^0.8.20;
 // in one place, read off the boards' own storage.
 // ============================================================
 //
-// The owner's decision of 17 September 2026 has two directions, and they are
-// deliberately NOT one predicate:
+// ⚠️ REWRITTEN 22 SEPTEMBER 2026, AND THE OLD RULE IS KEPT HERE BECAUSE IT
+// EXPLAINS THE NEW ONE.
+//
+// What stood here from 17 September was two rules:
 //
 //   RULE A — a seat may only be taken by somebody who has NOTHING open on the
-//            boards. Every door on the way into the corps asks it:
-//            `applyForArbiterSeat`, `approveArbiterApplication`, `addArbiter`,
-//            `applyAsArbiter`, and the bond doors on the transition that turns
-//            an unpaid seat into a working one.
-//            → `requireNothingOpen`
+//            boards. Asked by every door into the corps.
+//   RULE B — a seat that holds a bond may not BECOME a party to a trade.
 //
-//   RULE B — a seat that holds a bond may not BECOME a party to a trade. Every
-//            door through which a person turns into a client, an executor, an
-//            applicant or a requester asks it — on BOTH sides, the one pressing
-//            and the one named.
-//            → `requireNotBondedArbiter`
+// Together they threw an arbiter off the market entirely, for as long as he
+// held a seat. The seat's real price was therefore never the 50 USDC bond — it
+// was his living, and the owner measured that and called it what it was:
+// hostage-taking rather than work.
 //
-// "An arbiter" here is the owner's own definition: a seat AND a posted bond.
-// A seat that has never paid in (`BOND_STATE_UNPOSTED`) is not an
-// arbiter and trades like anybody else; the moment it pays, rule A is asked and
-// rule B starts applying. A seat a won appeal drew below the norm
-// (`BOND_STATE_SAGGING`) is still an arbiter: it finishes the cases it holds,
-// and it may not trade.
+// The seat is free now and the bond is posted PER CASE, so the rule shrinks to
+// the part that was ever about a conflict of interest:
+//
+//   AN ARBITER DOES NOT TRADE WHILE HE IS JUDGING. Every door through which a
+//   person turns into a client, an executor, an applicant or a requester asks
+//   it — on BOTH sides, the one pressing and the one named.
+//   → `requireNotJudging`
+//
+// Rule A is GONE. He is an ordinary user who steps away for a few days to read
+// a case; what he had open before he took it is his own business, and the one
+// conflict that actually matters — judging a deal he is a party to — is
+// refused by `claimDispute` and `voteOnAppeal` by name, as it always was.
+//
+// ⚠️ WHAT THE NARROWING COSTS, NAMED RATHER THAN DISCOVERED LATER: a deal he
+// opened BEFORE taking a case goes on running while he judges somebody else's.
+// It always could — rule B never closed anything retroactively either — and
+// the alternative is a rule that cancels a stranger's live deal because his
+// counterparty took a case.
 //
 // ⚠️ WHY THIS IS A LIBRARY AND NOT A FACET VIEW EVERYBODY CALLS.
 // The natural shape would be one mounted view and a `staticcall` from each
@@ -66,10 +76,16 @@ import {ArbiterRegistryStorage} from "./ArbiterRegistryFacet.sol";
 import {RegistryStorage} from "../RegistryFacet.sol";
 
 library MarketPresence {
-    /// Rule B. `who` holds a seat with a bond behind it, so this door — the one
-    /// that would have made him a client, an executor, an applicant or a
-    /// requester — is shut. The way out is his own: `resignAsArbiter` returns
-    /// the bond and the boards open again.
+    /// `who` is reading a case right now, so this door — the one that would
+    /// have made him a client, an executor, an applicant or a requester — is
+    /// shut until he signs the verdict. The wait is his own reading time: the
+    /// slot is freed by `submitVerdict`, not by the finalization.
+    ///
+    /// ⚠️ THE NAME AND THE FOUR BYTES ARE KEPT ON PURPOSE (22 September
+    /// 2026), though the question behind them narrowed. `Agreement.sol` carries
+    /// a copy of this error for the same rule asked from a clone, and a clone
+    /// is pinned to its implementation for life — renaming it here would leave
+    /// every live deal raising a selector no reader has a name for.
     ///
     /// Carries the address because both sides are checked and a caller has to
     /// know WHICH of them is the arbiter: on `acceptApplicant` the presser and
@@ -77,11 +93,14 @@ library MarketPresence {
     /// sentence a screen can show.
     error ArbiterCannotBeAParty(address who);
 
-    /// Rule A. What `who` still has open, by kind, so a screen can list what is
-    /// in the way instead of saying "no". Every number is the count of things
-    /// that still have an exit of their own — the six kinds named in the
-    /// parameters below are the whole list, and each one is closed by its
-    /// owner, never by an administrator.
+    /// What `who` still has open, by kind.
+    ///
+    /// ⚠️ NOTHING RAISES IT FROM 22 SEPTEMBER 2026, and the declaration is
+    /// kept anyway. It was rule A's refusal — "the corps is entered with an
+    /// empty board" — and rule A is gone; the four bytes stay so that a
+    /// refusal already in the chain's history, and a reader built against it,
+    /// keep their name. `openItemsOf` below still answers the question the six
+    /// numbers describe; what no longer exists is a door that refuses on them.
     error OpenMarketItems(
         uint256 jobs,
         uint256 applications,
@@ -91,25 +110,23 @@ library MarketPresence {
         uint256 deals
     );
 
-    /// The owner's definition of an arbiter: a seat AND money behind it.
+    /// Is `who` judging a case right now?
     ///
-    /// `bondDrawnByAppeal` is part of the answer and not a detail: a won appeal
-    /// may draw a bond to zero, and a seat in that state is still an arbiter
-    /// (it finishes what it holds) while a seat that never paid is not. The
-    /// same three fields, in the same order, are what `getBondState` reads to
-    /// tell states 1, 2 and 3 apart — this is that read with the states folded
-    /// into a yes or no.
+    /// ⚠️ IT READS `judgingCount`, NOT `openClaimCount`, and the two part
+    /// company exactly where this rule lives. `openClaimCount` stays up until
+    /// the DEAL lets go of him — which is after the finalization delay and any
+    /// appeal, days after his work ended. Reading that one would keep an
+    /// arbiter off the boards for a week per case, which is the very cost the
+    /// per-case bond was meant to stop charging him.
     ///
-    /// Cheap on the hot path by construction: a person who is not in the corps
-    /// costs ONE cold SLOAD and stops there.
-    function holdsBond(address who) internal view returns (bool) {
-        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
-        if (!d.isArbiter[who]) return false;
-        return d.arbiterBond[who] != 0 || d.bondDrawnByAppeal[who];
+    /// Cheap on the hot path by construction: one cold SLOAD, and a person who
+    /// has never judged anything stops there.
+    function isJudging(address who) internal view returns (bool) {
+        return ArbiterRegistryStorage.data().judgingCount[who] != 0;
     }
 
-    function requireNotBondedArbiter(address who) internal view {
-        if (holdsBond(who)) revert ArbiterCannotBeAParty(who);
+    function requireNotJudging(address who) internal view {
+        if (isJudging(who)) revert ArbiterCannotBeAParty(who);
     }
 
     /// Everything `who` has open on the boards right now, by kind.
@@ -142,18 +159,9 @@ library MarketPresence {
         deals = RegistryStorage.store().openDealCount[who];
     }
 
-    function requireNothingOpen(address who) internal view {
-        (
-            uint256 jobs,
-            uint256 applications,
-            uint256 services,
-            uint256 requestsSent,
-            uint256 requestsReceived,
-            uint256 deals
-        ) = openItemsOf(who);
-
-        if ((jobs | applications | services | requestsSent | requestsReceived | deals) != 0) {
-            revert OpenMarketItems(jobs, applications, services, requestsSent, requestsReceived, deals);
-        }
-    }
+    // ⚠️ `requireNothingOpen` STOOD HERE AND IS GONE (22 September 2026). It
+    // was rule A — the corps is entered with an empty board — and it went with
+    // the standing bond it belonged to. `openItemsOf` above stays: it is also
+    // what `JobBoardFacet.getOpenMarketItems` answers a screen with, and that
+    // question ("what do I still have open?") is a useful one whoever asks it.
 }

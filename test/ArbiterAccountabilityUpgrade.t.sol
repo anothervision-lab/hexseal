@@ -124,7 +124,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     ///     ArbiterVaultFacet (half of the pair this cut's registry became);
     ///     settleAppealDebts(uint256) and getAppealDebts() joined them the same day.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](12);
+        sels = new bytes4[](15);
         sels[0] = bytes4(keccak256("acceptDAOAddress()"));
         sels[1] = bytes4(keccak256("getPendingDAOAddress()"));
         sels[2] = bytes4(keccak256("setDisputeDiscount(uint256)"));
@@ -140,6 +140,14 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         // quorum moves with the corps.
         sels[10] = bytes4(keccak256("abandonClaim(address)"));
         sels[11] = bytes4(keccak256("getAppealPanel(address)"));
+        // And the three of 22 September 2026, when the seat stopped being
+        // hostage money and the bond moved to the CASE: the arbiter's door to
+        // collect the bond of a case that ended without his verdict, and the
+        // two reads a screen needs beside that button. All three on
+        // ArbiterVaultFacet.
+        sels[12] = bytes4(keccak256("withdrawCaseBond(address)"));
+        sels[13] = bytes4(keccak256("getCaseBond(address)"));
+        sels[14] = bytes4(keccak256("getJudgingCount(address)"));
     }
 
     /// The same thing for the OTHER facet, which until 29 August 2026 had not
@@ -149,9 +157,30 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     ///     a funded top-up came out of the vault. The field it reads belongs to
     ///     ArbiterRegistryFacet, which writes it; the READ is mounted on this
     ///     facet because the registry stands 90 bytes under the EIP-170 ceiling.
+    ///
+    ///   • getHandoverReadiness() — 20 September 2026. Every term of the
+    ///     handover's SECOND condition (deals open now, the run of clean
+    ///     disputes, the number of different arbiters who earned it), each with
+    ///     its floor and its verdict, out of the same function activateDAO()
+    ///     itself calls. It sits on THIS facet and not beside that door for the
+    ///     measured reason above: the arbiter registry is the fullest contract
+    ///     in the repository.
     function _grownAccountabilityAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](1);
+        sels = new bytes4[](3);
         sels[0] = bytes4(keccak256("getDisputeSubsidy(address)"));
+        // The one of 20 September 2026, and on the accountability facet for the
+        // same reason as the read above it: getHandoverReadiness() hands out
+        // every term of the handover's SECOND condition, its floor and the
+        // verdict, out of the very function activateDAO() calls. It sits here
+        // rather than beside that door because ArbiterRegistryFacet is the
+        // fullest contract in the repository.
+        sels[1] = bytes4(keccak256("getHandoverReadiness()"));
+        // 21 September 2026, and here for the same reason a third time: an
+        // arbiter's closed-case record plus the three numbers the chain judges
+        // the overturn share by, in one read, so that no screen keeps a copy of
+        // the floor it hides the share below. The rule is applied in
+        // ArbiterRegistryFacet.finalizeVerdict; only the reading sits here.
+        sels[2] = bytes4(keccak256("getArbiterOutcomeRecord(address)"));
     }
 
     /// The arbiter storage namespace, ERC-7201 (ArbiterRegistryStorage.POSITION):

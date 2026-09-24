@@ -47,6 +47,7 @@ import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 
 contract MockUSDCIntegration {
     mapping(address => uint256) public balanceOf;
@@ -78,7 +79,7 @@ contract MockUSDCIntegration {
     }
 }
 
-contract ArbiterRemovalForCauseIntegrationTest is Test {
+contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     DiamondProxy diamond;
     DeployFull deploy;
     MockUSDCIntegration usdc;
@@ -127,6 +128,13 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
     /// bench seats the base arbiter by hand (addArbiter), and a hand seating takes no
     /// bond at all — see test_HandSeatedArbiterHasNothingToBurnUntilHePostsItHimself.
     bytes32 constant ARB_BASE = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
+
+    /// The offset of `suspendedUntil` inside Data — the same 27 that
+    /// test/ArbiterSuspension.t.sol found by sweeping and pins with a live
+    /// getter. It is read back through `isSuspended` right after every write
+    /// here, so a field appended above it turns this rig red instead of
+    /// silently writing a neighbour.
+    uint256 constant SLOT_SUSPENDED_UNTIL = 27;
     uint256 constant SLOT_ARBITER_BOND = 12;
 
     /// An outsider: no role at all, neither arbiter nor chief nor owner.
@@ -301,6 +309,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         ArbiterRegistryFacet(address(diamond)).setDAOAddress(dao);
         vm.prank(dao);
         ArbiterRegistryFacet(address(diamond)).acceptDAOAddress();
+        _seedHandoverLiveness(address(diamond));
         ArbiterRegistryFacet(address(diamond)).activateDAO();
     }
 
@@ -315,11 +324,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
     /// there a booked bond with no USDC behind it makes the diamond insolvent by
     /// exactly 50 USDC.
     function _postRealBond(address who) internal {
-        usdc.mint(who, ARBITER_BOND);
+        // ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026. What a seated arbiter now
+        // needs is money and an allowance for the bond he posts PER CASE, and
+        // that is what this leaves him with.
+        usdc.mint(who, 1_000_000_000);
         vm.prank(who);
-        usdc.approve(address(diamond), ARBITER_BOND);
-        vm.prank(who);
-        ArbiterApplicationsFacet(address(diamond)).postArbiterBond();
+        usdc.approve(address(diamond), type(uint256).max);
     }
 
     function _giveBond(address who, uint256 amount) internal {
@@ -423,6 +433,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
         vm.prank(dao);
         ArbiterRegistryFacet(address(diamond)).acceptDAOAddress();
+        _seedHandoverLiveness(address(diamond));
         ArbiterRegistryFacet(address(diamond)).activateDAO();
         assertEq(ArbiterVaultFacet(address(diamond)).getDAOAddress(), dao);
 
@@ -1097,6 +1108,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(address(0x9F5));
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
         vm.prank(v2);
@@ -1175,6 +1187,13 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
     /// The direct side: returning A REMOVED arbiter is closed to the chief, and the
     /// way round did not happen — what is checked is not only the label of the error
     /// but that nothing happened behind it.
+    ///
+    /// ⚠️ THE REFUSAL MOVED TO THE MODIFIER ON 22 SEPTEMBER 2026. `addArbiter`
+    /// became `onlyOwner`, so a chief is now turned away by the ownership check
+    /// before any rule about removals or cooldowns is read. The property under
+    /// measurement — undoing a removal is the mirror of a removal, and the chief
+    /// may not remove — is unchanged and is now held by a stronger fact: he
+    /// cannot seat at all.
     function test_ChiefCannotReseatRemovedArbiter() public {
         address chief = address(0xC4);
         ArbiterRegistryFacet(address(diamond)).setChiefArbiter(chief);
@@ -1190,8 +1209,15 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         vm.prank(chief);
-        vm.expectRevert(ArbiterRegistryFacet.ReseatingRemovedIsOwnerOnly.selector);
+        vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+
+        // ⚠️ NOTHING IS PRESSED BY THE OWNER HERE, deliberately. His press
+        // would go through — he is exempt from the half-year, because he is
+        // reversing his own removal — and it would LIFT the suspension window on
+        // the way (`clearRemovalRecord(..., true)`), which is the very thing the
+        // two assertions below are about. The owner's road back is measured
+        // where it belongs, in test/ArbiterSeatIsFree.t.sol.
 
         assertTrue(
             ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter),
@@ -1203,23 +1229,24 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
     }
 
-    /// The reverse side, and without it the lock would be too wide: seating in general
-    /// is still the chief's work. Somebody who left VOLUNTARILY is taken rather than a
-    /// newcomer, because that is the case closest to the prohibition: the person is
-    /// not in the corps, but there is no removal on them either — resignAsArbiter does
-    /// not write `removedAt`. The check proves that the discriminator reads THE
-    /// REMOVAL and not "absence from the registry".
-    function test_ChiefStillSeatsSomeoneWhoResigned() public {
-        address chief = address(0xC4);
-        ArbiterRegistryFacet(address(diamond)).setChiefArbiter(chief);
-
+    /// The reverse side, and without it the lock would be too wide: seating in
+    /// general is still somebody's work. Somebody who left VOLUNTARILY is taken
+    /// rather than a newcomer, because that is the case closest to the
+    /// prohibition: the person is not in the corps, but there is no removal on
+    /// them either — resignAsArbiter does not write `removedAt`. The check
+    /// proves that the discriminator reads THE REMOVAL and not "absence from the
+    /// registry".
+    ///
+    /// ⚠️ THE PRESSER IS THE OWNER SINCE 22 SEPTEMBER 2026, and the property
+    /// is unchanged: it is about which FACT the door reads, not about whose hand
+    /// is on it.
+    function test_TheOwnerStillSeatsSomeoneWhoResigned() public {
         address who = address(0x5C);
         _addFreshArbiter(who);
         vm.prank(who);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
 
-        vm.prank(chief);
         ArbiterRegistryFacet(address(diamond)).addArbiter(who);
         // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
         // seat is refused by every arbiter door. The scenes below are about what an
@@ -1231,7 +1258,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
 
         assertTrue(
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who),
-            "they left of their own accord, so the chief may bring them back: a removal has nothing to do with it"
+            "they left of their own accord, so they may be brought back: a removal has nothing to do with it"
         );
     }
 
@@ -1612,6 +1639,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
 
         _grantSelfRegistrationGate(arbiter);
         vm.prank(arbiter);
+        // ⚠️ HALF A YEAR FIRST SINCE 22 SEPTEMBER 2026. Every door into the
+        // corps is shut to a man removed against his will until
+        // `ArbiterRegistryStorage.REMOVAL_COOLDOWN` has run out from
+        // `lastRemovalAt`. Without this warp the scene below measures the
+        // cooldown instead of what it came for.
+        vm.warp(vm.getBlockTimestamp() + 180 days + 1);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter), "setup: the self-enrolment went through");
 
@@ -1665,6 +1698,31 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
 
         _handOverRemovalRight(address(0xDA0));
         _grantSelfRegistrationGate(arbiter);
+
+        // ⚠️ HALF A YEAR FIRST SINCE 22 SEPTEMBER 2026: every door into the
+        // corps is shut to a man removed against his will until
+        // `ArbiterRegistryStorage.REMOVAL_COOLDOWN` has run out from
+        // `lastRemovalAt`.
+        //
+        // ⚠️ AND THE SUSPENSION IS RE-DATED ACROSS THAT WARP, by hand, because
+        // 72 hours cannot survive 180 days and this scene is about the
+        // suspension rather than about the clock. The value written is the same
+        // shape `_performRemoval` writes — "now plus the window" — so what is
+        // measured below is still a live suspension meeting a self-enrolment,
+        // and `removedAtTs` moves with it so the assertions that read it stay
+        // about the same moment.
+        vm.warp(vm.getBlockTimestamp() + 180 days + 1);
+        removedAtTs = vm.getBlockTimestamp();
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(arbiter, uint256(ARB_BASE) + SLOT_SUSPENDED_UNTIL)),
+            bytes32(removedAtTs + ArbiterAccountabilityFacet(address(diamond)).getSuspensionWindow())
+        );
+        assertTrue(
+            ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter),
+            "setup: the suspension was re-dated across the cooldown and is live again"
+        );
+
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         assertTrue(
@@ -2160,6 +2218,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(exec);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);   // overturn
@@ -2448,6 +2507,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(exec);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
@@ -2490,6 +2550,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         _handOverRemovalRight(address(0xDA0));
         _grantSelfRegistrationGate(arbiter);
         vm.prank(arbiter);
+        // ⚠️ HALF A YEAR FIRST SINCE 22 SEPTEMBER 2026. Every door into the
+        // corps is shut to a man removed against his will until
+        // `ArbiterRegistryStorage.REMOVAL_COOLDOWN` has run out from
+        // `lastRemovalAt`. Without this warp the scene below measures the
+        // cooldown instead of what it came for.
+        vm.warp(vm.getBlockTimestamp() + 180 days + 1);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         assertTrue(
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
@@ -2538,14 +2604,22 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
             "a hand seating takes no bond"
         );
 
-        // Half two, new on 8 September 2026: the arbiter posts it himself, and
-        // from that moment the forfeit is worth the fifty dollars the document
-        // names. Before this door existed the vault could not grow by a cent on
-        // any removal reachable today, and the document said so out loud.
+        // ⚠️ AND HALF TWO IS GONE AGAIN SINCE 22 SEPTEMBER 2026. It used to
+        // say: the arbiter posts the bond himself, and from that moment the
+        // forfeit is worth the fifty dollars the public document names. There
+        // is no seat bond to post any more — the money an arbiter puts at risk
+        // is posted PER CASE and comes home when his verdict stands — so a
+        // removal forfeits nothing, for anybody, and the document has to say
+        // that again.
+        //
+        // What punishes a bad arbiter now is the record, the suspension and the
+        // loss of the seat. That is the owner's decision and this is the fact
+        // it rests on: corrupt it (start writing a seat bond again) and the
+        // number in the event below stops being zero.
         _postRealBond(seat);
         assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 50 * 10 ** 6,
-            "the bond he posted himself did not land"
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 0,
+            "nothing writes a seat bond any more, so there is nothing to burn"
         );
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
@@ -2559,7 +2633,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         vm.expectEmit(true, true, true, true, address(diamond));
         emit ArbiterAccountabilityFacet.ArbiterRemovedForCause(
             seat, owner, ArbiterAccountabilityFacet.Cause.Collusion, false, keccak256("chat log"),
-            50 * 10 ** 6
+            0
         );
         ArbiterAccountabilityFacet(address(diamond)).removeArbiterForCause(
             seat, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("chat log"), address(0),
@@ -2567,8 +2641,8 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         );
 
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + 50 * 10 ** 6,
-            "the forfeit is still worth nothing: the arbiter vault did not grow"
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            "the forfeit is worth nothing again: the arbiter vault did not grow"
         );
     }
 
@@ -3113,6 +3187,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(address(0x9D5));
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
         vm.prank(v2);
@@ -3192,6 +3267,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(address(0x9E1));
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
         vm.prank(v2);
@@ -3406,6 +3482,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(address(0xAD5));
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
         vm.prank(v2);
@@ -3585,6 +3662,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(address(0xB25));
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
         vm.prank(v2);
@@ -3742,6 +3820,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test {
         usdc.approve(address(diamond), 20 * 10 ** 6);
         vm.prank(address(0xC33));
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         vm.prank(v1);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
         vm.prank(v2);

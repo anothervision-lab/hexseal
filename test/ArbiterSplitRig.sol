@@ -216,6 +216,65 @@ abstract contract ArbiterSplitRig {
         }
     }
 
+    /// THE THREE DOORS THIS CHECKOUT NO LONGER BUILDS, put back so a rig can
+    /// still be the diamond its census describes.
+    ///
+    /// On 22 September 2026 `applyForArbiterSeat`, `approveArbiterApplication`
+    /// and `rejectArbiterApplication` were removed from
+    /// ArbiterApplicationsFacet by the owner's decision. Base Sepolia routes
+    /// them all the same, and will until a cut takes them off with `Remove`, so
+    /// every census taken before that cut holds them. A stand rehearsing a past
+    /// cut has to mount them itself, and `_conformToCensus` says so in the very
+    /// message that sent a reader here.
+    ///
+    /// ⚠️ THEY ARE MOUNTED ON THE APPLICATIONS FACET THAT IS ALREADY THERE, not
+    /// on a stub of their own, and the reason is arithmetic rather than taste:
+    /// several of these stands also assert that the conformed rig has the same
+    /// NUMBER OF FACETS the chain had, and a fourteenth address would break that
+    /// before it reached the thing under test. The facet does not implement the
+    /// three, so a call to one of them lands in its fallback and reverts — which
+    /// is honest, because no stand here presses a door that was removed; what
+    /// they need is the ROUTING TABLE to have the shape the chain had.
+    ///
+    /// ⚠️ THE SELECTORS ARE LITERALS, hand-computed with `cast sig`. There is
+    /// nothing left in the tree to take them from, and that is the point.
+    ///
+    /// Only what the census actually holds and the rig does not already route
+    /// is added, so this is a no-op on a census read after the removal cut.
+    /// The caller must be able to prank the diamond's owner.
+    function _mountRemovedApplicationDoors(address diamond, bytes4[] memory census)
+        internal
+        returns (uint256 mounted)
+    {
+        bytes4[3] memory gone = [bytes4(0x6fb78a56), bytes4(0xbcd90be1), bytes4(0x8e7e21be)];
+
+        // `getApplicantCount()`, a selector of the same facet that no cut has
+        // ever moved. Asking the loupe where it lives is how the host is found,
+        // rather than by deploying one: the three belong beside their
+        // neighbours, on whatever address this rig put them.
+        address host = IDiamondLoupe(diamond).facetAddress(bytes4(0xadd4e816));
+        if (host == address(0)) return 0;
+
+        bytes4[] memory scratch = new bytes4[](3);
+        for (uint256 i = 0; i < gone.length; i++) {
+            if (IDiamondLoupe(diamond).facetAddress(gone[i]) != address(0)) continue;
+            bool inCensus;
+            for (uint256 j = 0; j < census.length; j++) {
+                if (census[j] == gone[i]) { inCensus = true; break; }
+            }
+            if (inCensus) scratch[mounted++] = gone[i];
+        }
+        if (mounted == 0) return 0;
+
+        bytes4[] memory add = new bytes4[](mounted);
+        for (uint256 i = 0; i < mounted; i++) add[i] = scratch[i];
+
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](1);
+        cut[0] = IDiamondCut.FacetCut(host, IDiamondCut.FacetCutAction.Add, add);
+        _vm.prank(_splitRigOwner(diamond));
+        IDiamondCut(diamond).diamondCut(cut, address(0), "");
+    }
+
     function _splitRigConcat(bytes4[] memory a, bytes4[] memory b) private pure returns (bytes4[] memory out) {
         out = new bytes4[](a.length + b.length);
         for (uint256 i = 0; i < a.length; i++) out[i] = a[i];

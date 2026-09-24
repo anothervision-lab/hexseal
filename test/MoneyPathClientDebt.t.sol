@@ -120,12 +120,19 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
 
         usdc.setBlacklisted(client, true);
 
+        // The bond this case carries sits on the diamond from the claim and
+        // leaves with the verdict, so it is named rather than left to turn the
+        // subtraction below into an underflow (22 September 2026).
+        (uint256 caseBond, ) = ArbiterVaultFacet(address(diamond)).getCaseBond(address(a));
         uint256 e0 = usdc.balanceOf(executor);
         uint256 d0 = usdc.balanceOf(address(diamond));
         _submitAndFinalize(a, false); // executor wins
 
         assertEq(usdc.balanceOf(executor) - e0, 97_000_000, "$97 = $100 pot less the 3% fee");
-        assertEq(usdc.balanceOf(address(diamond)) - d0, 3_000_000, "the fee reached the diamond");
+        assertEq(
+            usdc.balanceOf(address(diamond)) + caseBond - d0, 3_000_000,
+            "the fee reached the diamond, and the bond went home with the verdict"
+        );
         assertEq(a.undeliveredRefund(), EXTRA_BACK, "$10.50 booked to the client");
         assertEq(usdc.balanceOf(address(a)), EXTRA_BACK, "and only that is left behind");
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED));

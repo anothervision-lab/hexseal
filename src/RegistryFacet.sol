@@ -107,6 +107,48 @@ library RegistryStorage {
         // the deals that already exist: their executors stay counted, exactly
         // as they are today.
         mapping(address => bool) offerPending;
+
+        // ---- appended 20 September 2026: the second condition of the
+        //      handover — the market is alive RIGHT NOW ----
+        //
+        // ⚠️ APPENDED AT THE END. The order and the types of the fields above
+        // are not touched: this namespace is append-only, enforced by
+        // script/check-storage-structs.sh, and a type changed inside an
+        // occupied slot is exactly what broke the live JobBoard in July 2026.
+        //
+        // HOW MANY DEALS ARE OPEN ACROSS THE WHOLE PROTOCOL, not per address.
+        // `openDealCount` above answers "what does THIS man still have
+        // hanging"; nothing answered "is the market moving at all". The only
+        // existing way to ask was `getActive().length + getDisputed().length` —
+        // two unbounded loops over a push-only array (see `getActive`), which
+        // is fine for a script and impossible inside a door.
+        //
+        // WHY IT EXISTS. `uniqueActiveUsers` — the first condition of
+        // `activateDAO()` — counts every address that EVER earned XP and never
+        // goes down. That is deliberate (a handover condition must not flicker)
+        // and it is also blind: ten thousand people could have passed through
+        // and left, and the number would still say "ready" over a dead market.
+        // This field is the half that CAN go down, and it is asked in the same
+        // door.
+        //
+        // MOVED BY THE TRANSITION, not by the finishing call — the same rule
+        // and the same reason as `openDealCount`: a clone may push the same
+        // terminal status twice (the finishing call, then `syncRegistry`
+        // behind a failed first attempt) and a decrement per call would count
+        // one ending twice. Both counters therefore move inside the one
+        // `wasOpen != nowOpen` branch in `updateStatus`, and adding a third
+        // reader later means adding it there and nowhere else.
+        //
+        // ⚠️ SATURATING ON THE WAY DOWN, for the reason `_closeOpenDeal`
+        // saturates: zero is the truth for a fresh diamond and NOT for the live
+        // one. Deals already open when this field is mounted were never counted
+        // up, so their endings would underflow — and a Panic(0x11) here does not
+        // just miscount, it brings down `updateStatus`, which is the door the
+        // clone finishes through. The deal would be unable to END. The cut
+        // therefore carries a back-fill (the precedent is
+        // script/MarketPresenceBackfill.sol) and the saturation is the floor
+        // under a back-fill that lands wrong.
+        uint256 liveDeals;
     }
 
     function store() internal pure returns (Layout storage rs) {
@@ -314,6 +356,9 @@ contract RegistryFacet {
         // naming a man is not something he can be held to. See
         // `Layout.offerPending`.
         if (executorAccepted) rs.openDealCount[executor]++;
+        // One DEAL, not one party: this counter is the market's, not a
+        // person's, so it moves once here however many people the deal counted.
+        rs.liveDeals++;
 
         emit AgreementRegistered(agreement, client, executor, amount);
     }
@@ -352,9 +397,16 @@ contract RegistryFacet {
             if (nowOpen) {
                 rs.openDealCount[record.client]++;
                 if (!pendingOffer) rs.openDealCount[record.executor]++;
+                rs.liveDeals++;
             } else {
                 _closeOpenDeal(rs, record.client);
                 if (!pendingOffer) _closeOpenDeal(rs, record.executor);
+                // Saturating, and for a harder reason than the per-party
+                // counter's: this door is how a clone ENDS. An underflow here
+                // would revert `updateStatus` for a deal that was open before
+                // the field was mounted, and the deal could never reach a
+                // terminal status at all. See `Layout.liveDeals`.
+                if (rs.liveDeals != 0) rs.liveDeals--;
             }
         }
 
@@ -562,6 +614,18 @@ contract RegistryFacet {
     ///         on his.
     function isOfferPending(address agreement) external view returns (bool) {
         return RegistryStorage.store().offerPending[agreement];
+    }
+
+    /// @notice How many deals are open across the whole protocol right now.
+    ///
+    /// ACTIVE plus DISPUTED — the same definition `_isOpenStatus` uses, which
+    /// is what makes this number the O(1) twin of
+    /// `getActive().length + getDisputed().length` and not an opinion of its
+    /// own. One of the two halves of the handover's liveness condition; the
+    /// door reads the field, this reads the same field, and
+    /// `getHandoverReadiness()` puts it beside the floor it has to clear.
+    function getLiveDeals() external view returns (uint256) {
+        return RegistryStorage.store().liveDeals;
     }
 
     /// @notice Anyone may push a deal's own answer to "has the executor

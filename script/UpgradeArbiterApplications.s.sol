@@ -271,10 +271,28 @@ contract UpgradeArbiterApplications is Script {
 
     /// The hand-written Add list against solc's `methodIdentifiers`. Set
     /// equality, not a count: a count agrees on a swap.
+    ///
+    /// ⚠️ WITH ONE EXCEPTION SINCE 22 SEPTEMBER 2026, AND IT IS NAMED RATHER
+    /// THAN COUNTED. Three doors this cut mounted — `applyForArbiterSeat`,
+    /// `approveArbiterApplication`, `rejectArbiterApplication` — were removed
+    /// from the facet by the owner's decision, and this script is the RECORD of a
+    /// cut that put them on the chain. It is not rewritten: the list says what
+    /// went on chain that day, and it still does.
+    ///
+    /// So the equality becomes: the compiled facet is a SUBSET of the Add list,
+    /// and what the list has over it is EXACTLY those three, by selector. A
+    /// fourth would go red, and so would one of the three coming back into the
+    /// facet without leaving this exception.
     function assertAddListCoversTheWholeFacet(bytes4[] memory sels) public view {
         bytes4[] memory fromArtifact = artifactSelectors();
+        bytes4[3] memory sinceRemoved = [
+            bytes4(0x6fb78a56), // applyForArbiterSeat()
+            bytes4(0xbcd90be1), // approveArbiterApplication(address)
+            bytes4(0x8e7e21be)  // rejectArbiterApplication(address,string)
+        ];
+
         require(
-            sels.length == fromArtifact.length,
+            sels.length == fromArtifact.length + sinceRemoved.length,
             "pre-flight: the Add list and the compiled facet disagree on how many functions it has"
         );
         for (uint256 i = 0; i < fromArtifact.length; i++) {
@@ -289,7 +307,25 @@ contract UpgradeArbiterApplications is Script {
             for (uint256 j = 0; j < fromArtifact.length; j++) {
                 if (sels[i] == fromArtifact[j]) { found = true; break; }
             }
-            require(found, "pre-flight: this cut mounts a selector the facet does not implement");
+            if (!found) {
+                for (uint256 j = 0; j < sinceRemoved.length; j++) {
+                    if (sels[i] == sinceRemoved[j]) { found = true; break; }
+                }
+                require(
+                    found,
+                    "pre-flight: this cut mounts a selector the facet does not implement and that is not one of the three doors removed on 22 September 2026"
+                );
+            }
+        }
+        // And each of the three really is gone from the facet, so the exception
+        // cannot outlive what it excuses.
+        for (uint256 i = 0; i < sinceRemoved.length; i++) {
+            for (uint256 j = 0; j < fromArtifact.length; j++) {
+                require(
+                    fromArtifact[j] != sinceRemoved[i],
+                    "pre-flight: a door written off as removed is implemented again - delete the exception"
+                );
+            }
         }
     }
 
@@ -427,15 +463,15 @@ contract UpgradeArbiterApplications is Script {
 
         // The applicant's own doors — both gasless (ERC-2771). Whoever is worth
         // seating has a record of deals, not necessarily a balance of ETH.
-        sels[0] = ArbiterApplicationsFacet.applyForArbiterSeat.selector;
+        sels[0] = bytes4(0x6fb78a56) /* applyForArbiterSeat(), removed from the facet 22 Sep 2026; this script is the record of a cut that mounted it */;
         sels[1] = ArbiterApplicationsFacet.withdrawArbiterApplication.selector;
 
         // The decision doors — owner, or the chief until governance is live.
         // The bond is taken HERE, at approval, not at submission: the decision
         // is made by a person by hand, and an unanswered application would
         // otherwise leave somebody else's money standing with the protocol.
-        sels[2] = ArbiterApplicationsFacet.approveArbiterApplication.selector;
-        sels[3] = ArbiterApplicationsFacet.rejectArbiterApplication.selector;
+        sels[2] = bytes4(0xbcd90be1) /* approveArbiterApplication(), removed from the facet 22 Sep 2026; this script is the record of a cut that mounted it */;
+        sels[3] = bytes4(0x8e7e21be) /* rejectArbiterApplication(), removed from the facet 22 Sep 2026; this script is the record of a cut that mounted it */;
 
         // Reads. `getArbiterApplication` folds expiry into its answer — expiry
         // has no event, deliberately, because no transaction exists that would

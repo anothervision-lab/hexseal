@@ -43,8 +43,9 @@ pragma solidity ^0.8.20;
 //   back by the arbiter who was wrong — see resolveAppeal.
 //
 // DAO mode: ONLY after owner.activateDAO() — which does not go through before
-//   uniqueActiveUsers >= DAO_THRESHOLD (10 000) and the successor has confirmed
-//   itself. From then on users with XP >= 3000 may join through applyAsArbiter().
+//   uniqueActiveUsers >= DAO_THRESHOLD (1 000) and the successor has confirmed
+//   itself. From then on anyone holding a clean streak of 5 may join through
+//   applyAsArbiter() — experience is no longer asked for at that door.
 //   The threshold alone switches nothing on; activateDAO() stays a separate call.
 // ============================================================
 
@@ -117,6 +118,111 @@ library ArbiterRegistryStorage {
     ///
     /// Constants do not sit in storage: `Data` below does not move because of this.
     uint256 internal constant SUSPENSION_WINDOW = 72 hours;
+
+    /// How long a man removed against his will waits before any door into the
+    /// corps opens to him again — half a year (owner's decision, 22 September
+    /// 2026).
+    ///
+    /// ⚠️ IT IS A WIDENING, NOT A NEW LOCK, and that is the whole argument.
+    /// Before it, `removedAt != 0` sent every non-owner door away with
+    /// `ReseatingRemovedIsOwnerOnly`, and the only hand that could clear that
+    /// mark was the same owner's — so for a man the owner did not choose to
+    /// bring back, the door was shut FOREVER, and everything he did afterwards
+    /// counted for nothing.
+    ///
+    /// ⚠️ MEASURED FROM `lastRemovalAt`, NEVER FROM `removedAt`. The second is
+    /// erased by the next seating (`clearRemovalRecord`), so a cooldown keyed
+    /// on it would be cleared by the very act it is supposed to delay; the
+    /// first is one of the three fields nothing erases. Both are written by the
+    /// same removals — `_recordRemoval` writes `lastRemovalAt`,
+    /// `_performRemoval` writes `removedAt` — and resigning writes neither, so
+    /// a man who simply stopped waits for nothing.
+    ///
+    /// ⚠️ IN THE LIBRARY, LIKE SUSPENSION_WINDOW ABOVE, AND FOR THE SAME
+    /// REASON: four doors into the corps apply it and they live in two files.
+    /// A copy in the second file would be a second number free to disagree with
+    /// the first, and nothing would go red when they did.
+    uint256 internal constant REMOVAL_COOLDOWN = 180 days;
+
+    /// He was removed against his will and the half-year has not run out. The
+    /// moment it does is in the error, so a screen shows a date instead of a
+    /// refusal with no end to it.
+    error RemovalCooldownActive(uint256 until);
+
+    /// Half a year after an involuntary removal, every door opens again.
+    ///
+    /// Asked by all four entrances to the corps. The owner's own `addArbiter`
+    /// is exempt for the reason `ReseatingRemovedIsOwnerOnly` already gives: he
+    /// reverses HIS OWN removal with one command, and a cooldown binding him
+    /// would turn a mistaken removal into a half-year sentence nobody could
+    /// lift.
+    function requireCooldownPassed(Data storage d, address who) internal view {
+        uint256 removedWhen = d.lastRemovalAt[who];
+        if (removedWhen == 0) return;
+        uint256 until_ = removedWhen + REMOVAL_COOLDOWN;
+        if (block.timestamp < until_) revert RemovalCooldownActive(until_);
+    }
+
+    // ── THE OVERTURN RATE, 21 September 2026 (the owner's decision) ─────────
+    //
+    // A SECOND trigger beside `MAX_ARBITER_MISTAKES`, not a replacement for it.
+    // That one counts mistakes IN A ROW and is cleared by any clean verdict, so
+    // it catches an arbiter who falls apart at once and never catches one who
+    // alternates: mistake, clean, mistake, clean. Measured against the sector's
+    // own numbers, the gap is not theoretical — the flagship on-chain escrow
+    // saw four disputes in seven years, so a corps of any size hands each
+    // arbiter a handful of cases a year and "three in a row" is a threshold
+    // nothing reaches.
+    //
+    // ⚠️ THE THREE NUMBERS LIVE HERE, IN THE LIBRARY, AND NOWHERE ELSE — the
+    // same argument as SUSPENSION_WINDOW above, and it is load-bearing twice
+    // over. The rule is applied by ArbiterRegistryFacet (`finalizeVerdict`) and
+    // published by ArbiterAccountabilityFacet (`getArbiterOutcomeRecord`),
+    // which is what the web client reads to decide whether to show a rate at
+    // all. A copy of `OUTCOME_MIN_SAMPLE` on the screen would be a second
+    // number nothing compares: the screen would hide the rate at four while the
+    // chain removed at three, or the other way round, and no test anywhere
+    // would go red. The screen therefore holds no number — it reads these.
+    //
+    // Constants do not sit in storage: `Data` below does not move because of
+    // this.
+
+    /// How many of the most recent CLOSED cases the rate is measured over.
+    /// Six, and the window is a fixed-width bit field below — widening it past
+    /// eight needs a wider field, not just a bigger number.
+    uint256 internal constant OUTCOME_WINDOW = 6;
+
+    /// Overturns inside that window that trip the automatic path. Two.
+    uint256 internal constant OUTCOME_OVERTURN_LIMIT = 2;
+
+    /// Closed cases before the rate is allowed to judge at all, and before any
+    /// reader may show one.
+    ///
+    /// Under four the fraction lies about itself rather than about the arbiter:
+    /// one overturn out of one closed case reads as a hundred per cent of bad
+    /// work, and it is one case. Four is the first denominator at which two
+    /// overturns are a pattern rather than an accident, and it is deliberately
+    /// the SAME number the screen hides the rate below — see the warning above.
+    uint256 internal constant OUTCOME_MIN_SAMPLE = 4;
+
+    /// The packing of `Data.verdictOutcomes`, one word per arbiter:
+    ///
+    ///   bits   0..5   — the window: bit 0 is the most recent closed case, a
+    ///                   set bit means that case was overturned;
+    ///   bits   6..7   — unused, and they must stay zero: the shift-in below
+    ///                   masks with OUTCOME_MASK, so a stray bit 6 would be
+    ///                   dropped, but a reader counting bits would see it;
+    ///   bits   8..71  — closed cases, ever (uint64);
+    ///   bits  72..135 — of those, overturned, ever (uint64).
+    ///
+    /// One word and not three mappings: this is read on every finalization and
+    /// written on every finalization, and three slots would be three SLOADs and
+    /// three SSTOREs on the hottest path the arbiter corps has. uint64 holds
+    /// eighteen quintillion cases; the protocol has seen zero.
+    uint256 internal constant OUTCOME_MASK        = (1 << OUTCOME_WINDOW) - 1;
+    uint256 internal constant OUTCOME_CLOSED_SHIFT  = 8;
+    uint256 internal constant OUTCOME_TURNED_SHIFT  = 72;
+    uint256 internal constant OUTCOME_COUNT_MASK    = type(uint64).max;
 
     struct PendingVerdict {
         address arbiter;        // who submitted the verdict
@@ -261,6 +367,18 @@ library ArbiterRegistryStorage {
         uint64 advanceFromVault;
         uint64 debt;
         address appellant;
+    }
+
+    /// The bond one arbiter put down to take one case (22 September 2026):
+    /// how much, and whose it is. The field that holds these —
+    /// `Data.caseBonds` — carries the whole argument; this declaration sits
+    /// here because Solidity does not allow a struct inside a struct.
+    ///
+    /// One slot. `uint96` cannot truncate: the amount is
+    /// `appealDepositFor(deal)`, capped at APPEAL_DEPOSIT_CAP (2e8).
+    struct CaseBond {
+        uint96  amount;
+        address arbiter;
     }
 
     // ── Appeal pricing, 17 September 2026 ───────────────────────────────────
@@ -937,6 +1055,17 @@ library ArbiterRegistryStorage {
         /// raised. `min(APPEAL_VOTES_CAP, eligible voters)`, never under
         /// APPEAL_VOTES_FLOOR — see the constants in ArbiterRegistryFacet.
         ///
+        /// ⚠️ WRITTEN BY NOTHING SINCE 23 SEPTEMBER 2026, when the panel
+        /// stopped being drawn from the roster and the bar became the floor
+        /// for everybody. Kept because the layout is append-only and because
+        /// an appeal raised in the five days between the two rules carries a
+        /// three here and is held to it. Every appeal raised from that date
+        /// leaves it at zero, and the single reader
+        /// (`ArbiterRegistryFacet._appealVotesRequired`) answers
+        /// APPEAL_VOTES_FLOOR for a zero. Same shape as `arbiterBond` one
+        /// namespace over: a field is retired by having no writer, never by
+        /// being taken out.
+        ///
         /// ⚠️ A MAPPING OF ITS OWN AND NOT A FIELD OF `PendingVerdict`, for the
         /// reason written out at `AppealLedger` above: `getPendingVerdict()`
         /// returns that struct whole, its shape is pinned outside this
@@ -949,6 +1078,358 @@ library ArbiterRegistryStorage {
         /// appeals were raised under. Appended at the end; no field above it
         /// moves.
         mapping(address => uint8) appealVotesRequired;
+
+        // ── appended 20 September 2026: the second condition of the handover —
+        //    the corps judges without a hand on its shoulder ──
+        //
+        // ⚠️ APPENDED AT THE END. Nothing above moves, and no type above
+        // changes: this namespace is append-only, enforced by
+        // script/check-storage-structs.sh, and a type changed inside an
+        // occupied slot is the bug that broke the live JobBoard in July 2026.
+
+        /// Per deal: a GOVERNANCE HAND reached into this dispute. Written by
+        /// `overturnVerdict`, `freezeVerdict` and the owner's branch of
+        /// `releaseDisputeClaim`; never cleared.
+        ///
+        /// ⚠️ IT IS STICKY BECAUSE TWO OF THOSE THREE LEAVE NO OTHER TRACE.
+        /// `v.overturned` is durable, but `v.frozen` is a LIVE flag: freeze,
+        /// unfreeze, let it finalize, and the record is byte-identical to a
+        /// verdict nobody ever touched. `releaseDisputeClaim` is worse — it
+        /// only fires before a verdict exists, so there is no record to mark at
+        /// all, and its event does not even name who pressed. Counting
+        /// "clean" off the surviving `PendingVerdict` alone would therefore
+        /// report a dispute the owner held frozen for a week as proof that the
+        /// corps works without him. That is a miscount in the one direction
+        /// that matters: it hands power over on evidence that is not there.
+        ///
+        /// ⚠️ "GOVERNANCE", NOT "THE OWNER". Two of the three doors are
+        /// `onlyOwnerOrDAO`, and a named successor holds them from the moment
+        /// he accepts — before `activateDAO()`, not after. Marking only
+        /// `msg.sender == owner` would leave the owner a second key that does
+        /// not count: name the address, press through it, stay clean. The mark
+        /// is therefore made whoever of the two pressed.
+        ///
+        /// ⚠️ WHAT IT DOES NOT COVER, said out loud: `suspendArbiter` and
+        /// `proposeRemoval` are per-ARBITER, not per-dispute. An arbiter judged
+        /// while suspended or under a live accusation still counts clean here.
+        /// Closing that needs a different shape — every open dispute of his
+        /// marked at the moment of the press — and it is not done.
+        ///
+        /// ⚠️ `resolveAppeal` IS NOT A WRITER, AND THAT IS NOW LOAD-BEARING
+        /// (20 September 2026). The appeal PANEL is not a governance hand: it
+        /// is three arbiters correcting a fourth, which is the corps working
+        /// without the owner rather than instead of him. Since the owner's
+        /// decision of that date `finalizeVerdict` tells the two apart by
+        /// exactly one thing — `v.overturned` with this mark UNSET means the
+        /// panel did it — and a panel overturn leaves the run standing where it
+        /// is. Adding a write here from the appeal flow would silently turn
+        /// every panel overturn back into a broken run, and no test of the
+        /// appeal flow would notice: the number it moves is read three hundred
+        /// lines away.
+        mapping(address => bool) govTouchedDispute;
+
+        /// How many disputes have been finalized on the arbiter's own verdict
+        /// with no governance hand in them, ever. Protocol-wide, one per deal.
+        ///
+        /// An overturn keeps a dispute out of this total whoever ordered it —
+        /// the hand or the appeal panel. The two part ways one field down, at
+        /// `cleanDisputeStreak`, and only there: a panel overturn does not GROW
+        /// this number and does not break the run, while a hand does both.
+        ///
+        /// ⚠️ IT IS A RECORD, NOT A CONDITION — changed 20 September 2026.
+        /// The handover used to read this number against a floor of twenty, and
+        /// the floor was dropped because a TOTAL cannot be made to fall: twenty
+        /// clean disputes with nineteen frozen ones in between would clear it,
+        /// and the sentence it was supposed to prove is "the corps judges
+        /// without a hand on its shoulder", which is about the RECENT past.
+        /// `cleanDisputeStreak` below is what the door reads now. This stays
+        /// because it answers a different and still useful question — how much
+        /// judging has ever happened cleanly here — and because a total is the
+        /// only one of the three numbers that a reader can compare across time.
+        ///
+        /// The per-arbiter half already existed (`cleanVerdicts`), and the sum
+        /// of it is NOT this number: `cleanVerdicts` keys on `!v.overturned`
+        /// alone, so it counts frozen-then-unfrozen verdicts as clean, and its
+        /// own docstring records that it is farmable through the "own
+        /// counterparty" path. This one is incremented in the same branch, in
+        /// the same call, under the stricter test.
+        ///
+        /// ⚠️ NEVER GOES DOWN. Unlike `RegistryStorage.liveDeals` this is a
+        /// record of what happened, not a picture of now — an overturn a year
+        /// later cannot un-happen a dispute that was closed clean.
+        uint256 cleanDisputeCount;
+
+        // ── appended 20 September 2026, second pass: the measure changed from
+        //    VOLUME to AUTONOMY ──
+        //
+        // ⚠️ APPENDED AT THE END, like everything above. `cleanDisputeCount`
+        // is kept and keeps its type for the same reason: this namespace is
+        // append-only (script/check-storage-structs.sh), and dropping a field
+        // to make room is the same class of edit as changing one's type.
+
+        /// Disputes finalized on an arbiter's verdict, IN A ROW, with no
+        /// governance hand in any of them and no overturn.
+        ///
+        /// ⚠️ THREE OUTCOMES AT A FINALIZATION, NOT TWO — the owner's decision
+        /// of 20 September 2026, and the reason the rule is not "reset on
+        /// anything that is not clean":
+        ///
+        ///   • clean (no hand, no overturn)  → +1, and the arbiter is counted
+        ///     in `distinctCleanArbiters` if he has not been yet;
+        ///   • a governance hand in this dispute → 0. Earn it again;
+        ///   • overturned by the APPEAL PANEL, no hand → UNCHANGED. Neither
+        ///     grown nor broken.
+        ///
+        /// The third outcome is the one that looks wrong and is not. A panel
+        /// overturn is three arbiters saying a fourth got it wrong, decided and
+        /// executed without the owner in the room — so it is evidence FOR the
+        /// sentence this condition is trying to prove ("the court works without
+        /// a hand on its shoulder"), not against it. It does not grow the run,
+        /// because a mistake is not to the arbiter's credit and the corps has
+        /// not shown it can close a dispute cleanly here; it does not break the
+        /// run either, because nothing was interfered with. A rule that zeroed
+        /// it would make an honest, self-correcting corps LOOK worse than a
+        /// corps nobody ever appeals against, and would hand anybody who can
+        /// buy one appeal a way to keep the handover shut forever.
+        ///
+        /// What tells the panel from the hand is `govTouchedDispute`, which
+        /// `overturnVerdict` sets and `resolveAppeal` deliberately does not —
+        /// see the warning at that field before adding a writer to it.
+        ///
+        /// ⚠️ WHY A STREAK AND NOT A TOTAL. A total only ever goes up, so
+        /// every hand the owner ever put in is forgiven by the next clean
+        /// dispute, and the number keeps saying "the corps works on its own"
+        /// about a corps he has been steering all year. A streak is the only
+        /// shape in which interference COSTS something: it throws away the
+        /// evidence already collected, so the protocol has to go and earn it
+        /// again without him. That is the sentence the owner asked the system
+        /// to be able to say — "you are not needed here" — and a total cannot
+        /// say it.
+        ///
+        /// ⚠️ WHAT RESETS IT IS FINALIZATION, NOT THE PRESS. The hand is
+        /// recorded when it reaches in (`govTouchedDispute`) and read when the
+        /// dispute ENDS. A dispute frozen today and finalized in a month zeroes
+        /// the streak in a month, not today. That is deliberate: the streak
+        /// counts finished disputes, so a dispute that has not finished yet has
+        /// nothing to say about it either way.
+        ///
+        /// ⚠️ WHAT IT DOES NOT COUNT, said out loud. A dispute that ends by
+        /// `triggerArbiterTimeout` — nobody judged it, the pot was split —
+        /// never reaches `finalizeVerdict` and therefore neither grows this
+        /// number nor breaks it. A corps that lets a hundred disputes time out
+        /// and judges eight cleanly still clears the floor. Closing that needs
+        /// a term this condition does not have (a RATE, which needs a
+        /// denominator nothing counts today) and it is written down rather than
+        /// quietly fixed.
+        uint256 cleanDisputeStreak;
+
+        /// Has this arbiter ever taken a dispute to a clean finalization? One
+        /// bit per arbiter, set on his FIRST clean one and never cleared.
+        ///
+        /// Exists so that `distinctCleanArbiters` below counts men and not
+        /// disputes: without it, one arbiter closing eight disputes would read
+        /// as a corps of eight.
+        ///
+        /// ⚠️ NEVER CLEARED, not even when the seat is. A removed arbiter's
+        /// clean work still happened, and clearing the bit on removal would let
+        /// the same man be counted twice by being re-seated — the farm this
+        /// mapping exists to close.
+        mapping(address => bool) countedCleanArbiter;
+
+        /// How many DIFFERENT arbiters have taken at least one dispute to a
+        /// clean finalization. Grows only on an arbiter's first one.
+        ///
+        /// ⚠️ THE TERM THAT KEEPS "THE COURT" FROM BEING ONE MAN. The streak
+        /// above is blind to who earned it: eight clean disputes judged by a
+        /// single friendly address look exactly like eight judged by a corps.
+        /// Handing governance over on that evidence would hand it to whoever
+        /// holds that one seat.
+        ///
+        /// ⚠️ IT RATCHETS, and that is the honest shape: "three different
+        /// people have judged cleanly here" is a fact about history, and unlike
+        /// the streak it is not a claim about the present. The present tense is
+        /// carried by the other two terms.
+        uint256 distinctCleanArbiters;
+
+        // ── appended 21 September 2026: an arbiter answers for a SHARE of his
+        //    recent work, not for a run of blunders ──
+        //
+        // ⚠️ APPENDED AT THE END. Nothing above moves, and no type above
+        // changes: this namespace is append-only, enforced by
+        // script/check-storage-structs.sh, and a type changed inside an
+        // occupied slot is the bug that broke the live JobBoard in July 2026.
+
+        /// Per arbiter: his last six closed cases and his two lifetime totals,
+        /// packed into one word. The layout is written out at OUTCOME_MASK
+        /// above; the only writer is `recordClosedCase` and the only readers
+        /// are `outcomeRecord` and that same writer.
+        ///
+        /// ⚠️ IT IS WRITTEN AT FINALIZATION AND NOWHERE ELSE, which is the
+        /// whole definition of "a closed case": this arbiter's verdict reached
+        /// `finalizeVerdict`, cleanly or overturned. A dispute that timed out
+        /// or was abandoned never gets here — nothing was judged, so there is
+        /// no verdict to hold him to, and counting one would hand him a way to
+        /// dilute the fraction with cases nobody ever ruled on.
+        ///
+        /// ⚠️ NEVER CLEARED, not by a removal and not by a re-seating. The
+        /// lifetime halves are a record of what happened; the six-bit window
+        /// empties by itself as new cases push the old ones out, which is the
+        /// only forgiveness the design offers and the only one it should.
+        mapping(address => uint256) verdictOutcomes;
+
+        /// Per deal: the appeal panel restored THIS arbiter's own ruling after
+        /// a hand had overturned it. Written once, in the vindication branch of
+        /// `resolveAppeal`, and read once, by `finalizeVerdict`.
+        ///
+        /// ⚠️ IT EXISTS BECAUSE `v.overturned` ANSWERS TWO QUESTIONS WITH ONE
+        /// BIT, and the second trigger made that ambiguity expensive. After a
+        /// vindication the flag stays true forever — `resolveAppeal` sets it
+        /// while flipping the outcome back to what the arbiter ruled — so
+        /// `finalizeVerdict` reading it alone would file a case the panel just
+        /// decided in his favour as an overturn against him. `cleanVerdicts`
+        /// has always miscounted that case and says so in its own docstring;
+        /// there the cost was a card reading one low. Here the cost is a
+        /// suspension and an accusation from the chain, laid for the one thing
+        /// three of his colleagues had just cleared him of.
+        ///
+        /// ⚠️ NOT A FIELD OF `PendingVerdict`, deliberately. That struct is
+        /// returned whole by `getPendingVerdict()` and decoded field by field
+        /// outside this repository (the web client, the relayer, the ABI tuple
+        /// census); a tail appended there has been lost once already. A mapping
+        /// here costs one slot per vindicated deal and breaks nothing.
+        ///
+        /// ⚠️ IT DOES NOT TOUCH `cleanVerdicts`, and that is left alone on
+        /// purpose: changing what that counter means is a separate decision
+        /// with its own readers, and this branch is about the trigger only.
+        mapping(address => bool) verdictVindicated;
+
+        // ── The seat stops being hostage money, 22 September 2026 ───────────
+        //
+        // ⚠️ APPENDED AT THE END. Do not touch the order or the types of the
+        // fields above: the layout is append-only, enforced by a build gate
+        // over the struct's fields, and this is the very class of bug that
+        // broke the live JobBoard in July 2026.
+        //
+        // The owner's decision: a bond is no longer posted to HOLD A SEAT and
+        // left lying there against a dispute that may never come. It is posted
+        // when the arbiter TAKES A CASE and taken home when his verdict has
+        // stood. `arbiterBond` above is therefore written by nothing from this
+        // day on; it is not deleted, because this layout is append-only, and
+        // the four live seats that carried 50 USDC in it were paid back by the
+        // cut's own initialiser, and every read of it answers zero now.
+
+        /// Per DEAL: what the arbiter holding it put down to take it, and who
+        /// put it down.
+        ///
+        /// Keyed by the deal and NOT by the arbiter, because that is what the
+        /// money is about: one case, one bond, sized to that case's own stake.
+        /// The size is `appealDepositFor(deal)` — the very function that prices
+        /// an appeal on the same deal, called and not copied, so that "the bond
+        /// covers exactly one refund to the appellant" is one subtraction
+        /// rather than two rules promising to agree.
+        ///
+        /// The poster is carried BESIDE the amount instead of being read back
+        /// off `disputeClaims[deal]` or `pendingVerdicts[deal].arbiter`. Both
+        /// of those are erased on paths this record has to outlive —
+        /// `clearDisputeClaim` empties the first inside the very finalization
+        /// that returns the bond, and `clearStuckVerdict` deletes the second —
+        /// so reading the owner of the money off either would make the refund
+        /// depend on the order of somebody else's cleanup. One slot holds both:
+        /// a deposit is capped at APPEAL_DEPOSIT_CAP (2e8), twenty orders of
+        /// magnitude under 2^96. The struct itself is declared beside
+        /// `AppealLedger` above — Solidity has no struct inside a struct.
+        mapping(address => CaseBond) caseBonds;
+
+        /// How many cases this arbiter is JUDGING right now. Capped at
+        /// `caseSlotsFor(d, him)` — MAX_CASES_AT_ONCE (three) once three clean
+        /// verdicts of his have stood, and one until then.
+        ///
+        /// ⚠️ NOT `openClaimCount`, AND THE TWO MUST NOT BE MERGED. They are
+        /// released at different moments on purpose:
+        ///
+        ///   • this one is released by the SIGNATURE OF THE VERDICT — the work
+        ///     is done, the arbiter should not have to sit out the finalization
+        ///     delay and the appeal window before he may take the next case;
+        ///   • `openClaimCount` is released when the deal lets go of him, and
+        ///     it is what guards the exit from the corps (`resignAsArbiter`).
+        ///
+        /// Releasing the exit guard on the signature instead would let an
+        /// arbiter sign a verdict, resign, and walk out with the deal's bond
+        /// before the panel had a chance to overturn him — which is the one
+        /// thing the bond exists to make impossible.
+        mapping(address => uint256) judgingCount;
+    }
+
+    /// Files one CLOSED case against `arbiter` and answers whether the overturn
+    /// rate has just become something the chain must act on.
+    ///
+    /// ⚠️ THE ANSWER IS AN EDGE, NOT THE STATE. The state — "two of the last
+    /// six, with at least four closed" — can hold for several cases in a row,
+    /// and re-accusing on every one of them would mean a CLEAN verdict laying a
+    /// fresh accusation against the man who just delivered it. So the trip
+    /// fires on exactly two transitions:
+    ///
+    ///   • this case is itself an overturn and the state holds — a new mistake
+    ///     while the rate already stands says it again, and must;
+    ///   • this case is the one that reaches OUTCOME_MIN_SAMPLE while the
+    ///     window already holds the overturns — the measure has only now become
+    ///     applicable, and this is the first honest moment to apply it.
+    ///
+    /// The second condition reads `closed == OUTCOME_MIN_SAMPLE` rather than
+    /// "the state did not hold before", and the two are the same thing here: a
+    /// clean case can only ever shift an overturn OUT of the window, so if the
+    /// state holds after a clean case it held before it too, and the only way
+    /// to enter the state on a clean case is by crossing the sample floor.
+    ///
+    /// ⚠️ WHAT IT DOES NOT DO: it does not clear the window on a trip. The six
+    /// bits are a record of the last six cases and stay true whatever the chain
+    /// decides to do about them. Clearing them would let an arbiter buy a fresh
+    /// slate with the very accusation he was just given.
+    function recordClosedCase(Data storage d, address arbiter, bool overturned)
+        internal
+        returns (bool trips)
+    {
+        uint256 packed = d.verdictOutcomes[arbiter];
+        // The shift-in. `packed << 1` also moves the count fields, and the mask
+        // throws every one of those bits away — the oldest case falls off the
+        // top of the window in the same operation.
+        uint256 window = ((packed << 1) | (overturned ? 1 : 0)) & OUTCOME_MASK;
+        uint256 closed = ((packed >> OUTCOME_CLOSED_SHIFT) & OUTCOME_COUNT_MASK) + 1;
+        uint256 turned = ((packed >> OUTCOME_TURNED_SHIFT) & OUTCOME_COUNT_MASK)
+            + (overturned ? 1 : 0);
+        d.verdictOutcomes[arbiter] =
+            window
+            | (closed << OUTCOME_CLOSED_SHIFT)
+            | (turned << OUTCOME_TURNED_SHIFT);
+
+        if (closed < OUTCOME_MIN_SAMPLE) return false;
+        if (_windowOverturns(window) < OUTCOME_OVERTURN_LIMIT) return false;
+        return overturned || closed == OUTCOME_MIN_SAMPLE;
+    }
+
+    /// The whole public record of an arbiter's closed cases, in one read.
+    /// `sample` is how much of the window is actually filled — the denominator
+    /// a reader must divide `turnedInWindow` by, and never OUTCOME_WINDOW,
+    /// which would report two out of six for a man who has closed four.
+    function outcomeRecord(Data storage d, address arbiter)
+        internal
+        view
+        returns (uint256 closed, uint256 turned, uint256 sample, uint256 turnedInWindow)
+    {
+        uint256 packed = d.verdictOutcomes[arbiter];
+        closed = (packed >> OUTCOME_CLOSED_SHIFT) & OUTCOME_COUNT_MASK;
+        turned = (packed >> OUTCOME_TURNED_SHIFT) & OUTCOME_COUNT_MASK;
+        sample = closed < OUTCOME_WINDOW ? closed : OUTCOME_WINDOW;
+        turnedInWindow = _windowOverturns(packed & OUTCOME_MASK);
+    }
+
+    /// Set bits in the six-bit window. A loop and not a lookup table: six
+    /// iterations of three opcodes beat a table this facet has no room for.
+    function _windowOverturns(uint256 window) private pure returns (uint256 n) {
+        while (window != 0) {
+            n += window & 1;
+            window >>= 1;
+        }
     }
 
     /// What `arbiter` still owes appellants across his debt cases.
@@ -1004,6 +1485,50 @@ library ArbiterRegistryStorage {
         uint256 bank = d.vaultBalance;
         uint256 owed = d.appealDebtTotal;
         return bank > owed ? bank - owed : 0;
+    }
+
+    // ── How many cases one man reads at once ──────────────────────────
+    //
+    /// THREE, AND FOR A NEWCOMER ONE (owner's decision, 22 September 2026).
+    ///
+    /// The cap used to be a flat one, and it was set while a seat cost 50 USDC
+    /// and a case cost nothing: grabbing a handful of disputes and ruling on
+    /// them by coin toss was free, so the only thing that could stop it was a
+    /// number. Since the bond moved ONTO THE CASE, a handful costs a handful of
+    /// bonds, each of them forfeitable to the appellant of that same case. The
+    /// price is now proportional to the grab, and the number no longer has to
+    /// do that work alone.
+    ///
+    /// What the number still has to do is stop a man who has shown NOTHING from
+    /// taking an armful on his first day. So the full three are earned, and what
+    /// earns them is the same thing the corps measures judicial service by.
+    ///
+    /// ⚠️ ONE LITERAL FOR TWO ROLES, AND THAT IS DELIBERATE. Three cases at
+    /// once, and three clean verdicts to be trusted with three: a second copy of
+    /// the number is a second rule that agrees today and drifts on the first
+    /// edit, and the half that drifted would be the half that lets somebody in.
+    /// If the two ever have to part company, they part with an argument and a
+    /// second named constant, not by accident.
+    ///
+    /// ⚠️ IT DOES NOT REPLACE `MAX_CLAIMS_PER_ARBITER`. This one is released
+    /// by `submitVerdict`, that one by the deal letting go of him — see
+    /// `Data.judgingCount`.
+    uint256 internal constant MAX_CASES_AT_ONCE = 3;
+
+    /// How many cases THIS man may hold at once.
+    ///
+    /// ⚠️ THE SIGNAL IS `cleanVerdicts`, the same field the corps already
+    /// counts judicial service by — `getCleanVerdicts`, the appeal panel's
+    /// "has he carried one case of his own" test, and the denominator of the
+    /// overturn rate all read it. A counter of its own for this rule would be a
+    /// second answer to the question "what has he done as a judge", and the two
+    /// would disagree the first time one of them moved.
+    ///
+    /// It counts verdicts that STOOD: `finalizeVerdict` increments it on the
+    /// branch where the verdict was not overturned. So the three that buy the
+    /// third slot cannot be three wrong ones, and they cannot be bought at all.
+    function caseSlotsFor(Data storage d, address who) internal view returns (uint256) {
+        return d.cleanVerdicts[who] >= MAX_CASES_AT_ONCE ? MAX_CASES_AT_ONCE : 1;
     }
 
     function data() internal pure returns (Data storage d) {
@@ -1236,6 +1761,167 @@ library ArbiterRegistryStorage {
     }
 }
 
+// ---------- THE HANDOVER'S SECOND CONDITION ----------
+
+/// The liveness half of `activateDAO()`, in ONE place.
+///
+/// ⚠️ WHY A LIBRARY AND NOT THREE COPIES. The door that refuses and the view
+/// that explains the refusal must be the same sentence, or the screen tells a
+/// man he needs two more disputes while the door wants eight. This repository
+/// has already paid for that shape twice over: `DAO_THRESHOLD` is written out
+/// THREE times — here, as `DAO_THRESHOLD_MIRROR` in ArbiterAccountabilityFacet,
+/// and again in `Treasury`, where it still says 100 000 and is wrong. The three
+/// floors below are written once, and both callers go through this file.
+///
+/// ⚠️ IT IS STILL INLINED TWICE IN BYTECODE — `internal` functions are copied
+/// into every contract that calls them, so ArbiterRegistryFacet and
+/// ArbiterAccountabilityFacet each carry their own copy of these lines. What
+/// the library buys is ONE SOURCE, not one copy: the two cannot drift apart
+/// without somebody editing this file, and the scene
+/// `test_TheDoorAndTheReadingAnswerFromOneRule` fails if they ever do.
+///
+/// WHAT IS DELIBERATELY NOT HERE: the FIRST condition. `uniqueActiveUsers >=
+/// DAO_THRESHOLD` and "the successor has confirmed" stay written out in
+/// `activateDAO()` exactly as they were. This is an addition beside them, not
+/// a rewrite of them — the ratchet must keep its own plain line in the door.
+library HandoverLib {
+
+    /// The three floors, and the argument for each number.
+    ///
+    /// ⚠️ THE MEASURE CHANGED ON 20 SEPTEMBER 2026, FROM VOLUME TO AUTONOMY,
+    /// and the reason is a count off other people's chains rather than a
+    /// preference. The first draft asked for twenty disputes closed cleanly.
+    /// The flagship on-chain escrow of this kind (Kleros Escrow) has carried
+    /// 286 deals and FOUR disputes in seven and a third years; the nearest
+    /// like-for-like freelance protocol (TalentLayer) has 18 deals and none at
+    /// all. Twenty disputes therefore means somewhere near fifteen hundred
+    /// deals and several years — a bar that is not a condition but a refusal,
+    /// and a refusal dressed as a condition is the worst of the three, because
+    /// it looks like safety while it quietly makes the handover impossible.
+    ///
+    /// What replaced it asks the same question in terms the protocol can
+    /// actually reach: is the market moving NOW, does judging survive a run
+    /// without a hand in it, and is "the court" more than one man. All three
+    /// must hold at the same moment — see `readiness()` for why it is AND and
+    /// not OR.
+    ///
+    /// ⚠️ THESE ARE STILL CHOSEN NUMBERS, NOT MEASURED ONES. Nothing on any
+    /// chain has produced them; what is measured is the ORDER OF MAGNITUDE they
+    /// had to come down to. They are constants rather than settable storage on
+    /// purpose — a handover condition the owner can lower by one transaction is
+    /// not a condition. To move them, replace the facet, which is visible.
+
+    /// Deals open across the protocol at the moment of the press.
+    ///
+    /// Fifteen. The point of this term is that the first condition cannot see
+    /// the present tense at all: `uniqueActiveUsers` counts everybody who ever
+    /// earned XP and never falls, so ten thousand people could have come and
+    /// gone and it would still read "ready" over a market with nothing in it.
+    /// Fifteen is set above what the protocol has ever held at once, and below
+    /// the 18 lifetime deals of the nearest comparable protocol, so that it is
+    /// a bar a working market clears and a dead one cannot.
+    uint256 internal constant LIVE_DEALS_FLOOR = 15;
+
+    /// Disputes finalized on an arbiter's verdict IN A ROW with no governance
+    /// hand in any of them.
+    ///
+    /// Eight. A run, not a total, because only a run can be BROKEN: a total
+    /// forgives every press the owner ever made as soon as the next clean
+    /// dispute lands, and the number then says "he is not needed" about a corps
+    /// he has been steering all year. Eight rather than two because a pair can
+    /// be staged between friendly addresses in an afternoon, and rather than
+    /// twenty because the chains above say twenty disputes is years away.
+    ///
+    /// ⚠️ ONLY A GOVERNANCE HAND BREAKS IT (the owner's decision of
+    /// 20 September 2026). A verdict the APPEAL PANEL overturns leaves the run
+    /// standing where it is — it does not count towards the eight, and it does
+    /// not throw the eight away. What the number is evidence of is the ABSENCE
+    /// OF THE OWNER, and a panel correcting an arbiter happens without him.
+    /// Two things follow, and both are the point: eight still means eight
+    /// disputes closed cleanly, so the bar is not softened; and a losing party
+    /// with the price of one appeal cannot hold the handover shut by breaking
+    /// the run whenever it gets long. See
+    /// `ArbiterRegistryStorage.Data.cleanDisputeStreak`.
+    uint256 internal constant CLEAN_STREAK_FLOOR = 8;
+
+    /// Different arbiters who have each taken at least one dispute to a clean
+    /// finalization.
+    ///
+    /// Three. The streak alone is blind to WHO earned it — eight clean
+    /// disputes judged by one friendly seat look exactly like eight judged by a
+    /// corps, and governance handed over on that evidence is governance handed
+    /// to whoever holds that seat. Three rather than four (the size of the
+    /// corps today) so that one arbiter being ill, suspended or removed does
+    /// not make the condition unreachable; more than two so that "the court"
+    /// cannot be a man and his second address.
+    uint256 internal constant DISTINCT_CLEAN_ARBITERS_FLOOR = 3;
+
+    /// Everything the door looks at, with what it wants beside what it has, so
+    /// a screen can say "three more disputes" instead of "no".
+    struct Readiness {
+        uint256 liveDeals;
+        uint256 liveDealsFloor;
+        uint256 cleanStreak;
+        uint256 cleanStreakFloor;
+        uint256 distinctCleanArbiters;
+        uint256 distinctCleanArbitersFloor;
+        /// Not a term and not compared to anything — the lifetime total of
+        /// clean finalizations, carried here because it is the one number of
+        /// the four a reader can watch grow across time. See
+        /// `ArbiterRegistryStorage.Data.cleanDisputeCount`.
+        uint256 cleanDisputesTotal;
+        bool    liveDealsMet;
+        bool    cleanStreakMet;
+        bool    distinctCleanArbitersMet;
+        bool    met;
+    }
+
+    /// Reads all three terms and answers all three questions in one pass.
+    function readiness() internal view returns (Readiness memory r) {
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+        r.liveDeals                  = RegistryStorage.store().liveDeals;
+        r.liveDealsFloor             = LIVE_DEALS_FLOOR;
+        r.cleanStreak                = d.cleanDisputeStreak;
+        r.cleanStreakFloor           = CLEAN_STREAK_FLOOR;
+        r.distinctCleanArbiters      = d.distinctCleanArbiters;
+        r.distinctCleanArbitersFloor = DISTINCT_CLEAN_ARBITERS_FLOOR;
+        r.cleanDisputesTotal         = d.cleanDisputeCount;
+        r.liveDealsMet               = r.liveDeals             >= r.liveDealsFloor;
+        r.cleanStreakMet             = r.cleanStreak           >= r.cleanStreakFloor;
+        r.distinctCleanArbitersMet   = r.distinctCleanArbiters >= r.distinctCleanArbitersFloor;
+        // ALL THREE, not any. They answer three different questions — "is
+        // there a market", "does judging survive a run without me" and "is the
+        // court more than one man" — and a handover that needed only one of
+        // them could be made on a busy market nobody has ever had to arbitrate,
+        // on a well-judged corps with nothing left to judge, or on the word of
+        // a single seat.
+        r.met = r.liveDealsMet && r.cleanStreakMet && r.distinctCleanArbitersMet;
+    }
+
+    /// The same answer as `readiness().met`, without the eleven-field struct.
+    ///
+    /// ⚠️ IT EXISTS FOR ROOM, AND THE ROOM IS MEASURED. The door needs one
+    /// bit; `readiness()` allocates and fills a struct in memory, and an
+    /// `internal` function is copied into every contract that calls it, so
+    /// ArbiterRegistryFacet was carrying the whole struct builder for the sake
+    /// of its last field. The facet stood at 24 337 bytes of the 24 576 the
+    /// chain allows, 239 to spare, and the gate wants 512 so the NEXT fix still
+    /// fits; taking the struct out of the door bought back 135.
+    ///
+    /// ⚠️ THE COMPARISONS ARE NOW WRITTEN TWICE, and that is the price. The
+    /// FLOORS are still written once (the three constants above), which is the
+    /// drift that would actually hurt — a screen promising a bar the door does
+    /// not want. The operators could still drift, so
+    /// `test_TheDoorAndTheReadingAnswerFromOneRule` drives both over a grid
+    /// around every floor and fails if they ever differ.
+    function met() internal view returns (bool) {
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+        return RegistryStorage.store().liveDeals >= LIVE_DEALS_FLOOR
+            && d.cleanDisputeStreak     >= CLEAN_STREAK_FLOOR
+            && d.distinctCleanArbiters  >= DISTINCT_CLEAN_ARBITERS_FLOOR;
+    }
+}
+
 // ---------- FACET ----------
 
 contract ArbiterRegistryFacet {
@@ -1260,18 +1946,53 @@ contract ArbiterRegistryFacet {
     ///     are this many of you" — and an unreachable promise is the saying
     ///     one thing and doing another that this project keeps tripping over.
     ///
-    /// ⚠️ CHOSEN BY JUDGEMENT, NOT BY MEASUREMENT: there is no data on
-    /// decentralised labour exchanges, here or in the open. The anchor is
-    /// Farcaster at some 55 000 in its best moments — a well funded, widely
-    /// known protocol, half of the threshold carried here before.
+    /// ⚠️ 10 000 → 1 000 ON 20 SEPTEMBER 2026, AND THIS TIME THE NUMBER WAS
+    /// DERIVED RATHER THAN JUDGED. The paragraph above records that 10 000 was
+    /// picked by eye against Farcaster, with no data on exchanges of this kind.
+    /// There is now an arithmetic to hold it against, and 10 000 failed it.
+    ///
+    /// The counter counts ADDRESSES THAT HAVE EVER EARNED XP, and a deal has
+    /// two sides, so 10 000 of them means on the order of 5 000 finished deals
+    /// before this condition is even reachable. At the pace this sector
+    /// actually runs — the flagship closed 286 deals in seven years — that is
+    /// not a decade, it is a century.
+    ///
+    /// The handover does not rest on this number alone: the other condition is
+    /// a RUN of clean disputes, and at an honest dispute rate of one to three
+    /// per hundred deals that run needs somewhere between three hundred and
+    /// eight hundred deals behind it — six hundred to fifteen hundred people.
+    /// At 1 000, the two conditions come due at roughly the same time, which is
+    /// the whole point of having two: a promise that reads "governance moves
+    /// when there are this many of you" should come true on the day the other
+    /// half of the promise does. At 500 the population condition would never
+    /// bind at all and would be decoration.
     ///
     /// ⚠️ `Treasury.DAO_THRESHOLD` IS A SEPARATE CONSTANT AND STILL SAYS
-    /// 100 000. The treasury is deployed and immutable; its number changes only
-    /// by deploying another treasury, which is not this work. The two are meant
-    /// to agree by design, so the live treasury's copy is a KNOWN
-    /// DISAGREEMENT until that deploy, not an oversight.
-    uint256 private constant DAO_THRESHOLD      = 10_000;    // uniqueActiveUsers — condition for switching on by hand
-    uint256 private constant MIN_XP_TO_REGISTER = 3_000;     // ~30 deals with different people
+    /// 100 000 — NOW TWO ORDERS OF MAGNITUDE AWAY, NOT ONE. The treasury is
+    /// DEPLOYED AND IMMUTABLE: the 100 000 in that source is what is running on
+    /// chain, and editing it would not change the chain — it would only make
+    /// the source stop describing the contract, which is worse than a known
+    /// disagreement. The two are meant to agree by design, so this stays a
+    /// KNOWN DISAGREEMENT until another treasury is deployed, and it is the
+    /// treasury's copy that is stale, not this one.
+    uint256 private constant DAO_THRESHOLD      = 1_000;     // uniqueActiveUsers — condition for switching on by hand
+    /// ⚠️ NOT A DOOR ANY MORE — ZERO SINCE 20 SEPTEMBER 2026.
+    ///
+    /// It read 3 000, about thirty deals with thirty different people, and it
+    /// stood in front of `applyAsArbiter` beside the clean streak. The owner's
+    /// decision: the corps is entered on ONE test, and that test is the streak.
+    /// Experience stays — as a record, as public standing and as the surface an
+    /// overturn is slashed from — but it is no longer asked at the entrance.
+    ///
+    /// ⚠️ WHY A ZERO AND NOT A DELETION. `getMinXPToRegister()` is a selector
+    /// mounted on the live diamond; unmounting it needs a signed cut, and a
+    /// getter that answers a number nothing enforces would be a promise we do
+    /// not keep. Zero is the honest answer to "how much XP do I need": none.
+    /// The check itself is gone from `applyAsArbiter` — a comparison against
+    /// zero that can never fail is dead weight in a facet with 752 bytes of
+    /// room, and dead code that looks like a gate is how a reader comes to
+    /// believe there is one.
+    uint256 private constant MIN_XP_TO_REGISTER = 0;
     uint256 private constant OVERTURN_XP_SLASH  = 200;       // XP penalty on an overturn
     // DEFAULT_REWARD (5 USDC) was deleted on 31 July: no call read it, while the
     // comment above it called it "the floor of the formula" — even though the real
@@ -1288,7 +2009,27 @@ contract ArbiterRegistryFacet {
     // through getNoResponseFloor() rather than keep a copy of its own.
     uint256 private constant NO_RESPONSE_FLOOR = 24 hours;
 
-    uint256 private constant MIN_CLEAN_STREAK_TO_REGISTER = 10;   // the same streak that keeps an executor's XP above 1000
+    /// THE ONLY DOOR INTO THE CORPS, and five since 20 September 2026.
+    ///
+    /// It was ten, and ten was chosen against an imagined market. Measured
+    /// against the real one: the flagship of this sector (Kleros Escrow) closed
+    /// 286 deals and 4 disputes in seven and a quarter years, and the nearest
+    /// analogue (TalentLayer) 18 deals and no disputes at all. Ten clean deals
+    /// in a row, each of them with a counterparty who already held standing, is
+    /// not a high bar on such a market — it is an unreachable one.
+    ///
+    /// Five reads as one sentence a person can hold in their head: work five
+    /// deals in a row without a dispute, and you may judge.
+    ///
+    /// ⚠️ IT IS NOT THE SAME NUMBER AS `CLEAN_STREAK_FLOOR` a few hundred lines
+    /// up. That one counts the PROTOCOL'S run of clean disputes for the
+    /// handover condition; this one counts ONE PERSON'S run of clean deals. They
+    /// have never been equal and must not be made to track each other.
+    ///
+    /// ⚠️ Mirrored once, in `ArbiterApplicationsFacet.MIN_CLEAN_STREAK_MIRROR`,
+    /// which is held against the `need` field of the refusal THIS door emits —
+    /// not against this file. See that mirror's docstring.
+    uint256 private constant MIN_CLEAN_STREAK_TO_REGISTER = 5;
     /// Mistakes in a row before THE CHAIN ACCUSES (not before a removal —
     /// 18 August 2026). At this number `_recordArbiterMistake` suspends the
     /// arbiter and lays a removal proposal in the chain's name; the removal
@@ -1296,41 +2037,101 @@ contract ArbiterRegistryFacet {
     /// confused with ArbiterAccountabilityFacet.MISTAKE_THRESHOLD (2) — that
     /// one is how a PERSON proves a cause, and it is one lower on purpose.
     uint256 private constant MAX_ARBITER_MISTAKES         = 3;
-    uint256 private constant DEMOTION_XP_RESET            = 2500; // a fixed reset on removal — not a subtraction
-    uint256 private constant ARBITER_BOND                 = 50_000_000; // 50 USDC (6 decimals) — forfeited on demotion, returned on resignAsArbiter()
+    // ⚠️ DEMOTION_XP_RESET (2500) WAS REMOVED ON 21 SEPTEMBER 2026, and the
+    // note is left standing where the constant stood, because it explains a
+    // rule that ran for two months and is quoted in the record.
+    //
+    // What it was: a FLAT LANDING POINT, not a subtraction. The automatic path
+    // set a punished arbiter's XP to 2500 whatever he had earned, and the whole
+    // point of the number was that it sat BELOW MIN_XP_TO_REGISTER (3000 then)
+    // — so the way back into the corps had to be earned a second time.
+    //
+    // Why it went. The entrance stopped asking for XP on 20 September 2026
+    // (decision 104) and asks for the clean streak, which `_performRemoval`
+    // already takes on a removal — the barrier this number bought is there
+    // without it. What the number still did was REWRITE A RECORD OF WORK
+    // ALREADY DONE: XP is how much a man worked, and under the frame this
+    // repository settled on, that is history. A punishment that edits history
+    // is a forgery and not a penalty, so the penalty is carried by the things
+    // that are actually his standing now — the forfeited bond, the seat, the
+    // zeroed clean streak and a permanent public record of the removal.
+    //
+    // ⚠️ NOT TO BE CONFUSED WITH OVERTURN_XP_SLASH (200), WHICH STAYS. That
+    // one charges for ONE judicial mistake, at the moment it is proven, and it
+    // is a different thing from charging a man for who he had been.
+    // ⚠️ DEAD SINCE THE SEAT BOND WAS RETIRED. Nothing reads it: it used to be
+    // forfeited on demotion and returned on resignAsArbiter(), and neither
+    // happens any more, because no seat carries a bond. Kept so that the number
+    // the four original seats paid stays readable next to the rule that took it.
+    uint256 private constant ARBITER_BOND                 = 50_000_000; // 50 USDC (6 decimals)
 
     uint256 private constant APPEAL_REVIEW_WINDOW = 4 days;     // the same span DISPUTE_WINDOW gives the arbiter
 
-    /// ── THE QUORUM OF AN APPEAL IS NOT A NUMBER ANY MORE (18 September 2026,
-    ///    the owner's decision) ──
+    /// ── THE SEATS DO NOT OPEN IN THE BLOCK THE APPEAL IS RAISED
+    ///    (24 September 2026, the owner's decision) ──
     ///
-    /// It used to be one: `APPEAL_MIN_VOTES = 3`, flat, whatever the corps
-    /// looked like. With four seats the eligible panel is exactly three — the
-    /// ruling arbiter is out, the two parties are out, an unbonded seat is out
-    /// — so any one of them being suspended, drained by a won appeal or sitting
-    /// on his own deal took the corps under the bar and `raiseAppeal` refused
-    /// ALTOGETHER. A verdict then had no second reader at all, which is the
-    /// opposite of what a quorum is for.
+    /// First come, first served is what makes the panel cost nothing to
+    /// assemble, and it is also its one practical weakness: a pair of bots
+    /// watching the mempool can take all three seats in the same block the
+    /// appeal is raised, and no arbiter who reads cases like a person ever sees
+    /// the case at all. That is not collusion being solved — collusion is
+    /// answered by the case bond, the mistake streak and every vote being
+    /// public — it is the RACE being taken out of the first instant.
     ///
-    /// The number is now `min(APPEAL_VOTES_CAP, eligible)`, never below
-    /// `APPEAL_VOTES_FLOOR`, and it RISES BY ITSELF as seats are filled. There
-    /// is deliberately no second lever for the owner to set it with: a hand on
-    /// this number is a hand on who reviews a verdict.
+    /// An hour out of a window of four days is 1/96 of it. What it buys is that
+    /// the appeal is on the board, visible, before anybody can close it.
     ///
-    /// Why three was never the defence against collusion, and why two is not a
-    /// weakening: at three votes an appeal is decided by TWO, so three never
-    /// stopped a pair that agreed in advance. What three stops is a single
-    /// arbiter overturning a colleague on his own. Two votes stop that too, and
-    /// they stop it harder — at a panel of two both must agree, so the bar for
-    /// overturning is unanimity rather than two out of three. Collusion is
-    /// answered by the bond, by the mistake streak and by every vote being
-    /// public, not by the size of the panel.
+    /// DECLARED ONCE. The door and the view both read `_seatsOpenAt`, never the
+    /// arithmetic — two copies of one rule agree until the first edit.
+    uint256 private constant APPEAL_SEAT_DELAY = 1 hours;
+
+    /// ── AN APPEAL HAS THREE SEATS, AND ARBITERS TAKE THEM THEMSELVES
+    ///    (23 September 2026, the owner's decision) ──
+    ///
+    /// THE HISTORY, kept because both retired rules explain this one. The
+    /// quorum began as a flat `APPEAL_MIN_VOTES = 3`; on 18 September it became
+    /// `min(CAP, eligible voters)` with this floor, counted by walking
+    /// `arbiterList` at the moment the appeal was raised. That count was the
+    /// defect: part 2 of this branch let anybody with five clean deals seat
+    /// himself, nothing caps the corps, and the walk was paid for BY THE
+    /// APPELLANT — 150 029 gas at four seats, 2 546 205 at five hundred,
+    /// measured in test/AppealPanelGas.t.sol. The price of challenging a
+    /// verdict grew with the number of people entitled to review it.
+    ///
+    /// THE RULE NOW. The panel has APPEAL_VOTES_CAP seats. An arbiter takes one
+    /// by voting — first come, first served — and the fourth to arrive is
+    /// refused with `AppealPanelFull`. Nothing walks the roster at any door:
+    /// whether THIS man may sit is asked of him alone, by `_mayVoteOnAppeals`
+    /// and the two party checks in `voteOnAppeal`. Whether a panel assembled at
+    /// all is answered at the END of the review window instead of guessed at
+    /// its start, and if fewer than APPEAL_VOTES_FLOOR sat down the appeal did
+    /// not happen and the deposit goes home whole.
+    ///
+    /// WHY A CEILING AT ALL, rather than letting the whole corps vote: a corps
+    /// of hundreds all voting on one appeal is the same unbounded cost moved
+    /// from the appellant onto the arbiters and onto the payout, and the pay
+    /// per voter would fall to dust. Three is enough to decide and small enough
+    /// to pay.
+    ///
+    /// WHAT THREE NEVER DEFENDED, said again because the number looks like a
+    /// safety margin and is not: at three seats an appeal is decided by TWO, so
+    /// three never stopped a pair who agreed in advance, and "first come" makes
+    /// a determined pair FASTER rather than slower. Collusion is answered by
+    /// the case bond, by the mistake streak and by every vote being public —
+    /// not by the size of the panel. This is the owner's position and it is
+    /// recorded rather than argued here.
     uint256 private constant APPEAL_VOTES_CAP   = 3;
-    /// Below this an appeal cannot be raised at all, and the deposit is NOT
-    /// taken — the eligibility count stands above the transfer in `raiseAppeal`
-    /// and must stay there. One eligible voter is not a panel: it is the single
-    /// overturn the cap above exists to prevent, and charging a man for it
-    /// would be selling him one.
+    /// Fewer seats than this taken by the end of the review window and the
+    /// appeal did not happen: the verdict stands, the deposit goes back whole
+    /// and nobody is paid.
+    ///
+    /// ⚠️ IT IS NO LONGER A DOOR CONDITION, and that moved the moment the
+    /// roster walk went (23 September 2026). It used to be checked ABOVE the
+    /// transfer in `raiseAppeal`, so a corps too small to review anything could
+    /// not take the appellant's money. Nothing can be counted at that door any
+    /// more, so the money IS taken and comes back at `resolveAppeal` instead.
+    /// One arbiter is not a panel: he is the single overturn the cap exists to
+    /// prevent.
     uint256 private constant APPEAL_VOTES_FLOOR = 2;
 
     /// What an appeal cost before its price was written next to it — the
@@ -1384,6 +2185,13 @@ contract ArbiterRegistryFacet {
     /// whoever created the deal, so a cap on it inherits an untrusted number.
     /// Approved by the owner on 15 August 2026.
     uint256 private constant MAX_CLAIMS_PER_ARBITER = 10;
+
+    // ⚠️ `MAX_CASES_AT_ONCE` STOOD HERE AND HAS MOVED (22 September 2026),
+    // into `ArbiterRegistryStorage` beside `caseSlotsFor`, which is the rule it
+    // belongs to: three cases at once, and one until three clean verdicts have
+    // stood. It moved rather than being copied because the number does two jobs
+    // now — the ceiling and the threshold that earns it — and a second copy
+    // would be a second rule that drifts.
 
     // -------- ENUM --------
 
@@ -1443,7 +2251,21 @@ contract ArbiterRegistryFacet {
     /// here; test/ArbiterDemotionPathCodes.t.sol now walks this enum and pushes
     /// every member through the real encoder, so the day the range runs out is
     /// a red test and not a stuck arbiter.
-    enum DemotionPath { Unspecified, OwnerOverturn, AgreementTimeout, AppealVote, ClaimAbandoned }
+    ///   OverturnRate     — finalizeVerdict (21 September 2026). Not a fourth
+    ///                      way of getting a verdict wrong but a different
+    ///                      MEASURE of the same ones: OUTCOME_OVERTURN_LIMIT of
+    ///                      the last OUTCOME_WINDOW closed cases came back
+    ///                      overturned. Told apart from OwnerOverturn and
+    ///                      AppealVote and not folded into either, because the
+    ///                      permanent record is asked "how did this come about"
+    ///                      and "two of his last six" is a different answer
+    ///                      from "three in a row" — and because the reader of
+    ///                      the card needs to know the chain counted a SHARE,
+    ///                      which no single dispute can be blamed for. `by` is
+    ///                      zero: nobody pressed, arithmetic did it. The
+    ///                      `agreement` carried with it is the case that
+    ///                      completed the count, not the cause of it.
+    enum DemotionPath { Unspecified, OwnerOverturn, AgreementTimeout, AppealVote, ClaimAbandoned, OverturnRate }
 
     // -------- EVENTS --------
 
@@ -1526,6 +2348,17 @@ contract ArbiterRegistryFacet {
     event ChiefArbiterSet(address indexed prev, address indexed next);
     event DisputeClaimCommitted(address indexed arbiter, bytes32 indexed commitment);
     event DisputeClaimed(address indexed agreement, address indexed arbiter);
+
+    // ── The bond a case carries (22 September 2026) ────────────────────────
+    /// The arbiter put money down to take this case.
+    event CaseBondPosted(address indexed agreement, address indexed arbiter, uint256 amount);
+    /// His verdict stood (or the case left him without one) — the money went
+    /// home. `amount` is what was still there, which after a won appeal is what
+    /// the refund left.
+    event CaseBondReturned(address indexed agreement, address indexed arbiter, uint256 amount);
+    /// The panel overturned him, and this much of his bond went to the
+    /// appellant. Emitted from `_advanceAppealRefund`, beside `AppealRefundAdvanced`.
+    event CaseBondForfeited(address indexed agreement, address indexed arbiter, uint256 amount);
     event DisputeReleased(address indexed agreement, address indexed prevArbiter);
     /// A dead claim taken off an arbiter after his window ran out
     /// (18 September 2026, item D1). Separate from DisputeReleased, which is a
@@ -1741,6 +2574,12 @@ contract ArbiterRegistryFacet {
     error CommitmentNotFound();
     error CommitmentTooEarly();
     error CommitmentExpired();
+    /// ⚠️ NOTHING RAISES THIS ANY MORE (22 September 2026). It was the first
+    /// line of `applyAsArbiter` and it is the line the owner's decision
+    /// removed — self-enrolment no longer waits for governance. The type is
+    /// KEPT, exactly as `InsufficientXP` below is kept: refusals already
+    /// written into the chain's history stay decodable, and the relayer and the
+    /// web client both map `0x6eb498a6` to this name by hand.
     error DAONotActive();
     error ZeroChatKey();
     error InsufficientXP(uint256 have, uint256 need);
@@ -1752,7 +2591,6 @@ contract ArbiterRegistryFacet {
     error NotLosingParty();
     error AlreadyAppealed();
     error AppealWindowClosed();
-    error InsufficientArbitersForAppeal();
     error NoAppeal();
     error AlreadyVoted();
     error CannotVoteOnOwnVerdict();
@@ -1764,6 +2602,20 @@ contract ArbiterRegistryFacet {
     error NoAppealShare();
     error AppealAlreadyResolved();
     error AppealWindowNotClosed();
+    /// All three seats on this appeal's panel are taken (23 September 2026).
+    /// Not a fault of the caller's — he was fourth.
+    error AppealPanelFull();
+    /// The seats have not opened yet: nobody sits in the first
+    /// APPEAL_SEAT_DELAY after an appeal is raised (24 September 2026).
+    ///
+    /// ⚠️ IT CARRIES THE MOMENT THEY OPEN, and that is the whole reason it is
+    /// its own error rather than a bare refusal. "You cannot, and I will not
+    /// say when" is the shape of refusal this repository keeps finding on the
+    /// far side of a press somebody has already decided to make. With the
+    /// timestamp in hand a screen says "in forty minutes"; without it the
+    /// arbiter is left to guess whether the door is shut for an hour or for
+    /// good.
+    error AppealSeatsNotOpenYet(uint256 openAt);
     error AlreadyFinalized();
     /// The flag was written and never read back as a refusal, so three calls
     /// against the SAME agreement in the SAME block reached the demotion
@@ -1861,10 +2713,41 @@ contract ArbiterRegistryFacet {
     /// different quantities, and an appeal is settled by the second. An error
     /// name is not part of a FUNCTION selector, so the deploy cascade is
     /// untouched by the rename.
+    /// ⚠️ NOTHING RAISES THIS ANY MORE (22 September 2026). It was raised in
+    /// the branch of `addArbiter` that admitted the chief, and the chief no
+    /// longer has that door: a cap on a bloc he cannot build is a cap on
+    /// nothing. Kept as a type, like `DAONotActive` and
+    /// `ReseatingRemovedIsOwnerOnly`.
     error ChiefBlocWouldDecideAppeal(uint256 bloc, uint256 decidingVotes);
 
     // ── Cap on disputes held at once ──
     error TooManyOpenClaims(uint256 held, uint256 cap);
+
+    /// He is already reading a case. The slot is freed by the SIGNATURE of the
+    /// verdict, not by its finalization — so the wait is his own reading time,
+    /// never the delay plus the appeal window.
+    error AlreadyJudgingACase();
+
+    /// The bond this case asks for could not be pulled in — the USDC
+    /// `transferFrom` came back false or the allowance was short. Named apart
+    /// from `BondTransferFailed` (the seat bond, which nothing takes any more)
+    /// so that a screen can say WHICH money was refused and offer the right
+    /// approval.
+    ///
+    /// ⚠️ NO ARGUMENT, DELIBERATELY. What the case asks for is already a
+    /// mounted read — `ArbiterVaultFacet.quoteAppealDeposit(deal)`, the same
+    /// function that prices the bond — so carrying the number here would be a
+    /// second copy of it that travels no further than the relay's decode table,
+    /// which maps four bytes to a NAME and drops every argument. The empty
+    /// parentheses are also what `script/check-allowance-marks.sh` can see: it
+    /// reads `revert Name();` beside a pull, and a refusal it cannot read is a
+    /// pull whose answer on the screen is unknown.
+    error CaseBondTransferFailed();
+
+    /// He holds a seat but has never carried a case of his own to a verdict
+    /// that stood, so he does not vote on other arbiters' verdicts. Hand-seated
+    /// arbiters (`seatedBy != 0`) are exempt — see `_mayVoteOnAppeals`.
+    error NoAdjudicatedCase();
 
     // ── Teeth of a suspension ──
     /// The arbiter is suspended: he takes no disputes, his verdicts are not
@@ -1900,6 +2783,88 @@ contract ArbiterRegistryFacet {
     /// switch — this refusal is all that is left of it. Both arguments are
     /// named so a form can show "how many of how many" rather than a blank "no".
     error DaoThresholdNotReached(uint256 uniqueActiveUsers, uint256 required);
+    /// activateDAO while the protocol is not demonstrably running on its own —
+    /// the SECOND condition, added 20 September 2026. Every term is named with
+    /// what it has and what it needs, for the same reason
+    /// `DaoThresholdNotReached` names both: a door that answers "no" without
+    /// saying how far off it is cannot be read by a screen, and the owner ends
+    /// up asking the chain by hand.
+    ///
+    /// ⚠️ IT CARRIES NO ARGUMENTS, unlike its neighbour above, and that is a
+    /// MEASURED concession rather than a preference. Naming the terms and their
+    /// floors in the revert itself cost 525 bytes in this facet, measured on
+    /// 20 September 2026 against a facet that had 708 to spare under the 24 576
+    /// the chain allows — it left 183, and the gate wants 512 so that the next
+    /// fix still fits. The numbers are not lost: `getHandoverReadiness()` hands
+    /// out every term, its floor and the shortfall, and it is the reading a
+    /// screen was always going to call. A revert that repeats them buys
+    /// nothing and spends the last of the room in the fullest facet in the
+    /// repository.
+    error HandoverNotLive();
+
+    // ---- the eighteen sentences that used to be written out in full
+    //      (20 September 2026) ----
+    //
+    // ⚠️ WHY TEXT WAS TRADED FOR CODES, AND IT WAS A MEASUREMENT, NOT TASTE.
+    // Eighteen refusals of the shape `require(ok, "ArbiterRegistry:
+    // DISPUTE_WINDOW read failed")` carried their English into the deployed
+    // bytecode and cost 785 bytes of it — more than the whole of the handover
+    // condition this commit adds. The facet stood 239 bytes under the EIP-170
+    // limit with the gate asking for 512. A person never reads those bytes
+    // anyway: the screen and the relayer both decode four bytes into a sentence
+    // in the reader's own language, and an English string in the middle of a
+    // page drawn in one of fourteen is the defect repaired on 4 September 2026.
+    //
+    // ⚠️ THE NAMES DISTINGUISH WHAT COULD NOT BE READ, and that is the whole
+    // value of the trade. One `AgreementReadFailed` covering status, date,
+    // window and parties would be four bytes that say "the deal did not answer"
+    // and leave the reader exactly where a blank refusal does. Four separate
+    // codes cost nothing extra — the revert sites already exist, only the
+    // selector in them changes.
+    //
+    // ⚠️ EVERY ONE OF THESE IS A SEAM. `frontend/src/lib/moneyDoor.ts`
+    // recognised `"ArbiterRegistry: deposit transfer failed"` by its TEXT to
+    // tell a person his spending allowance had run out; replacing the text with
+    // a code broke that silently, and its own test could not see it because the
+    // test held the function against the same string the function carried.
+    // `script/check-allowance-marks.sh` now reads THIS file for the refusals
+    // that guard a pull of somebody's money and fails when the frontend no
+    // longer knows one of them.
+
+    /// The deal would not say what state it is in — `status()` reverted or is
+    /// not there. The address is not an Agreement of this protocol, or is not a
+    /// contract at all.
+    error AgreementStatusUnreadable();
+    /// The deal would not say WHEN it went into dispute — `disputedAt()` did
+    /// not answer. Every window in this facet is measured from that moment, and
+    /// a window this facet guessed at would be a window it invented.
+    error DisputeDateUnreadable();
+    /// The deal would not say HOW LONG the dispute window is —
+    /// `DISPUTE_WINDOW()` did not answer. The length belongs to the deal, not
+    /// to the registry: clones deployed against different implementations may
+    /// legitimately carry different ones.
+    error DisputeWindowUnreadable();
+    /// The deal would not name its client and executor — `client()` or
+    /// `executor()` did not answer. Without both, "the arbiter is not a party
+    /// to this dispute" cannot be checked, and it is not assumed.
+    error DealPartiesUnreadable();
+    /// The registry could not hand itself the deal's arbiter seat, or could not
+    /// give it back — `setArbiter(address)` reverted. Both directions share one
+    /// code on purpose: the caller's situation is the same either way, the deal
+    /// did not accept the registry as its judge.
+    error ArbiterHandoffFailed();
+    /// The arbiter's bond could not be pulled in — the USDC `transferFrom` came
+    /// back false. In practice the standing allowance ran out between the read
+    /// and the block. Recognised as such by `moneyDoor.ts`.
+    error BondTransferFailed();
+    /// The bond could not be handed back — the USDC `transfer` out came back
+    /// false. NOT an allowance question: this one moves the protocol's own
+    /// money outward, and a person meeting it has nothing to approve.
+    error BondRefundFailed();
+    /// The appeal deposit could not be pulled in — the USDC `transferFrom` came
+    /// back false. Same situation, and the same sentence, as
+    /// `BondTransferFailed`.
+    error DepositTransferFailed();
     /// acceptDAOAddress called by someone other than the one named (or nobody
     /// was named: an empty proposal is the zero address, and it sends nothing).
     error NotProposedDaoAddress();
@@ -1956,6 +2921,10 @@ contract ArbiterRegistryFacet {
     /// `executeChainRemoval` two days later. While the accusation stands and the
     /// button is unpressed, `removedAt` is ZERO, the person is still in the
     /// corps, and this branch does not touch him at all.
+    /// ⚠️ NOTHING RAISES THIS ANY MORE (22 September 2026), for the same
+    /// reason as `ChiefBlocWouldDecideAppeal` above: both stood inside
+    /// `addArbiter`'s non-owner branch, and there is no non-owner. Kept as a
+    /// type — a refusal already in the chain's history stays decodable.
     error ReseatingRemovedIsOwnerOnly();
 
     // -------- MODIFIERS --------
@@ -1965,24 +2934,17 @@ contract ArbiterRegistryFacet {
         _;
     }
 
-    /// ⚠️ THE CHIEF CEASES TO EXIST WHILE GOVERNANCE IS ACTIVE (16 August 2026).
-    /// The other half of the same change is in
-    /// ArbiterAccountabilityFacet.onlyOwnerOrChief, where the reason is set out
-    /// in full: setChiefArbiter is the only writer of d.chiefArbiter and the only
-    /// way to zero it, and it was closed under active governance. Without this
-    /// line, "the chief is abolished" would mean "the chief becomes
-    /// irremovable".
-    ///
-    /// Both halves must change together: the chief's rights are spread over two
-    /// facets (here — addArbiter, there — suspension and the removal proposal),
-    /// and one half shut without the other would be worth nothing.
-    modifier onlyOwnerOrChief() {
-        if (msg.sender != OwnershipLib.contractOwner()) {
-            if (isDaoActive() || msg.sender != ArbiterRegistryStorage.data().chiefArbiter)
-                revert NotOwnerOrChief();
-        }
-        _;
-    }
+    // ⚠️ `onlyOwnerOrChief` STOOD HERE AND IS GONE (22 September 2026). It
+    // guarded exactly one door in this facet — `addArbiter` — and that door is
+    // the owner's alone now. The chief's remaining rights all live in
+    // ArbiterAccountabilityFacet and are guarded by ITS copy of this modifier,
+    // which is untouched: he proposes removals, suspends and answers. What he
+    // may no longer do is CREATE a seat.
+    //
+    // `error NotOwnerOrChief()` above is kept although nothing in this facet
+    // raises it: the two neighbouring facets declare the same error, a custom
+    // error's selector is its signature, and an old refusal in the chain's
+    // history is decoded by that selector and not by which contract declared it.
 
     modifier onlyOwnerOrDAO() {
         address dao = ArbiterRegistryStorage.data().daoAddress;
@@ -2022,11 +2984,41 @@ contract ArbiterRegistryFacet {
     /// condition, but a person picks the moment. Below the threshold power
     /// cannot be handed over even by hand — otherwise the promise "governance
     /// moves when there are this many of you" would mean nothing.
+    /// ⚠️ AND A THIRD CHECK, THE LIVENESS — added 20 September 2026 on the
+    /// owner's decision of 19 September, and its MEASURE changed the same day.
+    /// What he asked for was a handover the system itself could say it was
+    /// ready for, measured on what is actually happening rather than on
+    /// anything declared.
+    ///
+    /// The threshold above counts people who have EVER earned XP and never
+    /// falls — that is right for a promise ("governance moves when there are
+    /// this many of you" must not un-happen) and blind for a readiness test: it
+    /// cannot tell a live protocol from a dead one with a long history. The
+    /// THREE terms in `HandoverLib` are the present tense and the proof, and
+    /// they live there so that `getHandoverReadiness()` refuses in exactly the
+    /// same words this door does.
+    ///
+    /// ⚠️ THE FIRST DRAFT ASKED FOR VOLUME AND WAS WRONG BY A COUNT, not by
+    /// taste: twenty disputes closed cleanly, ever. The flagship on-chain
+    /// escrow of this kind has carried 286 deals and FOUR disputes in seven and
+    /// a third years, and the nearest like-for-like freelance protocol has 18
+    /// deals and none at all. Twenty disputes therefore means somewhere near
+    /// fifteen hundred deals and several years — a door that cannot be opened,
+    /// which from outside is indistinguishable from one that works. What
+    /// replaced it asks whether the thing runs without him NOW: a live market,
+    /// a RUN of clean disputes that any interference throws away, and a court
+    /// of more than one man.
+    ///
+    /// ⚠️ THE ORDER OF THE THREE CHECKS IS PART OF THE ANSWER. The successor
+    /// first, then the earned threshold, then liveness — cheapest and most
+    /// fundamental first, so the owner who has not named a successor is told
+    /// that, and not handed a report about disputes.
     function activateDAO() external onlyOwner {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (d.daoAddress == address(0)) revert DaoAddressNotSet();
         uint256 users = ReputationStorage.data().uniqueActiveUsers;
         if (users < DAO_THRESHOLD) revert DaoThresholdNotReached(users, DAO_THRESHOLD);
+        if (!HandoverLib.met()) revert HandoverNotLive();
         d.daoActiveManual = true;
         emit DAOActivated(msg.sender);
     }
@@ -2060,31 +3052,73 @@ contract ArbiterRegistryFacet {
         emit DAOAddressSet(pending);
     }
 
+    /// @notice Put yourself in the arbiter corps. One condition, and it is a
+    /// record of work.
+    ///
+    /// ⚠️ THE GOVERNANCE GATE IS GONE FROM THIS DOOR (22 September 2026, the
+    /// owner's decision), and that is the change rather than a relaxation of
+    /// it. `if (!isDaoActive()) revert DAONotActive();` stood on the first
+    /// line, and `isDaoActive()` is switched on by `activateDAO()` — which
+    /// needs a confirmed successor, a threshold of earned reputation and a
+    /// live court. So the ladder this protocol advertises — work cleanly, then
+    /// judge — ENDED IN A WALL: the only way into the corps was the owner's own
+    /// hand, and the automatic door could not be reached until after the very
+    /// handover it was supposed to prepare for.
+    ///
+    /// What is left standing in its place is the thing that was always meant to
+    /// be the filter: a RUN OF CLEAN DEALS, five of them, each with a
+    /// counterparty that carried standing of its own. It cannot be bought and it
+    /// cannot be manufactured by a ring of fresh wallets — see
+    /// `MIN_COUNTERPARTY_XP` in ReputationFacet.
+    ///
+    /// ⚠️ `DAONotActive` IS NOT DELETED AS A TYPE. Refusals already in the
+    /// chain's history have to stay decodable, and a relayer that maps the
+    /// selector to a name keeps working. Nothing raises it any more.
+    ///
+    /// GASLESS, AND WITHOUT A DOOR OF ITS OWN. The sender is `_msgSender()`, so
+    /// the whole call relays through the `MinimalForwarder`; and since
+    /// 22 September 2026 the seat costs nothing, so there is no allowance and no
+    /// permit to carry with it. The neighbour `postArbiterBondWithPermit` was
+    /// written for exactly the beggar's problem this door has — a candidate has
+    /// earned nothing IN the protocol, so he has no ETH from it — and it is not
+    /// needed here, because nothing in this transaction touches a token. The
+    /// proof is a measurement, not this paragraph:
+    /// test/ArbiterSelfEnrolment.t.sol drives this selector through a real
+    /// forwarder from an address holding zero wei.
     function applyAsArbiter() external {
-        if (!isDaoActive()) revert DAONotActive();
-
         address caller = _msgSender();
         ReputationStorage.Data storage rep = ReputationStorage.data();
-        uint256 xp = rep.xp[caller];
-        if (xp < MIN_XP_TO_REGISTER) revert InsufficientXP(xp, MIN_XP_TO_REGISTER);
+
+        // ONE TEST, AND IT IS THE STREAK (20 September 2026). The XP comparison
+        // that used to stand here is gone, not relaxed: see MIN_XP_TO_REGISTER.
+        //
+        // The streak is not the weaker half of the pair it used to belong to —
+        // it is the harder one to manufacture. XP could be bought with volume
+        // (a big deal pays volume XP), whereas a streak only moves on a deal
+        // whose COUNTERPARTY already carried standing of its own, which is what
+        // MIN_COUNTERPARTY_XP over in ReputationFacet is for. A ring of fresh
+        // wallets can run up neither.
         uint256 streak = rep.cleanStreak[caller];
         if (streak < MIN_CLEAN_STREAK_TO_REGISTER) revert InsufficientCleanStreak(streak, MIN_CLEAN_STREAK_TO_REGISTER);
 
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (d.isArbiter[caller]) revert AlreadyArbiter();
 
-        // Rule A (the owner's decision of 17 September 2026): the corps is
-        // entered clean. This door seats AND takes the bond in one press, so it
-        // is both halves of the entrance at once and the check belongs before
-        // the money moves — a refusal after the transfer would leave his 50
-        // USDC on the diamond with no seat behind it.
-        _requireMarketClean(caller);
+        // Half a year after an involuntary removal this door opens again — and
+        // before that it does not. Until 22 September 2026 nothing stood here
+        // at all: a man the chain had just unseated for three wrong verdicts
+        // could walk back in the same block, paying one bond.
+        ArbiterRegistryStorage.requireCooldownPassed(d, caller);
 
-        address usdc = FactoryStorage.store().usdc;
-        bool bondOk = IUSDCFull(usdc).transferFrom(caller, address(this), ARBITER_BOND);
-        require(bondOk, "ArbiterRegistry: bond transfer failed");
-        d.arbiterBond[caller] = ARBITER_BOND;
-
+        // ⚠️ RULE A AND THE SEAT BOND ARE BOTH GONE FROM THIS DOOR
+        // (22 September 2026, the owner's decision). It used to demand an empty
+        // board and 50 USDC to sit down; it now demands neither, because a bond
+        // is posted per CASE and an arbiter is an ordinary user of the market
+        // until he takes one. The argument is at `_requireStillSeated`.
+        //
+        // What that means for this function in particular: it no longer moves
+        // money at all, so there is no transfer to order the checks around and
+        // no way to end up with a payment and no seat.
         d.isArbiter[caller] = true;
         d.arbiterList.push(caller);
 
@@ -2129,112 +3163,187 @@ contract ArbiterRegistryFacet {
             }
         }
 
-        uint256 bond = d.arbiterBond[caller];
-        d.arbiterBond[caller] = 0;
-        // ⚠️ HIS UNPAID APPEAL DEBTS COME OUT OF THE BOND FIRST (17 September
-        // 2026). A won appeal his bond could not advance left an appellant
-        // owed; walking away with the bond while that stands would hand the
-        // loss to the bank. Whatever the bond does not cover stays on the
-        // bank's queue. Leaving still needs no money: an empty bond pays
-        // nothing and resigns all the same.
-        uint256 refund = bond;
-        if (bond > 0) refund = bond - ArbiterRegistryStorage.payArbiterDebts(d, caller, bond);
-        if (refund > 0) {
-            address usdc = FactoryStorage.store().usdc;
-            bool ok = IUSDCFull(usdc).transfer(caller, refund);
-            require(ok, "ArbiterRegistry: bond refund failed");
-        }
-
+        // ⚠️ NOTHING IS PAID OUT HERE ANY MORE (22 September 2026), AND THAT
+        // IS THE CHANGE RATHER THAN A LOSS. A seat holds no money to give back:
+        // the bond is posted per CASE and comes home when the case closes, and
+        // `openClaimCount` above already refuses to let a man leave while he
+        // still holds one. So an arbiter walks out of the corps owning exactly
+        // what he owned when he walked in.
+        //
+        // What went with the payout, said out loud: his unpaid appeal debts
+        // used to be taken out of the seat bond on the way out. There is no
+        // seat bond to take them from, so they stay where the other two ways
+        // out already pay them — the bank's queue (`settleAppealDebts`, anyone
+        // may press it) and his own forfeited share of the dispute fee when the
+        // overturned verdict finally executes.
+        //
+        // `arbiterBond` is deliberately not read and not written: after the
+        // cut's refund of the four live seats it is zero everywhere and stays
+        // zero, and reading a field nothing writes would only keep a dead rule
+        // looking alive.
         ArbiterRegistryStorage.clearSeat(d, caller);
 
-        emit ArbiterResigned(caller, refund);
+        // Zero, and it is a fact rather than a formality — the same shape and
+        // the same reason as `ArbiterApplicationApproved`'s bond field, which
+        // has read zero since seating and paying came apart: the event keeps
+        // its signature because a live subgraph indexes it, and it reports what
+        // THIS transaction moved, which is nothing.
+        emit ArbiterResigned(caller, 0);
     }
 
-    /// The seat alone is not the right to act.
+    /// The seat alone is not the right to act — and since 22 September 2026
+    /// the thing that makes it one is not a standing bond.
     ///
-    /// Owner's decision of 8 September 2026, variant A: the owner keeps seating
-    /// by hand and takes no money doing it, and the arbiter puts his own money
-    /// down before he may work. The halves are separate on purpose — an owner's
-    /// action must not break on a stranger's inaction, and an owner paying the
-    /// bond FOR him would burn the wrong man's coins, which deters nobody.
+    /// ── WHAT THIS REPLACES ────────────────────────────────────────────────
+    /// Until now a man locked 50 USDC to SIT, and waited — possibly a year —
+    /// for a dispute that might never come. The money bought nothing while it
+    /// waited, and the real price of the seat was not the 50 USDC at all: rule
+    /// A and rule B together threw him off the boards entirely, so what he
+    /// actually paid was his living.
     ///
-    /// Until this gate a hand-seated arbiter judged with nothing at stake:
-    /// `removeArbiterForCause` forfeits `arbiterBond[arbiter]`, and forfeiting
-    /// zero is a punishment on paper. The public document said so out loud —
-    /// "the forfeit is currently worth nothing".
+    /// The owner's decision: the bond is posted WHEN HE TAKES A CASE, sized to
+    /// that case, and taken home when his verdict has stood. Everything the
+    /// standing bond was carrying comes apart with it:
     ///
-    /// The door that lets a seated arbiter pay is `postArbiterBond`, and it
-    /// lives in ArbiterApplicationsFacet — with `_takeBond`, the machinery that
-    /// already moves a bond in, and with the room this facet does not have
-    /// (measured 8 September 2026: 209 bytes clear of the EIP-170 ceiling).
+    ///   • a "sagging" bond has no meaning left — every case carries its own
+    ///     money, so one wrong verdict cannot leave the next case underfunded;
+    ///   • the two gates below collapse into one question each door can ask
+    ///     for itself: does he hold the seat, and is his slot free;
+    ///   • rule A (a seat may only be taken by somebody with nothing open on
+    ///     the boards) is gone. He is an ordinary user who steps away for a few
+    ///     days to judge;
+    ///   • rule B narrows from "an arbiter may never be a party" to "he does
+    ///     not trade WHILE HE IS JUDGING" — `MarketPresence.requireNotJudging`.
     ///
-    /// ⚠️ WHAT THIS DELIBERATELY DOES NOT GUARD, each for its own reason:
-    ///   • `resignAsArbiter` and `releaseDisputeClaim` — LEAVING must never
-    ///     require a bond, or an unbonded arbiter would be locked into a seat
-    ///     he cannot quit and a claim he cannot let go of;
-    ///   • `withdrawArbiterReward` — money already earned is his, whatever his
-    ///     seat looks like today (that door has no role gate at all, by design);
-    ///   • `finalizeVerdict` — anyone at all may call it, arbiter or not;
-    ///   • `respondToRemoval` (ArbiterAccountabilityFacet) — answering a public
-    ///     accusation is due process, not arbiter work, and gating it would let
-    ///     an accusation silence the accused;
-    ///   • the seating doors themselves, which is where a bond is CREATED.
+    /// ⚠️ WHAT WENT WITH IT, SAID OUT LOUD RATHER THAN DISCOVERED LATER: a
+    /// removal for cause used to forfeit 50 USDC, and now it forfeits nothing,
+    /// because there is nothing standing there to forfeit. The seat is free, so
+    /// the sanction for a bad arbiter is the record, the suspension and the
+    /// loss of the seat — not money. The hole that opens with a free seat (a
+    /// paid vote in an appeal bought by a seat that cost nothing) is closed by
+    /// `_mayVoteOnAppeals`, not by a bond.
     ///
-    /// ⚠️ "BONDED" MEANS "THE BOND IS WHOLE", NOT "SOME BOND IS THERE"
-    /// (17 September 2026). Until then this read `arbiterBond == 0`. Since the
-    /// appeal economics a won appeal is refunded partly OUT OF the ruling
-    /// arbiter's bond, so a seat can now carry 1 to 49 USDC — and a seat that
-    /// has already paid for one wrong verdict and still judges, with less at
-    /// stake than the rule promises, is exactly the seat the owner decided must
-    /// not work until it is topped up. The same comparison stands, against the
-    /// same norm, at every other place a bond is asked about: the voter count
-    /// in `raiseAppeal`, and `isArbiterActive` / `_requireSeatStillOwesItsBond`
-    /// in ArbiterApplicationsFacet — so a seat refused here is never counted
-    /// there, and never told there that it owes nothing.
-    ///
-    /// The error keeps its name. For a seat that never paid it is literally
-    /// true; for a sagging one the remedy is the same door, which since the
-    /// same day takes only the missing part.
-    ///
-    /// ⚠️ SPLIT IN TWO ON THE SAME DAY, by the owner's second decision: a
-    /// sagging seat is not dropped from the cases it already holds — nobody is
-    /// abandoned and nobody is reassigned, the arbiter finishes what he took.
-    /// So the question every arbiter door asks is now one of two:
-    ///
-    ///   • `_requireBondWhole` — NEW work: committing to a claim, claiming,
-    ///     voting on an appeal (and, by the same comparison, being counted as
-    ///     a voter in `raiseAppeal`). A whole bond, nothing less.
-    ///   • `_requireBondToFinish` — FINISHING a case already held: submitting
-    ///     its verdict, recording the party's silence on it, publishing the
-    ///     chat key the parties seal their presentations to (the only reason
-    ///     that door exists apart from a claim is an arbiter who lost his key
-    ///     AFTER claiming). A seat that has posted a bond and holds the seat,
-    ///     even if an appeal has drawn that bond down to zero.
-    ///
-    /// A seat that never posted is refused both, as before: that is not a
-    /// sagging seat, it is a seat that never started. A removed arbiter is
-    /// refused both too — the finishing gate asks `isArbiter`, because removal
-    /// takes the seat and forfeits the bond but leaves his claims in place.
-    /// Rule A, once, for both doors of this facet.
-    ///
-    /// A wrapper and not two call sites of the library directly: this facet
-    /// stood 2 658 bytes clear of the EIP-170 ceiling when the rule was written
-    /// (measured 17 September 2026, `forge build --sizes`), and the check reads
-    /// six counters and walks one index — a body worth carrying once.
-    function _requireMarketClean(address who) private view {
-        MarketPresence.requireNothingOpen(who);
+    /// ⚠️ `arbiterBond` IS NOT DELETED and is written by nothing from here on.
+    /// The layout is append-only; the four live seats that held 50 USDC in it
+    /// were paid back by the cut's own initialiser, and every read of it answers
+    /// zero now.
+    function _requireStillSeated(ArbiterRegistryStorage.Data storage d, address who) private view {
+        if (!d.isArbiter[who]) revert NotArbiter();
     }
 
-    function _requireBondWhole(ArbiterRegistryStorage.Data storage d, address who) private view {
-        uint256 bond = d.arbiterBond[who];
-        if (bond >= ARBITER_BOND) return;
-        if (bond == 0 && !d.bondDrawnByAppeal[who]) revert BondNotPosted();
-        revert BondBelowNorm(bond, ARBITER_BOND);
+    /// Who may vote on somebody else's verdict.
+    ///
+    /// ⚠️ THE SEAT IS FREE NOW, SO THE SEAT CANNOT BE THE ANSWER. A paid vote
+    /// on an appeal, reachable by anybody willing to fill a corps with
+    /// addresses, is the hole a free seat opens; the bond used to be what stood
+    /// in the way. The owner's replacement is a record of WORK: one case of his
+    /// own, carried to a verdict that stood (`cleanVerdicts`, incremented in
+    /// `finalizeVerdict` on the branch where the verdict was not overturned).
+    ///
+    /// It is not money on purpose. Nothing sits above the panel, so a bad vote
+    /// has nothing to be punished with — and a price on the vote would filter
+    /// out the poor rather than the dishonest.
+    ///
+    /// ⚠️ THE BOOTSTRAP IS `seatedBy != 0` AND IT IS LOAD-BEARING. On the day
+    /// this lands the chain holds four hand-seated arbiters and no clean verdict
+    /// counted for the purpose; without this half, the first appeal ever raised
+    /// would have nobody at all entitled to review it. A hand-seated arbiter was
+    /// chosen by a person who answers for the choice — that is the standing the
+    /// counter would otherwise have to prove.
+    ///
+    /// ⚠️ IT IS ASKED OF ONE MAN AND NEVER OF THE ROSTER (23 September 2026).
+    /// `_eligibleVoterCount` used to call this in a loop over `arbiterList` at
+    /// the appellant's expense; that loop is gone and must not come back. The
+    /// only caller is `voteOnAppeal`, on the arbiter pressing the button.
+    function _mayVoteOnAppeals(ArbiterRegistryStorage.Data storage d, address who)
+        private
+        view
+        returns (bool)
+    {
+        return d.seatedBy[who] != address(0) || d.cleanVerdicts[who] != 0;
     }
 
-    function _requireBondToFinish(ArbiterRegistryStorage.Data storage d, address who) private view {
-        if (!d.isArbiter[who] || (d.arbiterBond[who] == 0 && !d.bondDrawnByAppeal[who])) revert BondNotPosted();
+    /// Takes the bond this case asks for and books it against the deal.
+    ///
+    /// The size is `appealDepositFor(agreement)` — the percentage of the pot
+    /// an appeal on this same deal costs, floored at 20 and capped at 200 USDC.
+    /// Called, never copied: the bond has to cover exactly one refund to an
+    /// appellant, and two copies of one formula agree only until the first edit.
+    function _takeCaseBond(
+        ArbiterRegistryStorage.Data storage d,
+        address agreement,
+        address arbiterAddr
+    ) private {
+        // ⚠️ A BOND THE PREVIOUS CLAIMER HAS NOT COLLECTED IS MOVED OUT OF THE
+        // WAY FIRST, AND THAT IS NOT HOUSEKEEPING. A deal can be claimed again
+        // after a release, an abandonment or a timeout, and the man who let go
+        // collects his bond with `withdrawCaseBond` whenever he gets round to
+        // it. Writing the new bond over his record would take his money and
+        // give it to the new claimer; refusing until he collects would let one
+        // arbiter's inaction block a deal that needs a judge. So it becomes a
+        // claimable of his, and the slot is free.
+        ArbiterRegistryStorage.CaseBond memory stale = d.caseBonds[agreement];
+        if (stale.amount != 0) {
+            d.refundableBounty[stale.arbiter] += stale.amount;
+            emit DisputeBountyRefundable(agreement, stale.arbiter, stale.amount);
+        }
+
+        uint256 amount = ArbiterRegistryStorage.appealDepositFor(agreement);
+        if (amount == 0) return;
+        address usdc = FactoryStorage.store().usdc;
+        if (!IUSDCFull(usdc).transferFrom(arbiterAddr, address(this), amount)) {
+            revert CaseBondTransferFailed();
+        }
+        // uint96 cannot truncate: amount <= APPEAL_DEPOSIT_CAP.
+        d.caseBonds[agreement] = ArbiterRegistryStorage.CaseBond(uint96(amount), arbiterAddr);
+        emit CaseBondPosted(agreement, arbiterAddr, amount);
     }
+
+    /// Hands back whatever of this case's bond is still there and forgets it.
+    ///
+    /// ⚠️ SOFT WHEREVER IT PUSHES AT ALL. It is called from inside
+    /// `finalizeVerdict`, which is also the call that moves the parties'
+    /// escrow; a hard transfer there would let an arbiter the token stopped
+    /// serving wedge the deal's own payout. What does not land goes to
+    /// `refundableBounty` and is pulled with `withdrawDisputeBounty`.
+    ///
+    /// ⚠️ CALLED FROM ONE PLACE ONLY — `finalizeVerdict`, the happy ending,
+    /// where a second transaction to collect would be an insult. Every OTHER
+    /// way a case leaves an arbiter (he let go, a stranger abandoned it, the
+    /// deal timed out) leaves the record standing and he collects it himself
+    /// with `ArbiterVaultFacet.withdrawCaseBond`.
+    ///
+    /// That is not a preference, it is the clone's gas cap. `clearDisputeClaim`
+    /// is called BY THE CLONE with exactly CLAIM_CLEAR_GAS (200 000) inside an
+    /// empty try/catch, and a clone is pinned to its implementation for life,
+    /// so that number can never be raised for a deal that already exists. A
+    /// push there cost a measured +46 000 gas and tripped the rig's own
+    /// tripwire (test/DisputeVaultDiscountGasCap.t.sol, which asks for 2x
+    /// headroom, not merely for being under the cap): 74 746 → 120 658 of
+    /// 100 000 allowed. Over the cap the catch swallows everything, and what it
+    /// would swallow is the release of the claim itself — the arbiter would
+    /// keep an open dispute for ever, which is the exact dead end `abandonClaim`
+    /// was written to close.
+    function _releaseCaseBond(ArbiterRegistryStorage.Data storage d, address agreement) private {
+        ArbiterRegistryStorage.CaseBond memory b = d.caseBonds[agreement];
+        if (b.amount == 0) return;
+        delete d.caseBonds[agreement];
+        if (_softTransfer(FactoryStorage.store().usdc, b.arbiter, b.amount)) {
+            emit CaseBondReturned(agreement, b.arbiter, b.amount);
+        } else {
+            d.refundableBounty[b.arbiter] += b.amount;
+            emit DisputeBountyRefundable(agreement, b.arbiter, b.amount);
+        }
+    }
+
+    /// Frees the judging slot. Called where a case leaves the arbiter WITHOUT a
+    /// verdict (release, abandon, timeout); `submitVerdict` frees it too, on
+    /// the signature, which is the whole point of the counter.
+    function _freeJudgingSlot(ArbiterRegistryStorage.Data storage d, address who) private {
+        uint256 held = d.judgingCount[who];
+        if (held > 0) d.judgingCount[who] = held - 1;
+    }
+
 
     // -------- ADMIN: MANAGE ARBITERS --------
 
@@ -2248,10 +3357,11 @@ contract ArbiterRegistryFacet {
     /// SEATING (16 August 2026). It is NOT the same condition as in
     /// addArbiter, and the two drifted apart on live state:
     ///
-    ///   • the chief's role is ABOLISHED when `isDaoActive()` — that is how both
-    ///     `onlyOwnerOrChief` modifiers work (here and in
-    ///     ArbiterAccountabilityFacet): under live governance they do not see a
-    ///     chief at all, and none of his rights remain;
+    ///   • the chief's role is ABOLISHED when `isDaoActive()` — that is how the
+    ///     `onlyOwnerOrChief` modifier in ArbiterAccountabilityFacet works
+    ///     (this facet's copy is gone, with the only door it guarded): under
+    ///     live governance it does not see a chief at all, and none of his
+    ///     rights remain;
     ///   • seating is HANDED OVER when `isDaoActive() && daoAddress != address(0)`
     ///     (_requireSeatingNotHandedOver) — the condition there is weaker on
     ///     purpose: until a successor is named, nobody but the owner can seat
@@ -2319,50 +3429,53 @@ contract ArbiterRegistryFacet {
         if (isDaoActive() && d.daoAddress != address(0)) revert SeatingHandedOver();
     }
 
-    /// Entry into the arbiter corps under live governance is only through
-    /// applyAsArbiter (self-registration past the XP/cleanStreak/bond gate).
-    /// Decided 15 August 2026: no hand-seated ones — neither the owner nor the
-    /// chief seats arbiters once governance is on.
+    /// @notice Seat a man by hand. THE OWNER'S, AND NOBODY ELSE'S.
     ///
-    /// ⚠️ On `&& d.daoAddress != address(0)` — see _requireSeatingNotHandedOver.
+    /// ⚠️ THE CHIEF LOST THIS DOOR ON 22 SEPTEMBER 2026 (the owner's
+    /// decision), and the argument is what the door IS rather than who held it.
+    /// Every other entrance to the corps measures something: the self-service
+    /// one asks for five clean deals with counterparties that carried standing
+    /// of their own. This one asks for nothing at all — it is a name and a
+    /// press. That makes it the widest hole in the corps, and until today it
+    /// was held by a man who had himself been APPOINTED: an appointee could
+    /// seat, and the only thing standing between him and a bloc of his own was
+    /// a cap counted here.
     ///
-    /// ⚠️ RE-SEATING A REMOVED ARBITER IS THE OWNER'S ALONE (16 August 2026).
-    /// This function is a second door to the same result that is locked in
-    /// `ArbiterAccountabilityFacet.liftSuspension`: `clearRemovalRecord` below
-    /// erases the removal window along with the record of it. The full argument
-    /// is at the declaration of ReseatingRemovedIsOwnerOnly above.
-    function addArbiter(address arbiter) external onlyOwnerOrChief {
+    /// The cap went with the power rather than being kept beside it. A limit on
+    /// a door nobody but the owner can press is a limit on the owner, and he is
+    /// the one who decides the composition; the thing the cap defended against
+    /// — an appointee building a bloc that decides appeals — cannot happen
+    /// through a door he cannot open. `ChiefBlocWouldDecideAppeal` and
+    /// `ReseatingRemovedIsOwnerOnly` are therefore raised by nothing any more
+    /// and are kept only as types.
+    ///
+    /// What the chief KEEPS is everything that is not a seat: proposing a
+    /// removal, suspending, answering. The rule the owner set for that role is
+    /// that it restores and accuses but does not create.
+    ///
+    /// ⚠️ AND THE DOOR STILL DIES AT THE HANDOVER. Once governance is live
+    /// and a successor is named, nobody seats by hand at all —
+    /// `_requireSeatingNotHandedOver` — and `applyAsArbiter` is the only
+    /// entrance left. That is unchanged, and it is the whole reason this door is
+    /// allowed to exist in the meantime.
+    ///
+    /// ⚠️ THE HALF-YEAR COOLDOWN IS NOT ASKED HERE, and it was not before
+    /// either: it stood inside the branch this change deletes, and the owner was
+    /// exempt from it there for the reason he is exempt from it now. He reverses
+    /// HIS OWN removals with one press, and a cooldown binding him would turn a
+    /// mistaken removal into a half-year sentence nobody could lift.
+    function addArbiter(address arbiter) external onlyOwner {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         _requireSeatingNotHandedOver(d);
         if (d.isArbiter[arbiter]) revert AlreadyArbiter();
 
-        // The cap applies to the chief only. The owner is not limited: he is the
-        // one who decides the composition, and limiting him by this rule would
-        // limit his own ability to dilute the chief's bloc.
-        //
-        // Counted from the DECIDING MAJORITY rather than from the quorum
-        // (16 August 2026): at a turnout of exactly the quorum an appeal is
-        // decided by two votes out of three, hence bloc ≤ 1.
-        if (msg.sender != OwnershipLib.contractOwner()) {
-            // Undoing a removal mirrors a removal, and it is not his to do. The
-            // discriminator is the same ERASABLE `removedAt` as on the
-            // liftSuspension gate: zero for a voluntary leaver and for a newcomer.
-            if (d.removedAt[arbiter] != 0) revert ReseatingRemovedIsOwnerOnly();
-
-            uint256 blocAfter = _chiefBloc(d) + 1;
-            if (blocAfter >= APPEAL_DECIDING_VOTES) {
-                revert ChiefBlocWouldDecideAppeal(blocAfter, APPEAL_DECIDING_VOTES);
-            }
-        }
-
-        // Rule A, and it binds the OWNER too — the one limit in this file that
-        // is not about who presses. Hand seating is the door the four sitting
-        // arbiters came through, and a seat given to a man with a live deal
-        // would put him in the corps with the conflict already in place; the
-        // owner cannot see his counterparty's side of that any better than the
-        // chain can. The refusal names what is open, so whoever is seating him
-        // can say what to close.
-        _requireMarketClean(arbiter);
+        // ⚠️ RULE A IS GONE FROM THIS DOOR TOO (22 September 2026). It used to
+        // refuse a seat to anybody with a job, a service, an application or a
+        // deal open, and it bound the owner as well — the seat cost a man his
+        // living, which is the price the owner set out to stop charging. An
+        // arbiter is an ordinary user of the boards; what he may not do is
+        // trade WHILE he is reading a case, and that is held at the boards'
+        // own doors (`MarketPresence.requireNotJudging`), not here.
 
         d.isArbiter[arbiter] = true;
         d.arbiterList.push(arbiter);
@@ -2401,8 +3514,14 @@ contract ArbiterRegistryFacet {
         // Gated at the COMMIT and not only at the reveal: a refusal an hour
         // before the arbiter has arranged anything is kinder than one at the
         // moment he reaches for the dispute, and it costs one SLOAD.
-        // New work: a whole bond.
-        _requireBondWhole(d, caller);
+        //
+        // ⚠️ THE QUESTION CHANGED WITH THE BOND (22 September 2026). It used to
+        // be "is your seat bond whole"; there is no seat bond any more, and the
+        // money for a case is taken at the reveal, where the case — and so its
+        // price — is known. What can still be asked an hour early is the SLOT:
+        // an arbiter already reading a case will be refused at the reveal, and
+        // hearing it now costs him one SLOAD instead of a wasted commitment.
+        if (d.judgingCount[caller] >= ArbiterRegistryStorage.caseSlotsFor(d, caller)) revert AlreadyJudgingACase();
         d.claimCommitments[commitment] = block.number;
         emit DisputeClaimCommitted(caller, commitment);
     }
@@ -2434,16 +3553,15 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (!d.isArbiter[caller]) revert NotArbiter();
         // Publishing the key a party seals a presentation to is arbiter work
-        // like any other. Nothing is stranded by gating it: an unbonded arbiter
-        // cannot hold a claim, so no party is ever left waiting on his key.
+        // like any other, and the seat check one line up is the whole of it.
         //
-        // ⚠️ FINISHING, NOT NEW WORK (17 September 2026). A seat whose bond a
-        // won appeal has drawn down still holds claims, and this door is how
-        // an arbiter who lost his key after claiming gets back to them. Gating
-        // it on a whole bond would strand exactly the parties the owner decided
-        // must not be abandoned. It opens no new case: claiming needs a whole
-        // bond and writes the keys itself.
-        _requireBondToFinish(d, caller);
+        // ⚠️ IT USED TO ASK ABOUT A BOND AND NO LONGER DOES (22 September
+        // 2026). The rule it carried — a seat an appeal had drawn down still
+        // finishes the cases it holds — died with the standing bond itself:
+        // every case now carries its own money, so there is no such thing as a
+        // seat that is short. What is left is the half that always mattered
+        // here, and it is held by `isArbiter` above: a man removed for cause
+        // keeps his claims but stops being able to work them.
         if (boxKey == bytes32(0) || signKey == bytes32(0)) revert ZeroChatKey();
 
         // The event fires only if at least one half actually changed. The write
@@ -2505,16 +3623,28 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
 
         if (!d.isArbiter[caller]) revert NotArbiter();
-        // ⚠️ THE SELECTION ITSELF. This is where a man becomes the judge of a
-        // real escrow, and after 8 September 2026 an unbonded seat cannot reach
-        // it. It is also the most visible effect of that cut on the live chain:
-        // the one arbiter seated there has a zero bond and stops being
-        // selectable the moment the cut lands, until he posts.
-        // New work: a whole bond.
-        _requireBondWhole(d, caller);
 
-        // The cap is checked before the staticcalls into Agreement: a refusal
-        // must be cheap, not four reads of a foreign contract deep.
+        // ⚠️ THE SELECTION ITSELF. This is where a man becomes the judge of a
+        // real escrow — and since 22 September 2026 it is also where he pays
+        // for the right to be one. The bond is posted HERE, against THIS case,
+        // priced by this case's own stake, and it goes home when his verdict
+        // has stood. The transfer itself is at the foot of this function,
+        // after every refusal: a bond taken before a check that then refuses
+        // would leave his money on the diamond with no case behind it.
+        //
+        // The two caps, and they are different questions:
+        //
+        //   • ONE CASE AT A TIME. Released by the signature of the verdict,
+        //     so the wait is his own reading time and not the finalization
+        //     delay plus the appeal window.
+        //   • TEN CLAIMS AT ONCE. Released when the deal lets go of him. Sign,
+        //     take the next, sign, take the next — the first cap does not stop
+        //     that, and this one does.
+        //
+        // Both before the staticcalls into Agreement: a refusal must be cheap,
+        // not four reads of a foreign contract deep.
+        if (d.judgingCount[caller] >= ArbiterRegistryStorage.caseSlotsFor(d, caller)) revert AlreadyJudgingACase();
+
         uint256 held = d.openClaimCount[caller];
         if (held >= MAX_CLAIMS_PER_ARBITER) revert TooManyOpenClaims(held, MAX_CLAIMS_PER_ARBITER);
 
@@ -2533,7 +3663,7 @@ contract ArbiterRegistryFacet {
         (bool statusOk, bytes memory statusData) = agreement.staticcall(
             abi.encodeWithSignature("status()")
         );
-        require(statusOk, "ArbiterRegistry: failed to read status");
+        if (!statusOk) revert AgreementStatusUnreadable();
         uint8 agreementStatus = abi.decode(statusData, (uint8));
         if (agreementStatus != 4) revert NotDisputed();
 
@@ -2543,9 +3673,9 @@ contract ArbiterRegistryFacet {
         // the even split of the pot on timeout. Without this check a party with
         // a friendly arbiter would take the whole pot, having proved nothing.
         (bool dOk, bytes memory dData) = agreement.staticcall(abi.encodeWithSignature("disputedAt()"));
-        require(dOk, "ArbiterRegistry: disputedAt read failed");
+        if (!dOk) revert DisputeDateUnreadable();
         (bool wOk, bytes memory wData) = agreement.staticcall(abi.encodeWithSignature("DISPUTE_WINDOW()"));
-        require(wOk, "ArbiterRegistry: DISPUTE_WINDOW read failed");
+        if (!wOk) revert DisputeWindowUnreadable();
         if (block.timestamp > abi.decode(dData, (uint256)) + abi.decode(wData, (uint256))) {
             revert DisputeWindowPassed();
         }
@@ -2553,7 +3683,7 @@ contract ArbiterRegistryFacet {
         // An arbiter cannot be a party to the dispute
         (bool clientOk, bytes memory clientData) = agreement.staticcall(abi.encodeWithSignature("client()"));
         (bool execOk,   bytes memory execData)   = agreement.staticcall(abi.encodeWithSignature("executor()"));
-        require(clientOk && execOk, "ArbiterRegistry: failed to read parties");
+        if (!(clientOk && execOk)) revert DealPartiesUnreadable();
         address agreementClient   = abi.decode(clientData,  (address));
         address agreementExecutor = abi.decode(execData,    (address));
         require(caller != agreementClient && caller != agreementExecutor, "ArbiterRegistry: arbiter is party");
@@ -2562,7 +3692,7 @@ contract ArbiterRegistryFacet {
         (bool setOk,) = agreement.call(
             abi.encodeWithSignature("setArbiter(address)", address(this))
         );
-        require(setOk, "ArbiterRegistry: setArbiter failed");
+        if (!setOk) revert ArbiterHandoffFailed();
 
         d.disputeClaims[agreement] = caller;
         // The floor anchor is written on EVERY claim, with no "only if zero"
@@ -2575,6 +3705,16 @@ contract ArbiterRegistryFacet {
         d.disputeClaimedAtBy[agreement][caller] = block.timestamp;
         d.arbiterDeals[caller].push(agreement);
         d.openClaimCount[caller]++;
+        d.judgingCount[caller]++;
+
+        // ⚠️ THE MONEY, LAST, AFTER EVERY REFUSAL AND AFTER THE CLONE HAS
+        // ACCEPTED THE HANDOFF. `setArbiter` above is the only step that can
+        // fail on the clone's side; taking the bond before it would mean a
+        // failed handoff reverts a transfer that had already been made, which
+        // is harmless today and stops being harmless the day anything here is
+        // wrapped in a try/catch. It is also the last thing an arbiter loses
+        // if he got the salt wrong.
+        _takeCaseBond(d, agreement, caller);
 
         // The keys are written HERE and not by a separate call: one transaction
         // instead of two, and an arbiter cannot end up holding a claim without a
@@ -2600,6 +3740,12 @@ contract ArbiterRegistryFacet {
         address current = d.disputeClaims[agreement];
         if (current == address(0)) revert NotClaimed();
         if (caller != current && caller != OwnershipLib.contractOwner()) revert NotAuthorized();
+        // The owner taking the case off an arbiter is a hand in this dispute; the
+        // arbiter letting go of his own case is not. This is the ONLY record
+        // either way — the door leaves no per-dispute state behind (a verdict
+        // does not exist yet, by the require below) and `DisputeReleased` does
+        // not name who pressed. See `Data.govTouchedDispute`.
+        if (caller != current) d.govTouchedDispute[agreement] = true;
 
         // A claim cannot be released once a verdict has been submitted (awaiting finalization)
         require(d.pendingVerdicts[agreement].submittedAt == 0, "ArbiterRegistry: verdict pending");
@@ -2641,9 +3787,9 @@ contract ArbiterRegistryFacet {
         // exactly the hole the gate stands for. Until `abandonClaim` exists, a
         // jammed counter is unlocked only by a party calling triggerArbiterTimeout.
         (bool dOk, bytes memory dData) = agreement.staticcall(abi.encodeWithSignature("disputedAt()"));
-        require(dOk, "ArbiterRegistry: disputedAt read failed");
+        if (!dOk) revert DisputeDateUnreadable();
         (bool wOk, bytes memory wData) = agreement.staticcall(abi.encodeWithSignature("DISPUTE_WINDOW()"));
-        require(wOk, "ArbiterRegistry: DISPUTE_WINDOW read failed");
+        if (!wOk) revert DisputeWindowUnreadable();
         if (block.timestamp > abi.decode(dData, (uint256)) + abi.decode(wData, (uint256))) {
             revert DisputeWindowPassed();
         }
@@ -2656,11 +3802,17 @@ contract ArbiterRegistryFacet {
         // so immediately after this line they honestly return zero.
         delete d.disputeClaims[agreement];
         if (d.openClaimCount[current] > 0) d.openClaimCount[current]--;
+        // No verdict was submitted (the require above), so the slot is still
+        // his and the bond has bought nothing. The slot is freed here; the
+        // money stays booked against this deal and he collects it with
+        // `withdrawCaseBond` — see `_releaseCaseBond` for why only the
+        // finalization pushes.
+        _freeJudgingSlot(d, current);
 
         (bool ok,) = agreement.call(
             abi.encodeWithSignature("setArbiter(address)", address(0))
         );
-        require(ok, "ArbiterRegistry: reset arbiter failed");
+        if (!ok) revert ArbiterHandoffFailed();
 
         emit DisputeReleased(agreement, current);
     }
@@ -2728,9 +3880,9 @@ contract ArbiterRegistryFacet {
         // `releaseDisputeClaim` read it — the window belongs to the deal, not to
         // this facet, and a clone that cannot answer is not guessed about.
         (bool dOk, bytes memory dData) = agreement.staticcall(abi.encodeWithSignature("disputedAt()"));
-        require(dOk, "ArbiterRegistry: disputedAt read failed");
+        if (!dOk) revert DisputeDateUnreadable();
         (bool wOk, bytes memory wData) = agreement.staticcall(abi.encodeWithSignature("DISPUTE_WINDOW()"));
-        require(wOk, "ArbiterRegistry: DISPUTE_WINDOW read failed");
+        if (!wOk) revert DisputeWindowUnreadable();
         uint256 disputedAt = abi.decode(dData, (uint256));
         if (disputedAt == 0) revert NotDisputed();
         // Strictly the mirror of the gate in `releaseDisputeClaim`: that one
@@ -2747,6 +3899,14 @@ contract ArbiterRegistryFacet {
         // right to move his own clock.
         delete d.disputeClaims[agreement];
         if (d.openClaimCount[held] > 0) d.openClaimCount[held]--;
+        _freeJudgingSlot(d, held);
+        // ⚠️ THE BOND IS STILL HIS, AND THE MISTAKE IS STILL HIS TOO. The bond
+        // is not a fine — it exists to cover one refund to an appellant, and a
+        // case nobody ruled on has no appellant. Taking it here would turn a
+        // missed window into a second, monetary punishment nobody decided on,
+        // on top of the judicial mistake booked three lines down. He collects
+        // it with `withdrawCaseBond`; this door is pressed by strangers, and a
+        // stranger should not pay for a transfer to somebody else.
 
         _recordArbiterMistake(
             d,
@@ -2798,9 +3958,9 @@ contract ArbiterRegistryFacet {
         if (d.disputeClaims[agreement] != caller) revert NotClaimingArbiter();
         // Writing a public record against a party is arbiter work, and the same
         // reasoning as submitVerdict applies: the claim outlives the seat, so
-        // the bond is asked here too.
-        // Finishing a case already held (17 September 2026): see _requireBondWhole.
-        _requireBondToFinish(d, caller);
+        // the seat is asked for here too. (Until 22 September 2026 this asked
+        // about a bond as well; there is no standing bond to ask about.)
+        _requireStillSeated(d, caller);
 
         uint256 claimedAt = d.disputeClaimedAtBy[agreement][caller];
         // Zero means the dispute was claimed BEFORE this field existed: the chain
@@ -2888,16 +4048,16 @@ contract ArbiterRegistryFacet {
         // he went on filing verdicts on every escrow he still held. Suspension
         // covered that at finalization; this covers it at submission.
         //
-        // ⚠️ FINISHING, NOT NEW WORK (17 September 2026, the owner's decision):
-        // an arbiter whose bond a won appeal drew down files the verdicts on
-        // the cases he already holds. The removed man above is still refused —
-        // the finishing gate asks for the seat.
-        _requireBondToFinish(d, caller);
+        // ⚠️ WHAT IS LEFT OF IT AFTER 22 SEPTEMBER 2026 IS THE SEAT ALONE.
+        // The bond half is gone with the standing bond — this case's money was
+        // taken when he claimed it and is sitting in `caseBonds` right now, so
+        // there is nothing to ask him for here.
+        _requireStillSeated(d, caller);
         if (d.pendingVerdicts[agreement].submittedAt != 0) revert VerdictAlreadySubmitted();
 
         // Check that the agreement is still in dispute
         (bool ok, bytes memory st) = agreement.staticcall(abi.encodeWithSignature("status()"));
-        require(ok, "ArbiterRegistry: status read failed");
+        if (!ok) revert AgreementStatusUnreadable();
         require(abi.decode(st, (uint8)) == 4, "ArbiterRegistry: not disputed");
 
         // The arbiter must submit the verdict within DISPUTE_WINDOW of disputedAt. This
@@ -2905,14 +4065,27 @@ contract ArbiterRegistryFacet {
         // because of FINALIZE_DELAY and appeals, execution legitimately happens long after
         // submission, so the only place where time may be checked is submission.
         (bool disputedOk, bytes memory disputedData) = agreement.staticcall(abi.encodeWithSignature("disputedAt()"));
-        require(disputedOk, "ArbiterRegistry: disputedAt read failed");
+        if (!disputedOk) revert DisputeDateUnreadable();
         uint256 disputedAt = abi.decode(disputedData, (uint256));
 
         (bool windowOk, bytes memory windowData) = agreement.staticcall(abi.encodeWithSignature("DISPUTE_WINDOW()"));
-        require(windowOk, "ArbiterRegistry: DISPUTE_WINDOW read failed");
+        if (!windowOk) revert DisputeWindowUnreadable();
         uint256 disputeWindow = abi.decode(windowData, (uint256));
 
         if (block.timestamp > disputedAt + disputeWindow) revert DisputeWindowPassed();
+
+        // ⚠️ THE SLOT IS FREED BY THE SIGNATURE, NOT BY THE FINALIZATION
+        // (owner's decision, 22 September 2026). His work on this case is done;
+        // making him sit out FINALIZE_DELAY and then a four-day appeal window
+        // before he may read the next one would mean one arbiter can close
+        // about one case a week.
+        //
+        // ⚠️ AND IT IS NOT `openClaimCount` THAT MOVES HERE. That one guards
+        // the exit from the corps, and releasing it on the signature would let
+        // an arbiter sign, resign, and walk out with this deal's bond before
+        // the panel had a chance to overturn him — the one thing the bond
+        // exists to make impossible. See `Data.judgingCount`.
+        _freeJudgingSlot(d, caller);
 
         d.pendingVerdicts[agreement] = ArbiterRegistryStorage.PendingVerdict({
             arbiter:        caller,
@@ -3015,6 +4188,29 @@ contract ArbiterRegistryFacet {
 
         v.finalized = true;
 
+        // ⚠️ THE BOND GOES HOME HERE, AND "HERE" IS THE DEFINITION OF "THE
+        // VERDICT STOOD". Everything that could take it has already happened:
+        // `resolveAppeal` draws it for the appellant's refund when the panel
+        // overturns him, and `_requireNotSuspended` plus `v.frozen` above hold
+        // this door shut while anything is still being decided.
+        //
+        // What is left is therefore exactly what nobody claimed — the whole
+        // bond on a verdict that stood, the remainder after a won appeal,
+        // nothing at all when the refund used it up.
+        //
+        // ⚠️ A VERDICT THE OWNER'S HAND OVERTURNED, WITH NO APPEAL BEHIND
+        // IT, STILL GETS ITS BOND BACK, and that is a decision rather than an
+        // oversight. The bond covers one refund to an appellant; a hand
+        // overturn has no appellant and refunds nobody. What that verdict costs
+        // its arbiter is the other three things: his 80% of the fee, withheld
+        // by `creditDisputeFee`; the top-up, returned to the payer above; and a
+        // judicial mistake on his record.
+        //
+        // AFTER the external call, so a reverting `resolveDispute` takes the
+        // release down with it rather than paying a bond out on a finalization
+        // that did not happen.
+        _releaseCaseBond(d, agreement);
+
         // The verdict reached finalization without an overturn — the judicial mistake
         // was not confirmed, so the mistake streak resets. The judging record grows
         // at the same time (15 August 2026): a counter of unoverturned finalized
@@ -3022,6 +4218,122 @@ contract ArbiterRegistryFacet {
         if (!v.overturned) {
             d.arbiterMistakeStreak[v.arbiter] = 0;
             d.cleanVerdicts[v.arbiter]++;
+        }
+
+        // ---- the handover's second condition, counted here and nowhere else
+        //      (20 September 2026) ----
+        //
+        // THREE OUTCOMES, NOT TWO — the middle one added 20 September 2026 by
+        // the owner's decision, and it is the whole shape of this block:
+        //
+        //   • no hand, no overturn      → the run grows, the man is counted,
+        //                                 the lifetime total grows;
+        //   • a GOVERNANCE HAND in this dispute (freeze, an overturn by the
+        //     owner or the DAO, the case taken off an arbiter)
+        //                               → the run is thrown away, back to zero;
+        //   • the verdict overturned by the APPEAL PANEL, with no hand in it
+        //                               → the run STANDS WHERE IT IS. It does
+        //                                 not grow — the arbiter was wrong and
+        //                                 that is not to his credit — and it is
+        //                                 not broken, because three arbiters
+        //                                 correcting a fourth is the corps
+        //                                 repairing itself WITHOUT the owner,
+        //                                 which is the very sentence this
+        //                                 condition is trying to measure. A
+        //                                 court that never has to correct
+        //                                 anyone is not a court that works; it
+        //                                 is a court nobody has tested.
+        //
+        // CLEAN is therefore still both halves — not overturned AND no hand —
+        // and `cleanVerdicts` above is still the weaker test: it keys on
+        // `!v.overturned` alone, so a verdict the owner froze for a week and
+        // then let go counts clean there. That is right for what THAT counter
+        // is for (the arbiter was not proved wrong) and wrong for what these
+        // are for (nobody had to step in).
+        //
+        // ⚠️ HOW THE PANEL IS TOLD FROM THE HAND, and why no new field was
+        // needed: `v.overturned` has exactly two writers — `overturnVerdict`,
+        // which sets `govTouchedDispute` in the same call, and `resolveAppeal`,
+        // which deliberately sets nothing of the kind. So at this line
+        // `overturned && !handed` holds if and only if the PANEL did it.
+        //
+        // ⚠️ AND THAT EQUIVALENCE IS LOAD-BEARING FROM NOW ON. Writing the
+        // mark inside `resolveAppeal` — an innocent-looking "the appeal touched
+        // this dispute too" — would silently turn every panel overturn back
+        // into a broken run, which is the change this block just undid. The
+        // warning is repeated at `Data.govTouchedDispute`, where somebody
+        // adding a writer would be standing.
+        //
+        // ⚠️ AND THE ORDER OF THE BRANCHES IS THE RULE, NOT A STYLE. The hand
+        // is asked FIRST, so a dispute that had both — frozen by the owner and
+        // then overturned by the panel — is a broken run and not a standing
+        // one. A hand was in it; that is the fact the term is about, whoever
+        // pressed last.
+        bool handed = d.govTouchedDispute[agreement];
+        if (handed) {
+            // ⚠️ THE RESET IS THE WHOLE POINT OF THE TERM. A total can only be
+            // forgiven; a run has to be earned again from zero. This is the
+            // line that makes interference COST something, and it is the one a
+            // "simplification" would delete first — see
+            // `test_AFrozenAndUnfrozenDisputeBreaksTheStreak` and
+            // `test_AnOverturnByTheHandBreaksTheStreak`.
+            d.cleanDisputeStreak = 0;
+        } else if (!v.overturned) {
+            d.cleanDisputeStreak++;
+            d.cleanDisputeCount++;
+            // The man, counted once however many disputes he closes. Without
+            // this bit one arbiter closing eight disputes would read as a corps
+            // of eight; see `Data.countedCleanArbiter`.
+            if (!d.countedCleanArbiter[v.arbiter]) {
+                d.countedCleanArbiter[v.arbiter] = true;
+                d.distinctCleanArbiters++;
+            }
+        }
+        // The third outcome has no branch on purpose: the panel overturned a
+        // verdict nobody's hand had been near, so every one of these three
+        // numbers is left exactly as it was. Guarded by
+        // `test_APanelOverturnLeavesTheRunWhereItIs`, which fails both ways —
+        // if the run is reset AND if it is grown.
+
+        // ---- the arbiter's own record: a SHARE of his recent work, not a run
+        //      of blunders (21 September 2026) ----
+        //
+        // ⚠️ THIS LINE IS THE DEFINITION OF "A CLOSED CASE", and the
+        // definition is the whole guard against dilution. A case is closed here
+        // and only here — the arbiter ruled, the ruling reached finalization.
+        // A dispute that timed out (`triggerArbiterTimeout`) or whose claim was
+        // abandoned never arrives at this function at all, so it enters neither
+        // half of the fraction. That is not an omission: nothing was judged, so
+        // there is no verdict to hold him to, and counting those cases as
+        // "closed" would let an arbiter drown two overturns in a pile of
+        // disputes he never touched.
+        //
+        // ⚠️ AND THE OUTCOME IS NOT `v.overturned` ALONE. That flag stays true
+        // after the appeal panel has RESTORED the arbiter's own ruling, so
+        // reading it by itself would file the panel's acquittal as an overturn
+        // against him — see `Data.verdictVindicated`, which is set in exactly
+        // that branch of `resolveAppeal` and read nowhere else. `cleanVerdicts`
+        // above still reads the bare flag and still miscounts this case; there
+        // the cost is a card one low, here it would be a suspension.
+        bool countAsOverturn = v.overturned && !d.verdictVindicated[agreement];
+        if (ArbiterRegistryStorage.recordClosedCase(d, v.arbiter, countAsOverturn)) {
+            // ⚠️ THE SAME CONSEQUENCE AS THE THIRD MISTAKE IN A ROW, through
+            // the same body — no new kind of punishment was decided on, only a
+            // second way of arriving at the old one. `_suspendAndAccuse`
+            // cannot revert and yields to a live accusation, so a rate trip
+            // landing on top of a human charge leaves that charge standing.
+            //
+            // AFTER the external call and after the two counters above, not
+            // before: the suspension must not decide whether this dispute's
+            // money moves, and `_requireNotSuspended` at the top of this
+            // function has already let this verdict through.
+            _suspendAndAccuse(
+                d,
+                ReputationStorage.data(),
+                v.arbiter,
+                DemotionPath.OverturnRate,
+                agreement
+            );
         }
 
         emit VerdictFinalized(agreement, v.arbiter, v.clientWins);
@@ -3071,6 +4383,13 @@ contract ArbiterRegistryFacet {
         // already true, and in both the older reason is the larger fact and
         // must be the one the person reads.
         if (v.overturned) revert AlreadyOverturned();
+
+        // A hand in this dispute, recorded where an unfreeze cannot erase it.
+        // `v.overturned` below is durable and would carry the same news, but
+        // only this mapping carries it in the ONE shape `finalizeVerdict` asks,
+        // and only this mapping also remembers the freeze and the release. See
+        // `Data.govTouchedDispute`.
+        d.govTouchedDispute[agreement] = true;
 
         // ⚠️ AN OVERTURN MUST OVERTURN (found in review, 21 August
         // 2026). This door used to accept ANY `newClientWins`, including the
@@ -3385,12 +4704,19 @@ contract ArbiterRegistryFacet {
     /// @notice The shared judicial-mistake counter for overturnVerdict,
     /// notifyArbiterTimeout and resolveAppeal.
     ///
-    /// On the MAX_ARBITER_MISTAKES-th mistake in a row: XP hard-reset to
-    /// DEMOTION_XP_RESET (a landing point, not a subtraction), suspension for
-    /// SUSPENSION_WINDOW, and a removal proposal opened in the CHAIN'S OWN
+    /// On the MAX_ARBITER_MISTAKES-th mistake in a row: suspension for
+    /// SUSPENSION_WINDOW and a removal proposal opened in the CHAIN'S OWN
     /// NAME. The seat is NOT taken here any more — see the branch below.
-    /// cleanStreak (the executor streak) is untouched: judging and delivering
-    /// are different skills.
+    /// cleanStreak (the executor streak) is untouched HERE: judging and
+    /// delivering are different skills. It is taken on the REMOVAL itself
+    /// (ArbiterAccountabilityFacet._performRemoval), because the streak is the
+    /// key to the corps and a removal takes the key.
+    ///
+    /// ⚠️ THIS PARAGRAPH USED TO OPEN WITH "XP hard-reset to
+    /// DEMOTION_XP_RESET (a landing point, not a subtraction)". It stopped
+    /// being true on 21 September 2026: the reset is gone, XP is not touched on
+    /// this path at all, and the note where the constant stood says why. The
+    /// sentence is recorded rather than deleted because the record quotes it.
     ///
     /// ⚠️ TWO THRESHOLDS LIVE NEXT TO EACH OTHER AND THEY ARE NOT THE SAME
     /// NUMBER (18 August 2026 — this is what a reviewer
@@ -3452,104 +4778,157 @@ contract ArbiterRegistryFacet {
         }
 
         if (mistakes >= MAX_ARBITER_MISTAKES) {
-            // The seat is no longer taken here. The automatic path stops the
-            // arbiter at once and ACCUSES him; the removal itself runs through
-            // the common door — proposal, 48 hours, a right to answer — like
-            // every other removal. Decided 18 August 2026: the same door, and
-            // the suspension is the fast path.
-            //
-            // Before this, the quiet door also survived the handover:
-            // overturnVerdict sits under onlyOwnerOrDAO, which lets the owner
-            // through always, so the ratchet this whole branch exists to build
-            // was bypassed by three presses.
-            rep.xp[arbiterAddr] = DEMOTION_XP_RESET;
+            _suspendAndAccuse(d, rep, arbiterAddr, path, agreement);
+        }
+    }
 
-            // ⚠️ THE SUSPENSION IS UNCONDITIONAL and stands ABOVE the guard
-            // below. It is the fast lever, and it must land even when the
-            // accusation cannot: an arbiter whose third mistake arrives while
-            // a human accusation stands is still stopped this second.
-            d.suspendedUntil[arbiterAddr] = block.timestamp + ArbiterRegistryStorage.SUSPENSION_WINDOW;
+    /// The SHARED consequence of both automatic triggers: stop the arbiter now
+    /// and let the chain accuse him in its own name.
+    ///
+    /// ⚠️ ONE BODY, TWO TRIGGERS, AND THAT IS THE POINT (21 September 2026).
+    /// It is reached from `_recordArbiterMistake` on the
+    /// MAX_ARBITER_MISTAKES-th mistake IN A ROW, and from `finalizeVerdict`
+    /// when the overturn RATE over the last OUTCOME_WINDOW closed cases reaches
+    /// OUTCOME_OVERTURN_LIMIT. The owner's decision when the rate was added was
+    /// that it buys NO NEW KIND OF PUNISHMENT: the same suspension, the same
+    /// accusation with no author, the same 48 hours and the same right to
+    /// answer. Copying the body for the second trigger would have been the
+    /// cheap way to a second, slightly different punishment that nobody
+    /// decided on.
+    ///
+    /// ⚠️ NOTHING IN HERE MAY REVERT. `notifyArbiterTimeout` reaches the first
+    /// trigger from Agreement.sol (`triggerArbiterTimeout`) inside an EMPTY
+    /// try/catch, so a revert is swallowed in silence and the arbiter walks
+    /// away without a trace. Hence the yielding to a live proposal below
+    /// instead of the refusal `proposeRemoval` uses.
+    /// ⚠️ `rep` IS KEPT IN THE SIGNATURE AND NO LONGER READ (21 September
+    /// 2026), the same way `by` is kept on `_recordArbiterMistake` and for a
+    /// related reason. It was here to carry the XP reset, and the reset is gone;
+    /// the name is commented out rather than the parameter dropped so that the
+    /// two call sites keep saying "this branch is allowed to touch reputation
+    /// storage" out loud. That is the thing to un-comment if a later decision
+    /// ever gives the automatic path something to write there — and it is also
+    /// the reason the removal of the reset is one deletion and not a reshuffle
+    /// of three signatures.
+    function _suspendAndAccuse(
+        ArbiterRegistryStorage.Data storage d,
+        ReputationStorage.Data storage /* rep */,
+        address arbiterAddr,
+        DemotionPath path,
+        address agreement
+    ) private {
+        // The seat is no longer taken here. The automatic path stops the
+        // arbiter at once and ACCUSES him; the removal itself runs through
+        // the common door — proposal, 48 hours, a right to answer — like
+        // every other removal. Decided 18 August 2026: the same door, and
+        // the suspension is the fast path.
+        //
+        // Before this, the quiet door also survived the handover:
+        // overturnVerdict sits under onlyOwnerOrDAO, which lets the owner
+        // through always, so the ratchet this whole branch exists to build
+        // was bypassed by three presses.
+        //
+        // ⚠️ XP IS NOT TOUCHED HERE, AND THE LINE THAT TOUCHED IT IS GONE
+        // (21 September 2026). It read
+        // `rep.xp[arbiterAddr] = DEMOTION_XP_RESET;` and stood exactly here.
+        // Experience is the count of work a man actually did; rewriting it
+        // backwards is not a punishment but a forgery of the record, and the
+        // barrier it used to buy — keeping him under the entrance threshold —
+        // is bought by the clean streak now, which the removal takes. The full
+        // reasoning sits on the note where the constant used to be declared.
+        //
+        // What DOES land on this path: the suspension below, the accusation in
+        // the chain's name, and — when the removal is executed — the forfeited
+        // bond, the lost seat, the zeroed clean streak and a permanent record.
+        // The per-mistake XP charge is a separate thing and still happens:
+        // _slashArbiterXP takes OVERTURN_XP_SLASH at the moment ONE mistake is
+        // proven, and that is not being reconsidered here.
 
-            // ⚠️ THE STREAK IS NOT CLEARED HERE, AND THE REASON WAS REWRITTEN
-            // (18 August 2026). It used to say that _requireProven
-            // reads this counter and zeroing it would leave the chain's own
-            // accusation unprovable — "a door that looks built and never
-            // opens". That became false: executeChainRemoval does not ask the
-            // counter at all, and opens at streak 0.
+        // ⚠️ THE SUSPENSION IS UNCONDITIONAL and stands ABOVE the guard
+        // below. It is the fast lever, and it must land even when the
+        // accusation cannot: an arbiter whose third mistake arrives while
+        // a human accusation stands is still stopped this second.
+        d.suspendedUntil[arbiterAddr] = block.timestamp + ArbiterRegistryStorage.SUSPENSION_WINDOW;
+
+        // ⚠️ THE STREAK IS NOT CLEARED HERE, AND THE REASON WAS REWRITTEN
+        // (18 August 2026). It used to say that _requireProven
+        // reads this counter and zeroing it would leave the chain's own
+        // accusation unprovable — "a door that looks built and never
+        // opens". That became false: executeChainRemoval does not ask the
+        // counter at all, and opens at streak 0.
+        //
+        // The reason it stays is plainer. The counter means "judicial
+        // mistakes in an unbroken row", and the arbiter has done nothing to
+        // break the row by being accused — clearing it here would have the
+        // chain assert an end that did not happen. Two readers still live
+        // on that value: the MANUAL door through _requireProven (reachable
+        // once this accusation goes stale unpressed), and resolveAppeal,
+        // which subtracts from it when a panel takes a mistake back.
+        //
+        // ⚠️ WHERE THE "BUILT AND NEVER OPENS" RISK ACTUALLY LIVES NOW: in
+        // WRITING THE RECORD BELOW. That record is the whole proof the
+        // button consults, so the way to build a door that never opens is
+        // to skip it, not to touch this counter.
+        //
+        // The streak clears on the actual removal (_performRemoval), on
+        // withdrawal of this proposal, and when a panel vindicates him.
+        //
+        // ⚠️ AND NOTHING BELOW MAY REVERT. notifyArbiterTimeout reaches
+        // here from Agreement.sol (triggerArbiterTimeout) inside an EMPTY
+        // try/catch: a revert is swallowed in silence and the arbiter walks
+        // away untouched, without a trace. So a live proposal — anyone's —
+        // is yielded to, not fought over: proposeRemoval was made to
+        // refuse overwriting a standing record, and this branch writes
+        // storage directly, past that door. It must obey the same rule
+        // WITHOUT the revert that enforces it there.
+        //
+        // What yielding costs, named rather than hidden: the human
+        // accusation may later be withdrawn, and the chain's proof does not
+        // turn into a proposal by itself — another overturn is needed. The
+        // streak is kept for exactly that, so the next one tries again.
+        if (!_hasLiveProposalHere(d, arbiterAddr)) {
+            // ⚠️ A NEW ACCUSATION IS A NEW RIGHT TO ANSWER, AND THE CHAIN
+            // LAYS ITS OWN PAST proposeRemoval (19 August 2026).
+            // The human door clears this flag for the same reason and says
+            // so at length; this branch writes the record directly, so it
+            // must obey the same rule without the door that enforces it.
             //
-            // The reason it stays is plainer. The counter means "judicial
-            // mistakes in an unbroken row", and the arbiter has done nothing to
-            // break the row by being accused — clearing it here would have the
-            // chain assert an end that did not happen. Two readers still live
-            // on that value: the MANUAL door through _requireProven (reachable
-            // once this accusation goes stale unpressed), and resolveAppeal,
-            // which subtracts from it when a panel takes a mistake back.
+            // Reachable, not theoretical: an accusation nobody presses goes
+            // stale after PROPOSAL_TTL, the arbiter stays seated and the
+            // streak stays standing, so the next overturn lands here and
+            // writes a fresh accusation. Without this line his answer to the
+            // stale one would meet him as AlreadyAnswered — and the chain's
+            // accusation is the one he can neither withdraw nor walk away
+            // from. Guarded by
+            // test_ANewChainAccusationReopensTheRightToAnswer.
             //
-            // ⚠️ WHERE THE "BUILT AND NEVER OPENS" RISK ACTUALLY LIVES NOW: in
-            // WRITING THE RECORD BELOW. That record is the whole proof the
-            // button consults, so the way to build a door that never opens is
-            // to skip it, not to touch this counter.
-            //
-            // The streak clears on the actual removal (_performRemoval), on
-            // withdrawal of this proposal, and when a panel vindicates him.
-            //
-            // ⚠️ AND NOTHING BELOW MAY REVERT. notifyArbiterTimeout reaches
-            // here from Agreement.sol (triggerArbiterTimeout) inside an EMPTY
-            // try/catch: a revert is swallowed in silence and the arbiter walks
-            // away untouched, without a trace. So a live proposal — anyone's —
-            // is yielded to, not fought over: proposeRemoval was made to
-            // refuse overwriting a standing record, and this branch writes
-            // storage directly, past that door. It must obey the same rule
-            // WITHOUT the revert that enforces it there.
-            //
-            // What yielding costs, named rather than hidden: the human
-            // accusation may later be withdrawn, and the chain's proof does not
-            // turn into a proposal by itself — another overturn is needed. The
-            // streak is kept for exactly that, so the next one tries again.
-            if (!_hasLiveProposalHere(d, arbiterAddr)) {
-                // ⚠️ A NEW ACCUSATION IS A NEW RIGHT TO ANSWER, AND THE CHAIN
-                // LAYS ITS OWN PAST proposeRemoval (19 August 2026).
-                // The human door clears this flag for the same reason and says
-                // so at length; this branch writes the record directly, so it
-                // must obey the same rule without the door that enforces it.
-                //
-                // Reachable, not theoretical: an accusation nobody presses goes
-                // stale after PROPOSAL_TTL, the arbiter stays seated and the
-                // streak stays standing, so the next overturn lands here and
-                // writes a fresh accusation. Without this line his answer to the
-                // stale one would meet him as AlreadyAnswered — and the chain's
-                // accusation is the one he can neither withdraw nor walk away
-                // from. Guarded by
-                // test_ANewChainAccusationReopensTheRightToAnswer.
-                //
-                // Inside the `if`, deliberately: when a live accusation is being
-                // yielded to, nothing new is laid and the answer to what stands
-                // must not be touched. And nothing here can revert — it is a
-                // delete, which matters because notifyArbiterTimeout reaches
-                // this branch inside an empty try/catch.
-                delete d.removalReply[arbiterAddr];
-                d.removalProposals[arbiterAddr] = ArbiterRegistryStorage.RemovalProposal({
-                    cause:          _causeForPath(path),
-                    // No digest: the evidence is the chain's own state, and a
-                    // hash of nothing would be a promise of a preimage nobody
-                    // can show. _requireProven reads the counter instead.
-                    evidenceDigest: bytes32(0),
-                    proposedAt:     block.timestamp,
-                    // ⚠️ THE ACCUSER IS THE CHAIN, so this is the zero address
-                    // and that is the whole guarantee: executeChainRemoval
-                    // refuses anything else, and nobody's name is dirtied by an
-                    // accusation no person made (a deliberate consequence of
-                    // the design).
-                    by:             address(0),
-                    // The chain's own accusation is bound by the same rule as a
-                    // person's: it lives as long as the constant in force when
-                    // it was laid, not as long as whatever the constant becomes
-                    // (26 August 2026).
-                    ttl:            uint64(PROPOSAL_TTL_MIRROR)
-                });
-                d.chainProposalPath[arbiterAddr] = uint8(path);
-                emit RemovalProposedByChain(arbiterAddr, uint8(path), agreement, block.timestamp);
-            }
+            // Inside the `if`, deliberately: when a live accusation is being
+            // yielded to, nothing new is laid and the answer to what stands
+            // must not be touched. And nothing here can revert — it is a
+            // delete, which matters because notifyArbiterTimeout reaches
+            // this branch inside an empty try/catch.
+            delete d.removalReply[arbiterAddr];
+            d.removalProposals[arbiterAddr] = ArbiterRegistryStorage.RemovalProposal({
+                cause:          _causeForPath(path),
+                // No digest: the evidence is the chain's own state, and a
+                // hash of nothing would be a promise of a preimage nobody
+                // can show. _requireProven reads the counter instead.
+                evidenceDigest: bytes32(0),
+                proposedAt:     block.timestamp,
+                // ⚠️ THE ACCUSER IS THE CHAIN, so this is the zero address
+                // and that is the whole guarantee: executeChainRemoval
+                // refuses anything else, and nobody's name is dirtied by an
+                // accusation no person made (a deliberate consequence of
+                // the design).
+                by:             address(0),
+                // The chain's own accusation is bound by the same rule as a
+                // person's: it lives as long as the constant in force when
+                // it was laid, not as long as whatever the constant becomes
+                // (26 August 2026).
+                ttl:            uint64(PROPOSAL_TTL_MIRROR)
+            });
+            d.chainProposalPath[arbiterAddr] = uint8(path);
+            emit RemovalProposedByChain(arbiterAddr, uint8(path), agreement, block.timestamp);
         }
     }
 
@@ -3560,6 +4939,11 @@ contract ArbiterRegistryFacet {
         if (v.submittedAt == 0) revert NoVerdict();
         if (v.finalized) revert AlreadyFinalized();
         v.frozen = true;
+        // The durable half of the press. `v.frozen` is erased by
+        // `unfreezeVerdict`, `overturnVerdict` and `resolveAppeal`, so after any
+        // of the three this verdict would read as one nobody ever touched. See
+        // `Data.govTouchedDispute`.
+        d.govTouchedDispute[agreement] = true;
         emit VerdictFrozen(agreement);
     }
 
@@ -3615,7 +4999,7 @@ contract ArbiterRegistryFacet {
 
         (bool clientOk, bytes memory clientData) = agreement.staticcall(abi.encodeWithSignature("client()"));
         (bool execOk,   bytes memory execData)   = agreement.staticcall(abi.encodeWithSignature("executor()"));
-        require(clientOk && execOk, "ArbiterRegistry: failed to read parties");
+        if (!(clientOk && execOk)) revert DealPartiesUnreadable();
         address agreementClient   = abi.decode(clientData, (address));
         address agreementExecutor = abi.decode(execData,   (address));
 
@@ -3623,17 +5007,29 @@ contract ArbiterRegistryFacet {
         bool callerIsLosingExecutor = caller == agreementExecutor &&  v.clientWins;
         if (!callerIsLosingClient && !callerIsLosingExecutor) revert NotLosingParty();
 
-        uint256 eligibleVoters = _eligibleVoterCount(d, v.arbiter, agreementClient, agreementExecutor);
-        // ⚠️ ABOVE THE TRANSFER, AND THAT IS THE ORDER, NOT THE HABIT. Below it,
-        // a corps too small to review anything would still take the appellant's
-        // money — the whole class of defect the eligibility count was written
-        // for.
-        if (eligibleVoters < APPEAL_VOTES_FLOOR) revert InsufficientArbitersForAppeal();
-
+        // ⚠️ NOTHING IS COUNTED HERE ANY MORE (23 September 2026, the owner's
+        // decision). Until this edit the line above walked `arbiterList` end to
+        // end, two cold reads a seat, to find out whether a panel could
+        // assemble — and THE APPELLANT PAID FOR THE WALK. Measured through the
+        // real diamond with cold slots, in test/AppealPanelGas.t.sol: 150 029
+        // gas at four seats, 613 805 at a hundred, 2 546 205 at five hundred.
+        // Part 2 of this branch opened the corps to anybody with five clean
+        // deals and put no ceiling on its size, so the price of challenging a
+        // verdict was set to grow without bound. An appeal only the rich can
+        // afford is not an appeal.
+        //
+        // The owner's answer was not a cheaper count but no count: the panel
+        // has three seats, arbiters take them themselves, and whether two of
+        // them are ever taken is settled at the END of the review window rather
+        // than guessed at its start. What that costs, said plainly and not
+        // discovered later: a deposit is now taken on an appeal that may find
+        // no reader at all. It comes back whole when that happens — the
+        // no-panel branch of `resolveAppeal`, which already existed and only
+        // changed its reason.
         uint256 deposit = ArbiterRegistryStorage.appealDepositFor(agreement);
         address usdc = FactoryStorage.store().usdc;
         bool ok = IUSDCFull(usdc).transferFrom(caller, address(this), deposit);
-        require(ok, "ArbiterRegistry: deposit transfer failed");
+        if (!ok) revert DepositTransferFailed();
 
         v.appealed       = true;
         v.frozen         = true;
@@ -3643,113 +5039,133 @@ contract ArbiterRegistryFacet {
         // Not for reading back the price rule — for paying back
         // THIS man. See PendingVerdict.appealDeposit.
         v.appealDeposit  = deposit;
-        // The bar THIS appeal has to clear, frozen at the moment it was paid
-        // for — the same device as the deposit one line up, and for the same
-        // reason. Two reasons it is frozen rather than recounted in
-        // `resolveAppeal`:
-        //
-        //   • the appellant pays for a review by a panel of a known size, and a
-        //     bar that moves after he paid is somebody else's rule applied to
-        //     his money;
-        //   • `resolveAppeal` is the ONLY door that unfreezes the escrow, and it
-        //     may not grow a loop over the corps — see the warning at that
-        //     function. Recounting here means walking `arbiterList` there.
-        //
-        // What freezing costs, said plainly: if the corps shrinks below the bar
-        // while the vote runs, the quorum cannot assemble, the window closes,
-        // the verdict stands and the deposit comes back whole. Nobody loses
-        // money and nothing hangs.
-        d.appealVotesRequired[agreement] = uint8(_votesRequiredFor(eligibleVoters));
+        // ⚠️ NO BAR IS FROZEN HERE ANY MORE, and the mapping that held it
+        // (`appealVotesRequired`) keeps its slot unwritten — the layout is
+        // append-only and a field is never taken back out. The bar stopped
+        // depending on the corps when the panel stopped being drawn from it,
+        // so there is nothing left to freeze: every appeal raised from today
+        // needs the same two votes, and `_appealVotesRequired` answers that
+        // for a zero. One cold SSTORE saved on every appeal, which is the
+        // appellant's money.
 
         emit AppealRaised(agreement, caller);
     }
 
-    /// How many arbiters could cast a vote on this deal's appeal right now.
+    // ⚠️ `_eligibleVoterCount` WAS DELETED HERE ON 23 SEPTEMBER 2026, together
+    // with `_votesRequiredFor`, and this note stands in their place because
+    // their absence is load-bearing. The first walked `arbiterList` to count
+    // who could vote; the second turned that count into a quorum. Both were
+    // called from `raiseAppeal`, so the corps' size was priced into every
+    // appeal — see the measurement quoted there. Nothing in this file may walk
+    // that list on a user's path again: the list has no ceiling, and the man
+    // paying is the one challenging a verdict.
+    //
+    // What replaced them is the seat count itself. The panel has
+    // APPEAL_VOTES_CAP seats, a vote IS the seat, and `voteOnAppeal` refuses
+    // the arbiter who arrives when they are gone. Who may sit is asked of the
+    // ONE man pressing the button, never of the roster.
+
+    /// When this appeal's seats open: an hour after it was raised.
     ///
-    /// ⚠️ COUNTS WHO COULD ACTUALLY VOTE, NOT WHO HOLDS A SEAT (8 September
-    /// 2026). Before the bond gate the two were one set. They stopped being one
-    /// the moment voteOnAppeal began refusing unbonded arbiters, and counting
-    /// seats here would have turned the quorum check into a lie the APPELLANT
-    /// pays for: the check passes on empty seats, the deposit is taken, and no
-    /// eligible voter exists to cast the votes. The appeal then fails by default
-    /// at the window, and the money bought nothing.
+    /// ⚠️ THE MOMENT IT WAS RAISED IS NOT STORED, AND IS NOT GOING TO BE.
+    /// `appealDeadline` is the only mark `raiseAppeal` leaves on the clock, so
+    /// the raise is read back out of it. A field of its own would be honest
+    /// arithmetic bought with one cold SSTORE on every appeal — the
+    /// appellant's money, and this whole branch exists because he was being
+    /// charged for things that are not his case.
     ///
-    /// ⚠️ AND THE TWO PARTIES ARE NOT VOTERS (17 September 2026, journal item
-    /// 199). voteOnAppeal refuses them, so counting them here would be the same
-    /// lie one seat over: a panel of three that includes the winner or the loser
-    /// of this very deal is a panel of two. Bonded means the WHOLE bond — see
-    /// `_requireBondWhole`.
+    /// ⚠️ WHAT THAT COSTS, said out loud rather than discovered at a cut. The
+    /// subtraction reads APPEAL_REVIEW_WINDOW LIVE, so a cut that changes the
+    /// window moves the computed raise moment of every appeal already standing
+    /// — the same class as PROPOSAL_TTL and the flat appeal deposit, both of
+    /// which were given frozen copies here after they bit. It is left live
+    /// because the damage is bounded and small: the window can only be changed
+    /// by a cut, an appeal lives four days, and the worst case is an arbiter
+    /// waiting that much longer or that much less for a seat. If the window is
+    /// ever made settable by a lever rather than a cut, this must be frozen per
+    /// appeal before that lever lands.
     ///
-    /// Every condition here must match a refusal in `voteOnAppeal` one for one:
-    /// whoever is refused there must not be counted here.
-    function _eligibleVoterCount(
-        ArbiterRegistryStorage.Data storage d,
-        address verdictArbiter,
-        address agreementClient,
-        address agreementExecutor
-    ) private view returns (uint256 eligibleVoters) {
-        uint256 len = d.arbiterList.length;
-        for (uint256 i = 0; i < len; i++) {
-            address seat = d.arbiterList[i];
-            if (
-                seat != verdictArbiter
-                && seat != agreementClient
-                && seat != agreementExecutor
-                && d.arbiterBond[seat] >= ARBITER_BOND
-            ) eligibleVoters++;
-        }
+    /// Only ever called where `v.appealed` is already true, so `appealDeadline`
+    /// is non-zero; the guard below is for the view, which answers for verdicts
+    /// that carry no appeal at all.
+    function _seatsOpenAt(ArbiterRegistryStorage.PendingVerdict storage v)
+        private
+        view
+        returns (uint256)
+    {
+        uint256 deadline = v.appealDeadline;
+        if (deadline < APPEAL_REVIEW_WINDOW) return APPEAL_SEAT_DELAY;
+        return deadline - APPEAL_REVIEW_WINDOW + APPEAL_SEAT_DELAY;
     }
 
-    /// The quorum for a panel of `eligibleVoters`: as many votes as there are
-    /// arbiters who could cast one, and never more than APPEAL_VOTES_CAP.
+    /// The bar a raised appeal has to clear: APPEAL_VOTES_FLOOR, two votes.
     ///
-    /// The floor is NOT applied here and must not be: a corps under the floor
-    /// gets a refusal, not a smaller quorum. This function is only ever reached
-    /// past that refusal, and returning `max(FLOOR, …)` would quietly hand a
-    /// one-man corps a quorum of two it can never reach — a paid appeal that
-    /// cannot be reviewed, which is the exact defect the refusal exists for.
-    function _votesRequiredFor(uint256 eligibleVoters) private pure returns (uint256) {
-        return eligibleVoters < APPEAL_VOTES_CAP ? eligibleVoters : APPEAL_VOTES_CAP;
-    }
-
-    /// The bar a raised appeal has to clear. Zero in storage means "raised
-    /// before this field existed" — those appeals were raised under the flat
-    /// quorum of three, so that is what they are held to.
+    /// ⚠️ A STORED VALUE STILL WINS, AND THE MAPPING IS NOT DEAD WEIGHT.
+    /// Between 18 and 23 September 2026 `raiseAppeal` froze `min(CAP,
+    /// eligible)` into it, so an appeal raised in that window carries the bar
+    /// it was paid for and is held to that and not to today's rule. Nothing
+    /// writes the mapping from 23 September on; this is its only reader.
+    ///
+    /// ⚠️ AND ZERO NOW ANSWERS TWO, WHERE IT USED TO ANSWER THREE — said out
+    /// loud because it is a loosening. Zero means one of two things: an appeal
+    /// raised from today (whose bar is the floor by the rule in force), or an
+    /// appeal raised before the mapping existed at all, under the flat quorum
+    /// of three. The second sort would now settle on two votes instead of
+    /// three. It is a window of four days that closed in September, on a
+    /// testnet, and paying for a second field to keep three alive for it would
+    /// be paying for a memory of nobody.
     function _appealVotesRequired(
         ArbiterRegistryStorage.Data storage d,
         address agreement
     ) private view returns (uint256) {
         uint256 stored = d.appealVotesRequired[agreement];
-        return stored == 0 ? APPEAL_VOTES_CAP : stored;
+        return stored == 0 ? APPEAL_VOTES_FLOOR : stored;
     }
 
-    /// @notice What a verdict's appeal needs from the corps, for a screen that
-    /// has to say "two of three" without guessing either number.
-    /// @return eligible  arbiters who could vote on this deal right now
-    /// @return required  votes this appeal needs: the number frozen when it was
-    ///                   raised, or — if no appeal stands — what would be frozen
-    ///                   if one were raised this second
-    /// @return cast      votes already in
+    /// @notice What this appeal's panel looks like right now, for a screen that
+    /// has to say "one seat left, two votes needed" without guessing a number.
+    ///
+    /// ⚠️ THE FIRST RETURN CHANGED MEANING ON 23 SEPTEMBER 2026 and was
+    /// renamed with it, deliberately rather than quietly. It used to be
+    /// `eligible` — arbiters who could vote, counted by walking the roster.
+    /// There is no roster walk any more and nothing to count: the panel is
+    /// three seats and a vote is a seat, so what a board actually needs to know
+    /// is how many are left. A front end reading the old name gets a compile
+    /// error instead of a number that means something else.
+    ///
+    /// ⚠️ A FOURTH RETURN WAS APPENDED ON 24 SEPTEMBER 2026 with the hour the
+    /// seats stay shut. A screen that can only say "no" is the refusal this
+    /// repository keeps finding on the far side of a press already decided on;
+    /// with this number it says "in forty minutes" instead.
+    ///
+    /// Appended to THIS view rather than given a view of its own, and that is a
+    /// deliberate choice about the CUT: a new function is a new selector, and a
+    /// selector added beside a facet being replaced turns one `Replace` group
+    /// into a `Replace` and an `Add`. Return values do not enter a selector —
+    /// `getAppealPanel(address)` is the same four bytes it was — so the whole
+    /// facet still goes in as a single clean Replace.
+    ///
+    /// @return seatsFree   seats on this appeal's panel nobody has taken
+    /// @return required    votes needed before it can be settled
+    /// @return cast        votes already in — the seats taken, the same number
+    /// @return seatsOpenAt when an arbiter may first take one; zero when no
+    ///                     appeal stands, because there is nothing to wait for
     function getAppealPanel(address agreement)
         external
         view
-        returns (uint256 eligible, uint256 required, uint256 cast)
+        returns (uint256 seatsFree, uint256 required, uint256 cast, uint256 seatsOpenAt)
     {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         ArbiterRegistryStorage.PendingVerdict storage v = d.pendingVerdicts[agreement];
-        RegistryStorage.AgreementRecord storage rec = RegistryStorage.store().agreements[agreement];
 
-        eligible = _eligibleVoterCount(d, v.arbiter, rec.client, rec.executor);
-        // Under the floor the honest answer is the FLOOR and not the count: no
-        // appeal can be raised at all there, and the number a screen has to
-        // print is "there are one of the two this needs", not "it needs one".
-        // `_votesRequiredFor` deliberately does not clamp — see its docstring —
-        // so the clamp belongs here, where the question is a quote rather than
-        // a bar being set.
-        required = v.appealed
-            ? _appealVotesRequired(d, agreement)
-            : (eligible < APPEAL_VOTES_FLOOR ? APPEAL_VOTES_FLOOR : _votesRequiredFor(eligible));
-        cast     = v.votesUphold + v.votesOverturn;
+        cast      = v.votesUphold + v.votesOverturn;
+        seatsFree = cast >= APPEAL_VOTES_CAP ? 0 : APPEAL_VOTES_CAP - cast;
+        // Answered for a verdict with no appeal on it too, and the answer is
+        // the same two: the bar no longer depends on anything that could have
+        // changed between the quote and the appeal.
+        required  = _appealVotesRequired(d, agreement);
+        // Read through the same helper the door reads, never recomputed here.
+        seatsOpenAt = v.appealed ? _seatsOpenAt(v) : 0;
     }
 
     /// @notice Any registered arbiter with a whole bond votes exactly once — except the one
@@ -3760,11 +5176,19 @@ contract ArbiterRegistryFacet {
         ArbiterRegistryStorage.PendingVerdict storage v = d.pendingVerdicts[agreement];
 
         if (!d.isArbiter[caller]) revert NotArbiter();
-        // Kept in step with the eligibility COUNT in raiseAppeal above: whoever
-        // is refused here must not have been counted there, or an appellant
-        // pays a deposit for a quorum that cannot assemble.
-        // New work: a whole bond.
-        _requireBondWhole(d, caller);
+        // ⚠️ THIS IS THE ONLY PLACE THE QUESTION IS ASKED (23 September 2026).
+        // It used to be asked twice — here, and over every seat in the roster
+        // inside `raiseAppeal` — and the two had to be kept in step or the
+        // appellant paid for a panel that could not assemble. The roster walk
+        // is gone, so there is nothing left to keep in step.
+        //
+        // ⚠️ ONE CASE OF HIS OWN, CARRIED TO A VERDICT THAT STOOD — the
+        // owner's replacement for the bond that used to stand here. A free seat
+        // plus a paid vote is a hole anybody with addresses could work; a
+        // record of work is not something a fresh wallet can bring. Hand-seated
+        // arbiters are exempt, and on the day this lands that exemption is the
+        // only reason an appeal can be reviewed at all. See `_mayVoteOnAppeals`.
+        if (!_mayVoteOnAppeals(d, caller)) revert NoAdjudicatedCase();
         if (!v.appealed) revert NoAppeal();
         if (v.appealResolved) revert AppealAlreadyResolved();
         if (caller == v.arbiter) revert CannotVoteOnOwnVerdict();
@@ -3777,7 +5201,32 @@ contract ArbiterRegistryFacet {
         RegistryStorage.AgreementRecord storage rec = RegistryStorage.store().agreements[agreement];
         if (caller == rec.client || caller == rec.executor) revert CannotVoteOnOwnDeal();
         if (block.timestamp >= v.appealDeadline) revert AppealWindowClosed();
+        // ⚠️ AND NOT IN THE FIRST HOUR (24 September 2026, the owner's
+        // decision). Checked BELOW the window and ABOVE the seat count, so that
+        // an arbiter who is too early hears "too early" and not "full": the two
+        // refusals send him away for very different lengths of time.
+        uint256 openAt = _seatsOpenAt(v);
+        if (block.timestamp < openAt) revert AppealSeatsNotOpenYet(openAt);
         if (d.hasVotedAppeal[agreement][caller]) revert AlreadyVoted();
+        // ⚠️ THREE SEATS, AND THE THIRD IS THE LAST (23 September 2026, the
+        // owner's decision). Whoever presses first takes a seat; the fourth
+        // arbiter to arrive is refused, and the appeal is off the board.
+        //
+        // A VOTE IS THE SEAT — there is no separate claim, and that is a
+        // decision and not an omission:
+        //
+        //   • a seat booked and never voted from is a seat nobody else can
+        //     take. Three addresses that sit down and stay silent would kill
+        //     every appeal in the protocol for the price of the gas, and an
+        //     appeal is the only check a wrong verdict has;
+        //   • the panel's pay is already per vote cast, so "who really sat" and
+        //     "who gets paid" stay ONE set. Two records of the same fact agree
+        //     only until the first edit.
+        //
+        // The count is `votesUphold + votesOverturn` and not a field of its
+        // own, for the same reason: the two are the same number by
+        // construction, and the second copy would be a mirror.
+        if (v.votesUphold + v.votesOverturn >= APPEAL_VOTES_CAP) revert AppealPanelFull();
 
         d.hasVotedAppeal[agreement][caller] = true;
         if (overturn) {
@@ -3789,11 +5238,12 @@ contract ArbiterRegistryFacet {
         emit AppealVoteCast(agreement, caller, overturn);
     }
 
-    /// @notice Settles the appeal vote. It may be called as soon as this
-    /// appeal's own quorum is reached (`appealVotesRequired`, frozen when it was
-    /// raised), without waiting for the window to end. If the window closes
-    /// without a quorum, the appeal is rejected by default (nothing hangs
-    /// forever).
+    /// @notice Settles the appeal vote. It may be called as soon as the votes
+    /// cast both reach the bar and point one way, without waiting for the
+    /// window to end; a tie waits, because the seat still open could break it.
+    /// If the window closes with fewer than APPEAL_VOTES_FLOOR arbiters having
+    /// sat down, the appeal is rejected by default and the deposit goes home
+    /// whole (nothing hangs forever).
     ///
     /// ⚠️ THE OUTCOME IS A STRICT MAJORITY OF THE VOTES CAST, and it is read
     /// off the votes rather than off the quorum on purpose (18 September 2026,
@@ -3841,20 +5291,32 @@ contract ArbiterRegistryFacet {
         if (v.appealResolved) revert AppealAlreadyResolved();
 
         uint256 votes = v.votesUphold + v.votesOverturn;
-        // The bar this appeal was raised under, not today's corps: see the
-        // write in `raiseAppeal` for why it is frozen and what that costs.
-        bool quorumReached = votes >= _appealVotesRequired(d, agreement);
-        bool windowClosed  = block.timestamp >= v.appealDeadline;
-        if (!quorumReached && !windowClosed) revert AppealWindowNotClosed();
+        // THE PANEL IS WHOEVER SAT DOWN, and two of them are a panel. The bar
+        // is a constant now (see `_appealVotesRequired`), except for the
+        // handful of appeals raised in the five days the bar was frozen per
+        // appeal.
+        bool panelFormed  = votes >= _appealVotesRequired(d, agreement);
+        bool windowClosed = block.timestamp >= v.appealDeadline;
+        // ⚠️ A TIE IS NOT A RESULT, SO IT IS NOT A REASON TO SETTLE EARLY
+        // (23 September 2026, and it arrived WITH the seats rather than being
+        // noticed after). Anyone may press this door. With the bar at two and
+        // a third seat still open, one vote each way would otherwise let the
+        // side the verdict favours press at exactly the wrong moment: a tie
+        // upholds, so rushing this call at 1–1 buys the win the third arbiter
+        // might have taken away. Holding a tie back to the window costs the
+        // honest case nothing — the third vote breaks it and settles it the
+        // same second, and three votes can never tie.
+        bool settledEarly = panelFormed && v.votesOverturn != v.votesUphold;
+        if (!settledEarly && !windowClosed) revert AppealWindowNotClosed();
 
         v.appealResolved = true;
         v.frozen         = false;
 
-        bool overturn = quorumReached && v.votesOverturn > v.votesUphold;
+        bool overturn = panelFormed && v.votesOverturn > v.votesUphold;
         address usdc  = FactoryStorage.store().usdc;
         uint256 deposit = _depositOf(v);
 
-        if (quorumReached) {
+        if (panelFormed) {
             // Integer division, the remainder to the bank: at most `votes - 1`
             // base units, and never a unit invented or lost — share × votes +
             // remainder is the deposit exactly.
@@ -3865,7 +5327,11 @@ contract ArbiterRegistryFacet {
             if (remainder != 0) d.vaultBalance += remainder;
             emit AppealPanelPaid(agreement, perVoter, votes, remainder);
         } else {
-            // The window closed with nobody's review, so the deposit bought nothing.
+            // The window closed on fewer than two arbiters, so the case was
+            // never really read and the deposit bought nothing. Since
+            // 23 September 2026 this is also where a corps too small to review
+            // anything lands — `raiseAppeal` used to refuse those at the door
+            // and no longer counts, so the refusal became a refund.
             _payAppellant(d, usdc, agreement, v.appellant, deposit);
             emit AppealDepositReturned(agreement, v.appellant, deposit);
         }
@@ -4015,6 +5481,18 @@ contract ArbiterRegistryFacet {
                 uint256 overturns = d.overturnedVerdicts[slashedArbiter];
                 if (overturns > 0) d.overturnedVerdicts[slashedArbiter] = overturns - 1;
 
+                // ⚠️ AND THE SAME TRUTH HAS TO REACH FINALIZATION, which runs
+                // later and in another function (21 September 2026). The
+                // counter above is corrected here and now; the overturn RATE is
+                // filed when this dispute closes, by `finalizeVerdict`, and
+                // `v.overturned` will still be true then — the line three above
+                // this block sets it while flipping the outcome back to the
+                // arbiter's own ruling. Without this mark the panel's acquittal
+                // would be filed as an overturn against him, and two such
+                // acquittals inside the window would suspend and accuse the man
+                // his colleagues twice found right.
+                d.verdictVindicated[agreement] = true;
+
                 // ⚠️ VINDICATION MUST REACH THE CHAIN'S OWN ACCUSATION, not
                 // just the counter (18 August 2026) — and the reason is now
                 // STRONGER than the arithmetic first written here, because
@@ -4158,16 +5636,24 @@ contract ArbiterRegistryFacet {
     /// people's escrow. It becomes claimable only as `creditDisputeFee` brings
     /// real money in.
     ///
-    /// The bond is drawn below the norm on purpose and not topped up here: from
-    /// this line the seat refuses NEW work (`_requireBondWhole`) until its
-    /// holder or his forfeited share restores it, and keeps finishing the cases
-    /// it holds (`_requireBondToFinish`).
+    /// ⚠️ THE BOND IT DRAWS IS THIS CASE'S OWN (22 September 2026), never a
+    /// standing one — there is no standing one. The arbiter put it down when he
+    /// took this deal, priced by `appealDepositFor(deal)`, which is the very
+    /// function that priced the deposit being refunded: the bond covers exactly
+    /// one refund to one appellant, and on an unchanged pot it covers it to the
+    /// unit. That is the whole of the owner's sizing argument, and it holds by
+    /// arithmetic rather than by two constants agreeing.
+    ///
+    /// What is left of it after this — nothing, in the ordinary case — goes
+    /// home to him at `finalizeVerdict`. His OTHER cases are untouched: each
+    /// carries its own money, so one wrong verdict cannot leave the next one
+    /// underfunded, which is the failure mode the old "sagging seat" machinery
+    /// existed to paper over.
     ///
     /// ⚠️ THE BOND'S SHARE OF THE BURDEN IS FIXED HERE, at the moment the
     /// verdict is overturned: whatever it holds now, up to the deposit. When
     /// the fee arrives, the treasury's 20% of it covers only what the
-    /// arbiter's 80% and THIS advance left uncovered; a bond topped up in
-    /// between is not drawn a second time by the capped fee callback.
+    /// arbiter's 80% and THIS advance left uncovered.
     ///
     /// ⚠️ THE BANK IS SPENT ONLY ABOVE THE DEBTS IT ALREADY OWES
     /// (`bankAboveDebts`), so an older appellant's debt is not overtaken by a
@@ -4185,13 +5671,14 @@ contract ArbiterRegistryFacet {
     ) private {
         uint256 fromBond;
         if (arbiterAddr != address(0)) {
-            uint256 bond = d.arbiterBond[arbiterAddr];
+            ArbiterRegistryStorage.CaseBond storage cb = d.caseBonds[agreement];
+            uint256 bond = cb.amount;
             fromBond = owed < bond ? owed : bond;
             if (fromBond != 0) {
-                d.arbiterBond[arbiterAddr] = bond - fromBond;
-                // "Sagging", as opposed to "never posted", even at zero.
-                d.bondDrawnByAppeal[arbiterAddr] = true;
+                // uint96 cannot truncate: fromBond <= bond, already a uint96.
+                cb.amount = uint96(bond - fromBond);
                 owed -= fromBond;
+                emit CaseBondForfeited(agreement, arbiterAddr, fromBond);
             }
         }
 
@@ -4298,6 +5785,13 @@ contract ArbiterRegistryFacet {
             // The anchor and the no-response record are untouched — see releaseDisputeClaim.
             delete d.disputeClaims[agreement];
             if (d.openClaimCount[claimedArbiter] > 0) d.openClaimCount[claimedArbiter]--;
+            // The slot only if he never signed: `submitVerdict` already freed
+            // it on the signature, and freeing it twice would let one arbiter
+            // read two cases at once. Read BEFORE the stuck-verdict branch
+            // below deletes the record it is read from.
+            if (d.pendingVerdicts[agreement].submittedAt == 0) {
+                _freeJudgingSlot(d, claimedArbiter);
+            }
         }
         // Auto-clearing a stuck verdict: if the Agreement left the dispute through a
         // timeout while the verdict is not finalized and not executing right now, drop it.
@@ -4320,14 +5814,29 @@ contract ArbiterRegistryFacet {
         if (!v.executing) {
             // A counter for both: the dispute ended with nobody, or no time, to
             // judge it. Written straight into the namespaced reputation storage —
-            // the same device this file already uses to reset XP on a demotion
-            // (_recordArbiterMistake).
+            // the same device this file already uses to slash XP on a proven
+            // overturn (_slashArbiterXP).
+            //
+            // ⚠️ THE EXAMPLE WAS SWAPPED ON 21 SEPTEMBER 2026. It used to point at
+            // "reset XP on a demotion (_recordArbiterMistake)", which is no longer
+            // a thing this file does at all — the reset is gone. The TECHNIQUE
+            // being justified is unchanged (one facet writing a neighbouring
+            // namespace directly, no cross-facet call, no selector); only the
+            // living example of it had to be replaced by one that still exists.
             RegistryStorage.AgreementRecord storage rec = RegistryStorage.store().agreements[agreement];
             if (rec.client != address(0)) {
                 ReputationStorage.Data storage rep = ReputationStorage.data();
                 rep.unresolvedDisputes[rec.client]   += 1;
                 rep.unresolvedDisputes[rec.executor] += 1;
             }
+
+            // ⚠️ AND NOT ONE INSTRUCTION IS SPENT ON THE CASE BOND HERE. The
+            // deal ended with nobody judging it, so that bond covers nothing
+            // and is the arbiter's to collect — but this whole function runs
+            // under the clone's CLAIM_CLEAR_GAS cap (200 000, unraisable), and
+            // a refund on this path was measured at +46 000 gas. The record
+            // stays where it is and he takes it with `withdrawCaseBond`; see
+            // `_releaseCaseBond` for the measurement.
 
             uint256 bounty = d.disputeBounty[agreement];
             if (bounty > 0) {
@@ -4375,7 +5884,7 @@ contract ArbiterRegistryFacet {
         if (agreement == address(0)) revert ArbiterZeroAddress();
         // Make sure the Agreement is already in a terminal state (not DISPUTED = 4)
         (bool ok, bytes memory st) = agreement.staticcall(abi.encodeWithSignature("status()"));
-        require(ok, "ArbiterRegistry: status read failed");
+        if (!ok) revert AgreementStatusUnreadable();
         require(abi.decode(st, (uint8)) != 4, "ArbiterRegistry: agreement still disputed");
         delete ArbiterRegistryStorage.data().pendingVerdicts[agreement];
     }

@@ -437,8 +437,8 @@ contract DisputeSettlementTest is Test {
         _assertDisputeFeeSkippedNotEmitted();
 
         assertEq(usdc.balanceOf(client) - clientBefore, 194_000_000, "client gets 97%");
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 4_800_000, "arbiter 80% of the fee");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 1_200_000, "treasury 20% of the fee");
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 5_400_000, "arbiter 90% of the fee");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 600_000, "treasury 10% of the fee");
     }
 
     /// The same happy path, but the executor wins — the payout goes to them rather
@@ -455,8 +455,8 @@ contract DisputeSettlementTest is Test {
         _assertDisputeFeeSkippedNotEmitted();
 
         assertEq(usdc.balanceOf(executor) - executorBefore, 194_000_000, "executor gets 97%");
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 4_800_000, "arbiter 80% of the fee");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 1_200_000, "treasury 20% of the fee");
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 5_400_000, "arbiter 90% of the fee");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 600_000, "treasury 10% of the fee");
     }
 
     /// End to end: the counters mean nothing unless real USDC stand behind them on
@@ -472,11 +472,11 @@ contract DisputeSettlementTest is Test {
         uint256 arbBefore = usdc.balanceOf(arbiterAddr);
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
-        assertEq(usdc.balanceOf(arbiterAddr) - arbBefore, 4_800_000, "reward must actually reach the arbiter's wallet");
+        assertEq(usdc.balanceOf(arbiterAddr) - arbBefore, 5_400_000, "reward must actually reach the arbiter's wallet");
 
         uint256 recipientBefore = usdc.balanceOf(feeRecipient);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-        assertEq(usdc.balanceOf(feeRecipient) - recipientBefore, 1_200_000, "treasury slice must actually reach the fee recipient");
+        assertEq(usdc.balanceOf(feeRecipient) - recipientBefore, 600_000, "treasury slice must actually reach the fee recipient");
     }
 
     // ============================================================
@@ -501,12 +501,17 @@ contract DisputeSettlementTest is Test {
         _submitAndFinalize(a, true);
         _assertDisputeFeeSkippedEmitted(6_000_000);
 
+        // The bond this case carries came home at finalization, so the
+        // diamond's balance FELL by it while the fee never arrived. Named, or
+        // the subtraction below underflows (22 September 2026).
+        uint256 caseBondBack = 20_000_000;
+
         // The credit failed, so the fee is NOT taken at all. The winner gets the
         // whole pot and not a cent settles on the diamond: from there it could never
         // be recovered, as there is no rescue function.
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute must still close");
         assertEq(usdc.balanceOf(client) - clientBefore, 200_000_000, "no fee taken, winner gets the whole pot");
-        assertEq(usdc.balanceOf(address(diamond)) - diamondBefore, 0, "not a cent may be stranded on the diamond");
+        assertEq(usdc.balanceOf(address(diamond)) + caseBondBack - diamondBefore, 0, "not a cent may be stranded on the diamond");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "nothing credited");
         assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
     }
@@ -532,7 +537,7 @@ contract DisputeSettlementTest is Test {
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute must still close");
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
-            4_800_000,
+            5_400_000,
             "the reward stays credited and withdrawable later"
         );
 
@@ -1332,7 +1337,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        assertEq(ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 7_600_000, "top-up to reach $10");
+        assertEq(ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 7_300_000, "top-up to reach $10");
     }
 
     /// The pot is large enough — the arbiter gets $10 by themselves, so the top-up is
@@ -1360,7 +1365,14 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.raiseDispute();
 
-        ArbiterVaultFacet(address(diamond)).setArbiterFloor(450_000_000);
+        // ⚠️ $450 → $500 ON 22 SEPTEMBER 2026, and the scene keeps its point.
+        // The arbiter's share went from 80% to 90%, so 90% of the CAPPED $500
+        // fee is $450 and a $450 floor would need no top-up at all — the scene
+        // would pass on zero and prove nothing. At a $500 floor the capped fee
+        // leaves $50 to find, while the raw 3% of a $30 000 pot ($900, 90% of
+        // which is $810) would leave nothing: the two answers still differ, and
+        // that difference is what this measures.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(500_000_000);
 
         assertEq(a.disputeFee(), 500_000_000, "setup: fee is capped at $500");
         assertEq(
@@ -2037,12 +2049,14 @@ contract DisputeSettlementTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
+    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
+    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
+    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
+    /// name is kept because every scene in this file calls it.
     function _bondSeat(address who) internal {
-        vm.store(
-            address(diamond),
-            keccak256(abi.encode(who, uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 12)),
-            bytes32(uint256(50_000_000))
-        );
+        usdc.mint(who, 1_000_000_000);
+        vm.prank(who);
+        usdc.approve(address(diamond), type(uint256).max);
     }
 
 }

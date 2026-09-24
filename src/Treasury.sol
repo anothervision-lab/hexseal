@@ -217,7 +217,44 @@ contract Treasury {
 
     uint256 public constant FOUNDATION_BPS_PRE_DAO  = 7_000; // 70%
     uint256 public constant FOUNDATION_BPS_POST_DAO = 2_000; // 20%
-    uint256 public constant DAO_THRESHOLD           = 100_000; // uniqueActiveUsers
+    /// ⚠️ DEAD MIRROR — THIS NUMBER IS NOT THE PROTOCOL'S AND HAS NOT BEEN
+    /// SINCE 27 JULY 2026. Marked, not deleted, 20 September 2026.
+    ///
+    /// The live threshold is 1 000 since 20 September 2026 (10 000 before that,
+    /// 100 000 before that) and lives in ArbiterRegistryFacet, where
+    /// `activateDAO()` reads it; ArbiterAccountabilityFacet carries a second
+    /// copy of it (`DAO_THRESHOLD_MIRROR`), pinned equal by a test. This is the
+    /// THIRD copy, it says 100 000, and nothing pins it to anything — the gap
+    /// is now two orders of magnitude, not one.
+    ///
+    /// ⚠️ AND 100 000 IS NOT A STALE LINE IN A SOURCE FILE — IT IS THE NUMBER
+    /// RUNNING ON CHAIN. This contract is deployed and immutable; the deployed
+    /// bytecode compares against 100 000 and always will. So the source and the
+    /// chain AGREE here, and changing the source to 1 000 would break that
+    /// agreement without moving the chain one bit. That is why the line below
+    /// is left alone every time the protocol's number moves.
+    ///
+    /// ⚠️ WHY IT IS NOT DELETED, and the reason is not caution:
+    ///
+    ///   1. DELETING IT HERE CHANGES NOTHING ON CHAIN. This contract is
+    ///      deployed. A `public constant` is compiled into its runtime code and
+    ///      into its ABI as a getter; the copy that is deployed will keep
+    ///      answering 100 000 for ever, whatever this file says. Editing the
+    ///      source to make the number go away would only make the source stop
+    ///      describing the contract that exists — the same class of harm as a
+    ///      stale address in a document, and harder to notice.
+    ///   2. IT IS NOT UNREACHABLE. `withdrawReserve` below still gates on it.
+    ///      That door is not dead code: it pays whatever this contract still
+    ///      holds to the DAO address. It is no longer fed — the fee recipient
+    ///      has been `ProtocolTreasury` since 27 July 2026 — but "receives
+    ///      nothing new" is not "holds nothing", and a reader who saw the
+    ///      constant deleted would reasonably conclude the door was gone too.
+    ///
+    /// WHAT WOULD ACTUALLY RETIRE IT: draining this contract and saying so, or
+    /// a cut that stops routing to it at all. Neither is an edit to this line.
+    /// Until then the honest state is "a live door with a wrong number on a
+    /// contract nothing feeds", and that is what this comment says.
+    uint256 public constant DAO_THRESHOLD           = 100_000; // uniqueActiveUsers — DEAD MIRROR, see above
 
     uint256 private constant BPS = 10_000;
 

@@ -937,6 +937,12 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
             IDiamondCut(address(d)).diamondCut(remove, address(0), "");
         }
 
+        // The three application doors this checkout stopped building on
+        // 22 September 2026, put back where the census still has them. See
+        // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
+        // applications facet that is already here rather than on a stub.
+        _mountRemovedApplicationDoors(address(d), census);
+
         for (uint256 i = 0; i < census.length; i++) {
             require(
                 IDiamondLoupe(address(d)).facetAddress(census[i]) != address(0),

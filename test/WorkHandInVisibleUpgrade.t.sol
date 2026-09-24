@@ -118,7 +118,7 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
     /// device, with the same argument, is in test/BoardFeeDeliveryUpgrade.t.sol
     /// and test/JobBoardApplicantGateUpgrade.t.sol.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](5);
+        sels = new bytes4[](6);
         sels[0] = bytes4(keccak256("getOpenDealCount(address)"));
         // The four of 18 September 2026, "a direct hire is an offer": the road
         // that registers a deal whose executor has only been named, the
@@ -128,6 +128,10 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
         sels[2] = bytes4(keccak256("notifyOfferAccepted()"));
         sels[3] = bytes4(keccak256("syncOfferAcceptance(address)"));
         sels[4] = bytes4(keccak256("isOfferPending(address)"));
+        // The one of 20 September 2026: how many deals are open across the whole
+        // protocol right now, which is the first of the three terms the handover
+        // reads and the only one of them that can go DOWN.
+        sels[5] = bytes4(keccak256("getLiveDeals()"));
     }
 
     /// The allowance held to its own two conditions.
@@ -447,6 +451,12 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
             remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
             IDiamondCut(address(d)).diamondCut(remove, address(0), "");
         }
+
+        // The three application doors this checkout stopped building on
+        // 22 September 2026, put back where the census still has them. See
+        // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
+        // applications facet that is already here rather than on a stub.
+        _mountRemovedApplicationDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

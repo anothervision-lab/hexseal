@@ -447,6 +447,74 @@ contract ArbiterRemovalForCauseTest is Test {
         assertFalse(_isArbiterRaw(arbiter), "removed on a recorded silence");
     }
 
+    // ---------- THE KEY TO THE CORPS ----------
+
+    /// ⚠️ THE LOCK ON A NEW RULE OF 20 SEPTEMBER 2026, AND ON A RULE THIS FILE
+    /// ARGUED AGAINST FOR A MONTH. `_performRemoval` used to leave the CLEAN
+    /// streak alone on purpose — judging and delivering are different skills,
+    /// and a bad judge is not thereby a bad executor. That argument has not
+    /// changed and is not what changed.
+    ///
+    /// WHAT CHANGED IS THE LOCK. The way back into the corps used to be guarded
+    /// by experience: the automatic path reset a punished arbiter to a flat 2500,
+    /// below the entrance threshold of 3000, so he had to earn his way back.
+    /// (That reset, `DEMOTION_XP_RESET`, was itself taken out on 21 September
+    /// 2026 — named here in the past tense because this paragraph is a history
+    /// of the lock, and the constant is no longer anywhere to be read.)
+    /// The entrance stopped
+    /// asking for experience on 20 September 2026 and asks only for the clean
+    /// streak — so without this line a man removed for cause would walk back in
+    /// the same minute on the streak he already had, pay a fresh bond and be
+    /// seated. The streak is the key now, and a removal takes the key.
+    ///
+    /// The mutation this is written against: delete the cleanStreak write in
+    /// `_performRemoval` and leave everything else alone.
+    function test_ARemovalForCauseTakesTheKeyToTheCorps() public {
+        _setCleanStreak(arbiter, 9);
+        (, uint256 before, , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
+        assertEq(before, 9, "setup: he carries a run long enough to open the door");
+
+        _proposeAndWait(arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, PROPOSAL_WORDS);
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, address(0), PROPOSAL_WORDS
+        );
+
+        assertFalse(_isArbiterRaw(arbiter), "setup: the removal happened");
+
+        (, uint256 after_, , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
+        assertEq(after_, 0, "a removal for cause takes the key to the corps");
+    }
+
+    /// And it takes ONLY the key. Experience is the record of work done, and a
+    /// punishment that edits the record is not a punishment, it is a forgery —
+    /// so the XP a removed man earned stays exactly where it was.
+    ///
+    /// Written as a pair with the scene above deliberately: "zero the streak" is
+    /// one line away from "zero the person", and nothing else in the suite would
+    /// notice the second.
+    ///
+    /// ⚠️ AND SINCE 21 SEPTEMBER 2026 THIS IS NO LONGER THE MANUAL DOOR'S OWN
+    /// RULE — it is BOTH doors' rule. The automatic path used to disagree: it
+    /// wrote a flat 2500 over whatever the man had earned. That reset is gone, so
+    /// this file's argument won on the other door too, and its twin over there is
+    /// `Diamond.t.sol:testAutomaticDemotionLeavesTheRecordOfWorkAlone` (formerly
+    /// `testArbiterDemotionResetIsFlatNotSubtractive`, which asserted the exact
+    /// opposite). The two scenes must not be merged: the doors are different code
+    /// in different facets, and one of them going back to rewriting the record
+    /// must redden on its own bench.
+    function test_ARemovalForCauseLeavesTheRecordOfWorkAlone() public {
+        _setCleanStreak(arbiter, 9);
+        _setXP(arbiter, 4_321);
+
+        _proposeAndWait(arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, PROPOSAL_WORDS);
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, address(0), PROPOSAL_WORDS
+        );
+
+        (uint256 xp, , , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
+        assertEq(xp, 4_321, "the stage is history and history is not rewritten by a removal");
+    }
+
     // ---------- THE FULL DAO EXPRESSION ----------
 
     function test_DaoThresholdMatchesRegistry() public {
@@ -2268,6 +2336,34 @@ contract ArbiterRemovalForCauseTest is Test {
     function _setStreak(address who, uint256 n) internal {
         bytes32 base = bytes32(uint256(ARB_BASE) + SLOT_MISTAKE_STREAK);
         vm.store(address(acc), keccak256(abi.encode(who, uint256(base))), bytes32(n));
+    }
+
+    /// ⚠️ A DIFFERENT STREAK IN A DIFFERENT NAMESPACE from `_setStreak` above.
+    /// That one is the run of JUDICIAL MISTAKES (ArbiterRegistryStorage); this
+    /// one is the run of deals DELIVERED without a dispute (ReputationStorage),
+    /// and since 20 September 2026 it is the only key to the corps. The two
+    /// share a word and nothing else.
+    ///
+    /// cleanStreak is field 9 of ReputationStorage.Data — one past
+    /// uniqueActiveUsers, which this file already pins at 8 by sweeping. The
+    /// write is read back through the facet's own getter rather than trusted, so
+    /// a reordered struct fails here with a reason instead of writing into a
+    /// neighbour.
+    function _setCleanStreak(address who, uint256 n) internal {
+        vm.store(
+            address(acc),
+            keccak256(abi.encode(who, uint256(REP_BASE) + SLOT_UNIQUE_ACTIVE_USERS + 1)),
+            bytes32(n)
+        );
+        (, uint256 readBack, , , , , , , , , , , , ) = acc.getArbiterStanding(who);
+        assertEq(readBack, n, "the cleanStreak offset in ReputationStorage.Data has moved");
+    }
+
+    /// xp is field 0 of ReputationStorage.Data — the namespace base itself.
+    function _setXP(address who, uint256 n) internal {
+        vm.store(address(acc), keccak256(abi.encode(who, uint256(REP_BASE))), bytes32(n));
+        (uint256 readBack, , , , , , , , , , , , , ) = acc.getArbiterStanding(who);
+        assertEq(readBack, n, "the xp offset in ReputationStorage.Data has moved");
     }
 
     /// Seats the chief as an arbiter, by the same single means setUp seats `arbiter`:

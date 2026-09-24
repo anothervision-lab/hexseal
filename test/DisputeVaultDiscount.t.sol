@@ -32,7 +32,10 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
 
     uint256 constant ARBITER_FLOOR   = 10_000_000; // $10, the facet's default
     uint256 constant DEFAULT_DISCOUNT = 3_000_000; //  $3, the facet's default
-    uint256 constant FULL_TOPUP      =  7_600_000; // $10 floor less $2.40 of levy on a $100 pot
+    uint256 constant FULL_TOPUP      =  7_300_000; // $10 floor less $2.70 of levy on a $100 pot
+    // ⚠️ $2.40 → $2.70 on 22 September 2026: the arbiter's share of the dispute
+    // fee went from 80% to 90%, so the levy on a $100 pot reaches further into
+    // the floor and the party makes up less of it.
 
     // ------------------------------------------------------------
     //  helpers
@@ -96,15 +99,15 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _activate(a);
         vm.prank(client); a.raiseDispute();
 
-        assertEq(_quote(a), FULL_TOPUP - DEFAULT_DISCOUNT, "$7.60 less the bank's $3");
+        assertEq(_quote(a), FULL_TOPUP - DEFAULT_DISCOUNT, "$7.30 less the bank's $3");
 
         uint256 before = usdc.balanceOf(client);
         vm.prank(client);
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
-        assertEq(before - usdc.balanceOf(client), 4_600_000, "the party paid $4.60, not $7.60");
-        assertEq(_bounty(a), FULL_TOPUP, "the arbiter is still promised the whole $7.60");
+        assertEq(before - usdc.balanceOf(client), 4_300_000, "the party paid $4.30, not $7.30");
+        assertEq(_bounty(a), FULL_TOPUP, "the arbiter is still promised the whole $7.30");
         assertEq(_subsidy(a), DEFAULT_DISCOUNT, "of which $3 came from the bank");
         assertEq(_vault(), 47_000_000, "and the bank is $3 lighter this instant");
         _assertDiamondBalances("discounted top-up funded");
@@ -120,9 +123,15 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertEq(_subsidy(a), 0, "the reservation is gone with the dispute");
         _assertDiamondBalances("verdict executed");
 
+        // ⚠️ A DELTA AND NOT A BALANCE SINCE 22 SEPTEMBER 2026. The arbiter now
+        // carries a purse of his own — the rig funds him so he can post the
+        // bond each CASE asks for — and his bond for this deal came home at
+        // finalization, so an absolute balance here would be measuring the rig's
+        // generosity. What the scene is about is what the REWARD paid out.
+        uint256 hisBefore = usdc.balanceOf(arbiterAddr);
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
-        assertEq(usdc.balanceOf(arbiterAddr), ARBITER_FLOOR, "and it came out in real money");
+        assertEq(usdc.balanceOf(arbiterAddr) - hisBefore, ARBITER_FLOOR, "and it came out in real money");
         assertEq(_vault(), 47_000_000, "the bank did not get its $3 back: it was spent");
         _assertDiamondBalances("after the arbiter was paid");
     }
@@ -221,8 +230,8 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     /// first is anywhere near a verdict -- which is the whole point: the money
     /// is spoken for at the promise, not at the payout.
     ///
-    /// Without the reservation both quotes would read $4.60, both parties would
-    /// pay $4.60, and the second arbiter would be short three dollars of the
+    /// Without the reservation both quotes would read $4.30, both parties would
+    /// pay $4.30, and the second arbiter would be short three dollars of the
     /// floor at a payout happening days later, for a reason having nothing to
     /// do with his dispute.
     function testTwoDisputesCannotBePromisedTheSameThreeDollars() public {
@@ -319,7 +328,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         vm.prank(client);
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         uint256 paid = before - usdc.balanceOf(client);
-        assertEq(paid, FULL_TOPUP - DEFAULT_DISCOUNT, "$4.60 out of his own pocket");
+        assertEq(paid, FULL_TOPUP - DEFAULT_DISCOUNT, "$4.30 out of his own pocket");
         _trackDeal(address(a));
         assertEq(_vault(), 0, "reserved");
 
@@ -331,7 +340,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         assertEq(_subsidy(a), 0, "and the reservation is cleared");
         assertEq(_bounty(a), 0);
         // The wallet gains the escrow share the timeout split off, plus HIS OWN
-        // $4.60 -- and nothing else. The bank's $3 went home, not to him.
+        // $4.30 -- and nothing else. The bank's $3 went home, not to him.
         assertEq(
             usdc.balanceOf(client) - afterFunding,
             (AMOUNT - AMOUNT / 4) + paid,
@@ -396,15 +405,15 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         vm.warp(block.timestamp + FINALIZE_DELAY + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
 
-        // Its $3 back, PLUS the arbiter's forfeited 80% of the $3 dispute fee
-        // on this $100 pot ($2.40): since 17 September 2026 an overturned
+        // Its $3 back, PLUS the arbiter's forfeited 90% of the $3 dispute fee
+        // on this $100 pot ($2.70): since 17 September 2026 an overturned
         // arbiter's share goes to the bank, no longer to the treasury. Both
         // literals, neither read off the contract.
-        assertEq(_vault(), DEFAULT_DISCOUNT + 2_400_000, "the bank got its share back, and the forfeited fee share on top");
+        assertEq(_vault(), DEFAULT_DISCOUNT + 2_700_000, "the bank got its share back, and the forfeited fee share on top");
         assertEq(
             ArbiterVaultFacet(address(diamond)).getRefundableBounty(client),
             FULL_TOPUP - DEFAULT_DISCOUNT,
-            "the payer is owed his $4.60 and not a cent of the bank's $3"
+            "the payer is owed his $4.30 and not a cent of the bank's $3"
         );
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
@@ -474,8 +483,8 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
     //  6. A discount larger than the top-up
     // ------------------------------------------------------------
 
-    /// $300 pot: the levy already yields the arbiter $7.20, so the whole top-up
-    /// is $2.80 -- less than the $3 discount. The subtraction must not go
+    /// $300 pot: the levy already yields the arbiter $8.10, so the whole top-up
+    /// is $1.90 -- less than the $3 discount. The subtraction must not go
     /// negative, and the top-up must not become free: zero from
     /// quoteDisputeTopUp already means "there is nothing to pay", which is what
     /// fundDispute answers with TopUpNotNeeded and what the deal screen answers
@@ -484,7 +493,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _fundVault(50_000_000);
         Agreement a = _disputedDeal(client, 300_000_000);
 
-        uint256 gross = 2_800_000; // $10 floor less 80% of the $9 levy
+        uint256 gross = 1_900_000; // $10 floor less 90% of the $9 levy
         uint256 quoted = _quote(a);
         assertEq(quoted, 1, "the party still pays, even if it is the smallest coin there is");
         assertGt(quoted, 0, "and the quote never collapses into the 'nothing to pay' zero");
@@ -493,7 +502,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
         _trackDeal(address(a));
 
-        assertEq(_bounty(a), gross, "the arbiter is still promised the whole $2.80");
+        assertEq(_bounty(a), gross, "the arbiter is still promised the whole $1.90");
         assertEq(_subsidy(a), gross - 1, "the bank covered all of it but the last coin");
         assertEq(_vault(), 50_000_000 - (gross - 1));
         _assertDiamondBalances("a discount bigger than the need");

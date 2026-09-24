@@ -656,7 +656,59 @@ contract DeployFullSelectorsTest is Test {
         // the chain yet", which is why they are corrected here rather than left:
         // a note that quietly stops being true is the failure this whole pair
         // of stands exists to catch.
-        assertEq(totalRouted, 256, "diamond should route exactly 256 selectors total");
+        // 256 -> 258 on 20 September 2026, the handover's SECOND condition:
+        // getLiveDeals on the deal registry (how many deals are open across the
+        // protocol right now, the O(1) twin of getActive().length +
+        // getDisputed().length) and getHandoverReadiness on the accountability
+        // facet (every term of the condition, its floor and the verdict, out of
+        // the same function activateDAO() itself calls). The rule mounts two
+        // READS and nothing else: the condition itself lives inside
+        // activateDAO, which is already routed, and the three counters move
+        // inside updateStatus and finalizeVerdict, which are already routed
+        // too.
+        // 258 -> 259 the same day, and for a different rule: the entrance to
+        // the arbiter corps now rests on the clean streak ALONE, and
+        // getStreakStanding on the reputation facet is how a person reads the
+        // streak, the deals that bought none of it, and the rule that governs
+        // both — in one call, so no screen keeps a copy of the number.
+        //
+        // 259 -> 260 on 21 September 2026: an arbiter answers for a SHARE of
+        // his recent work as well as for a run of blunders, and
+        // getArbiterOutcomeRecord on the accountability facet is how that share
+        // is read — his closed-case record AND the three numbers the chain
+        // judges it by, in one call, so no screen keeps a copy of the floor it
+        // hides the share below.
+        //
+        // 260 -> 263 on 22 September 2026: the seat stopped being hostage money
+        // and the bond moved to the CASE, so an arbiter has a door to collect
+        // the bond of a case that ended without his verdict
+        // (withdrawCaseBond), and a screen has the two reads it needs beside
+        // that button — what this deal's bond holds and whose it is
+        // (getCaseBond), and whether his one slot is free (getJudgingCount).
+        // All three on ArbiterVaultFacet; the rest of that work replaces facets
+        // in place and adds no selector.
+        //
+        // ⚠️ NOT ON THE CHAIN. The chain routed 260 on 22 September 2026
+        // (block 47 145 330). The three above are named as pending in
+        // DeployFullMatchesChain.t.sol `_pendingCut()`, and this note must be
+        // corrected — not deleted — in the same commit as the cut that lands
+        // them.
+        //
+        // 263 -> 260 on 22 September 2026, and this is the FIRST TIME the number
+        // has ever gone down: three doors into the arbiter corps became one.
+        // `applyForArbiterSeat`, `approveArbiterApplication` and
+        // `rejectArbiterApplication` come off ArbiterApplicationsFacet (16
+        // selectors there -> 13). The self-service entrance stopped waiting for
+        // governance in the same change and asks exactly what the application
+        // asked; what the application added was one person's right to refuse
+        // somebody the rules already admit. `addArbiter` keeps its selector and
+        // loses the chief.
+        //
+        // ⚠️ THEY ARE STILL ON THE CHAIN, so this is a `Remove` waiting to be
+        // signed and not a change already made: they are named in
+        // DeployFullMatchesChain.t.sol `_pendingRemoval()`, whose arm reds the
+        // day the census stops routing them.
+        assertEq(totalRouted, 260, "diamond should route exactly 260 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

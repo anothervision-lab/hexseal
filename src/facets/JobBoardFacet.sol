@@ -409,7 +409,7 @@ contract JobBoardFacet {
         // permit signature, so `client` is the person who would become a party
         // here. Checked before the permit is presented — a refusal then costs
         // him nothing and leaves his signature unspent.
-        MarketPresence.requireNotBondedArbiter(client);
+        MarketPresence.requireNotJudging(client);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         uint256 fee = FactoryStorage.quote(fs, amount);
@@ -475,7 +475,7 @@ contract JobBoardFacet {
         // asked is `_msgSender()`, so the answer is about the PERSON on the
         // gasless path as well — `msg.sender` there is the forwarder, which
         // holds no seat and would pass every time.
-        MarketPresence.requireNotBondedArbiter(client);
+        MarketPresence.requireNotJudging(client);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         uint256 fee = FactoryStorage.quote(fs, amount);
@@ -564,7 +564,7 @@ contract JobBoardFacet {
         // else's job, so the door is shut for a seat with a bond behind it. The
         // application itself is also what rule A counts on the way in — the two
         // halves meet here.
-        MarketPresence.requireNotBondedArbiter(sender);
+        MarketPresence.requireNotJudging(sender);
 
         mapping(address => bool) storage applied = _hasAppliedOf(s, jobId);
         if (applied[sender]) revert AlreadyApplied();
@@ -607,8 +607,8 @@ contract JobBoardFacet {
         // be locked in by the refusal — the applicant has
         // `withdrawApplication`, the client has `cancelJob`, and both come back
         // with every cent the board holds for them.
-        MarketPresence.requireNotBondedArbiter(sender);
-        MarketPresence.requireNotBondedArbiter(executor);
+        MarketPresence.requireNotJudging(sender);
+        MarketPresence.requireNotJudging(executor);
 
         // --- Effects ---
         job.status = JobBoardStorage.JobStatus.ACCEPTED;

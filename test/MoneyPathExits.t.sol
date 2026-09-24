@@ -115,9 +115,18 @@ contract MoneyPathExitsTest is MoneyPathBase {
 
         uint256 pot = AMOUNT;
         uint256 fee = pot * 300 / 10_000;          // 3%
-        uint256 toArbiter  = fee * 8_000 / 10_000; // 80%
+        uint256 toArbiter  = fee * 9_000 / 10_000; // 90%
         uint256 toTreasury = fee - toArbiter;      // by subtraction, never a second share
         assertEq(a.disputeFee(), fee, "3% of the pot");
+
+        // ⚠️ THE BOND THIS CASE CARRIES IS PART OF THE ARITHMETIC NOW
+        // (22 September 2026). The snapshot below is taken AFTER the claim, so
+        // the arbiter's bond is already on the diamond; finalization sends it
+        // home. Without naming it, "the fee is on the diamond" subtracts a
+        // larger before from a smaller after and panics on the underflow, which
+        // is exactly how this scene failed when the per-case bond landed.
+        (uint256 caseBond, ) = ArbiterVaultFacet(address(diamond)).getCaseBond(address(a));
+        assertGt(caseBond, 0, "the claim really did cost the arbiter a bond");
 
         Snap memory b = _snap(a);
         _submitAndFinalize(a, true);
@@ -126,7 +135,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
         assertEq(s.c - b.c, pot - fee, "client got the pot less the fee");
         assertEq(s.e, b.e, "executor nothing");
         assertEq(s.clone_, 0, "clone empty");
-        assertEq(s.dia - b.dia, fee, "the fee is on the diamond");
+        assertEq(s.dia + caseBond - b.dia, fee, "the fee is on the diamond, the bond went home");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), toArbiter);
         assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), toTreasury);
         assertEq(toArbiter + toTreasury, fee, "the two shares are the whole fee");
@@ -136,9 +145,12 @@ contract MoneyPathExitsTest is MoneyPathBase {
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-        assertEq(usdc.balanceOf(arbiterAddr) - b.arb, toArbiter, "arbiter paid out");
+        assertEq(
+            usdc.balanceOf(arbiterAddr) - b.arb, toArbiter + caseBond,
+            "arbiter paid out, and his bond for this case came back with it"
+        );
         assertEq(usdc.balanceOf(feeRecipient) - b.fee, toTreasury, "treasury paid out");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond back to nothing beyond the arbiter's bond");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond back to nothing");
         _assertDiamondBalances("after both withdrawals");
     }
 

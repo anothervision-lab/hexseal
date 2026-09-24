@@ -56,7 +56,7 @@ pragma solidity ^0.8.20;
 // emits ArbiterDemoted and speaks DemotionPath, both declared there. One
 // declaration, one topic0 — a copy of the event here would compile, produce
 // an identical log and drift the first time either side is edited.
-import {ArbiterRegistryStorage, ArbiterRegistryFacet} from "./ArbiterRegistryFacet.sol";
+import {ArbiterRegistryStorage, ArbiterRegistryFacet, HandoverLib} from "./ArbiterRegistryFacet.sol";
 import {ReputationStorage} from "./ReputationFacet.sol";
 import {OwnershipLib} from "../DiamondProxy.sol";
 import {FactoryStorage} from "../FactoryFacet.sol";
@@ -128,6 +128,13 @@ contract ArbiterAccountabilityFacet {
     // removal for cause ever need to reset XP, the number will come from
     // ArbiterRegistryFacet together with that decision, instead of lying here
     // for a year as a literal of its own.
+    //
+    // ⚠️ AND THE ORIGINAL IS GONE TOO, ON 21 SEPTEMBER 2026 — so the last
+    // sentence above now describes a number that no longer exists anywhere.
+    // There is no XP reset on ANY removal path: not on the manual door here,
+    // not on the automatic one in ArbiterRegistryFacet. The paragraph is kept
+    // because it is the reason this file holds no fourth mirror, and that
+    // reason did not change; only its closing clause went stale.
 
     /// How long a chief arbiter's proposal lives (15 August 2026). Approved by
     /// the owner: long enough to come back from a holiday, short enough that an
@@ -404,7 +411,8 @@ contract ArbiterAccountabilityFacet {
     /// suspend, to lift a suspension, to propose a removal, to withdraw a
     /// proposal. An irremovable chief could suspend an arbiter every 72 hours
     /// indefinitely (during which that arbiter does not claim, does not
-    /// finalise, CANNOT RESIGN and does not get his 50 USDC back), or lay down a
+    /// finalise and CANNOT RESIGN — and, while the seat bond existed, did not
+    /// get his 50 USDC back either), or lay down a
     /// removal proposal every 14 days — a constraint recorded as tolerable in
     /// ArbiterRegistryFacet._requireNoLiveRemovalProposal precisely because the
     /// chief can be replaced.
@@ -822,11 +830,15 @@ contract ArbiterAccountabilityFacet {
     /// "the human has stepped out" and "the human is still here", exactly where
     /// both doors are obliged to close together. Agreement with the original is
     /// checked by the test test_DaoThresholdMatchesRegistry.
-    /// ⚠️ 100 000 → 10 000 (26 August 2026), in step with
-    /// ArbiterRegistryFacet.DAO_THRESHOLD, checked by test_DaoThresholdMirror*.
+    /// ⚠️ 100 000 → 10 000 (26 August 2026), then 10 000 → 1 000 (20 September
+    /// 2026), each time in step with ArbiterRegistryFacet.DAO_THRESHOLD and each
+    /// time checked by test_DaoThresholdMirror*. The arithmetic behind 1 000 is
+    /// written out where the original is declared, not repeated here — two
+    /// copies of an argument drift the same way two copies of a number do.
     /// `Treasury.DAO_THRESHOLD` is a THIRD constant, still 100 000, and stays
-    /// so until another treasury is deployed: that contract is immutable.
-    uint256 private constant DAO_THRESHOLD_MIRROR = 10_000;
+    /// so until another treasury is deployed: that contract is immutable, and
+    /// the number in its source is the number running on chain.
+    uint256 private constant DAO_THRESHOLD_MIRROR = 1_000;
 
     /// A ratchet: the removal right leaves together with the DAO activation and
     /// does not come back — activateDAO() is one-way and the flag is cleared
@@ -1138,13 +1150,44 @@ contract ArbiterAccountabilityFacet {
     /// at the first edit, and the divergence here would be a removal that
     /// forgets to forfeit or forgets to suspend.
     ///
-    /// ⚠️ THE STREAK IS ZEROED HERE, AND THIS IS NEW FOR THE MANUAL DOOR.
-    /// Before 18 August 2026 only the automatic path cleared it, and _requireProven
-    /// said so out loud as a known defect: an owner who re-seated a wrongly
-    /// removed arbiter through addArbiter handed him back WITH the counter at
-    /// the threshold, so the same evidence justified removing him a second time
-    /// without one new mistake. Both doors clear it now, and the evidence is
-    /// spent by the removal it paid for.
+    /// ⚠️ TWO DIFFERENT STREAKS ARE ZEROED HERE AND THEY ARE NOT THE SAME THING.
+    /// Read the two paragraphs below as separate rules; the word is shared and
+    /// nothing else is.
+    ///
+    /// ⚠️ (1) THE MISTAKE STREAK — `d.arbiterMistakeStreak`, judicial mistakes
+    /// in an unbroken row. Zeroed here since 18 August 2026, and that was new
+    /// for the MANUAL door: before it only the automatic path cleared it, and
+    /// _requireProven said so out loud as a known defect — an owner who
+    /// re-seated a wrongly removed arbiter through addArbiter handed him back
+    /// WITH the counter at the threshold, so the same evidence justified
+    /// removing him a second time without one new mistake. Both doors clear it
+    /// now, and the evidence is spent by the removal it paid for.
+    ///
+    /// ⚠️ (2) THE CLEAN STREAK — `ReputationStorage.cleanStreak`, the run of
+    /// deals this person DELIVERED without a dispute. Zeroed here since
+    /// 20 September 2026, and the reason is not that judging badly says
+    /// anything about delivering. It does not, and this file argued exactly
+    /// that when it left the clean streak alone. WHAT CHANGED IS THE LOCK, NOT
+    /// THE OPINION: until 20 September 2026 the way back into the corps was
+    /// guarded by XP — the automatic path reset a punished arbiter to a flat
+    /// 2500, below the entrance threshold of 3000, so he had to earn his way
+    /// back. The entrance stopped asking for XP on that date and asks only for
+    /// the clean streak, so a man removed for cause would walk back in the same
+    /// minute with the streak he already had, pay a fresh bond, and be seated.
+    /// The clean streak is the key to the door now, and a removal takes the key.
+    ///
+    /// It takes the key, not the history: XP is NOT touched on this path,
+    /// because a record of work done is a record, and we do not rewrite it to
+    /// make a punishment land.
+    ///
+    /// ⚠️ AND SINCE 21 SEPTEMBER 2026 THAT IS NO LONGER A DIFFERENCE BETWEEN
+    /// THE TWO DOORS. The sentence above used to name `DEMOTION_XP_RESET` in
+    /// the present tense and point at "the note below the automatic door" for
+    /// the contrast; the reset was taken out of the automatic door on that date,
+    /// for this file's own reason. Both doors now leave experience exactly where
+    /// the work left it, and both take the clean streak. The paragraph is
+    /// rewritten rather than dropped because the argument it makes — why the
+    /// streak goes and the record stays — is the rule, not the history.
     ///
     /// ⚠️ REMOVAL IMPLIES SUSPENSION (16 August 2026). Without it the strong
     /// measure was WEAKER than the weak one:
@@ -1183,8 +1226,14 @@ contract ArbiterAccountabilityFacet {
         // Guarded by test_StrangerWithNoAccusationStillCannotAnswer.
         d.removedAt[arbiter] = block.timestamp;
 
-        // The evidence is spent — see the docstring above.
+        // The evidence is spent — see (1) in the docstring above.
         d.arbiterMistakeStreak[arbiter] = 0;
+
+        // The key to the corps is taken back — see (2) in the docstring above.
+        // A DIFFERENT namespace (ReputationStorage), a different counter, and a
+        // different reason from the line above it; they are adjacent only
+        // because both belong to the moment of removal.
+        ReputationStorage.data().cleanStreak[arbiter] = 0;
 
         d.suspendedUntil[arbiter] = block.timestamp + ArbiterRegistryStorage.SUSPENSION_WINDOW;
 
@@ -1349,13 +1398,25 @@ contract ArbiterAccountabilityFacet {
         emit RemovalProposalConsumed(arbiter, cause, address(0), bytes32(0), proposedAt);
     }
 
-    // ⚠️ No XP reset happens here: ReputationStorage lives in a different
-    // namespace, and pulling it in would create a second write point into
-    // someone else's storage — diverging from the single place that writes
-    // demotion XP today (_recordArbiterMistake in ArbiterRegistryFacet). The XP
-    // of an arbiter removed for cause stays as it is; the divergence from the
-    // automatic demotion is deliberate and can be addressed separately, if the
-    // owner sees fit.
+    // ⚠️ No XP reset happens here, and that is still true after 20 September
+    // 2026 — read it as a statement about XP alone. The XP of an arbiter removed
+    // for cause stays exactly as it is: it is the record of the work he did, and
+    // a punishment that edits history is not a punishment, it is a forgery.
+    //
+    // ⚠️ AND SINCE 21 SEPTEMBER 2026 THERE IS NO SUCH PLACE ANYWHERE. This
+    // paragraph used to close with "_recordArbiterMistake in ArbiterRegistryFacet
+    // remains the single place that writes demotion XP" — the last sentence of a
+    // contrast between the two doors. The reset was taken out of that door too,
+    // for this very argument, so the contrast is gone and NO path writes demotion
+    // XP. What still writes XP on a judicial mistake is _slashArbiterXP
+    // (OVERTURN_XP_SLASH per proven overturn), which is a charge for one act and
+    // not a verdict on a man's whole record.
+    //
+    // What DID change is a neighbouring field of the same namespace:
+    // _performRemoval now zeroes `ReputationStorage.cleanStreak` — see rule (2)
+    // in its docstring. So "ReputationStorage is not written from this file" is
+    // no longer the reason, and must not be quoted as one; the reason is about
+    // XP specifically.
 
     // ============================================================
     //  THE RIGHT OF REPLY (15 August 2026)
@@ -1866,6 +1927,32 @@ contract ArbiterAccountabilityFacet {
         return DAO_THRESHOLD_MIRROR;
     }
 
+    /// @notice Everything the handover's SECOND condition looks at, with what
+    /// each term has beside what it needs.
+    ///
+    /// For the screen that has to tell the owner "two more disputes" instead of
+    /// "no". The first condition is not here and is not meant to be: the number
+    /// of people is `getUniqueActiveUsers()` and its floor is
+    /// `getDaoThreshold()`, both already mounted, both unchanged.
+    ///
+    /// ⚠️ THIS IS NOT A SECOND COPY OF THE RULE. It calls `HandoverLib.readiness()`
+    /// — the same function `activateDAO()` calls, with the same constants and
+    /// the same comparisons — so "the screen says yes and the door says no" is
+    /// not reachable by editing one of two places, only by editing the one
+    /// place. That is the whole reason the library exists: this repository
+    /// already carries `DAO_THRESHOLD` in three separate files, one of which
+    /// has been wrong since July.
+    ///
+    /// ⚠️ IT LIVES IN THIS FACET AND NOT BESIDE THE DOOR for a measured
+    /// reason: ArbiterRegistryFacet stands at 23 868 bytes with 708 to spare
+    /// under the EIP-170 limit, and a struct-returning view does not fit there
+    /// with room left for the next fix. This facet already reads governance for
+    /// the outside (`getDaoThresholdMirror` is directly above) and shares the
+    /// same storage namespace.
+    function getHandoverReadiness() external view returns (HandoverLib.Readiness memory) {
+        return HandoverLib.readiness();
+    }
+
     /// Whether a proposal is live right now. `proposedAt == 0` means there is no
     /// proposal at all: none was ever laid, or the record was cleared by one of
     /// three routes — `withdrawProposal`, a removal (through `clearSeat`), and,
@@ -2207,6 +2294,66 @@ contract ArbiterAccountabilityFacet {
     /// public .sol that nothing recomputes.
     function getOverturnedVerdicts(address arbiterAddr) external view returns (uint256) {
         return ArbiterRegistryStorage.data().overturnedVerdicts[arbiterAddr];
+    }
+
+    /// @notice An arbiter's CLOSED-CASE record and the rule the chain judges it
+    /// by, in one read (21 September 2026).
+    ///
+    /// ⚠️ THE THREE RULE NUMBERS TRAVEL WITH THE RECORD ON PURPOSE, and that
+    /// is the whole reason this is one function and not four. The screen has to
+    /// decide two things — may a rate be shown at all, and is this arbiter over
+    /// the line — and both answers depend on numbers the CHAIN applies. A
+    /// screen holding its own `4` would be a second copy of a threshold that
+    /// nothing compares: it would hide the rate at four closed cases while the
+    /// chain suspended at three, or show one at two while the chain called it
+    /// too early, and no test in either repository would go red. There is
+    /// therefore exactly one declaration of each
+    /// (`ArbiterRegistryStorage.OUTCOME_*`), it is applied by
+    /// `ArbiterRegistryFacet.finalizeVerdict`, and it is published here.
+    ///
+    /// What each answer means:
+    ///
+    ///   `closedCases`       — verdicts of his that reached finalization, ever,
+    ///                         cleanly or overturned. NOT disputes he held: one
+    ///                         that timed out or was abandoned was never judged
+    ///                         and is in neither half.
+    ///   `overturnedCases`   — of those, the ones overturned and not restored
+    ///                         to him by an appeal panel.
+    ///   `windowSample`      — how many of the last `window` cases exist. THE
+    ///                         DENOMINATOR a reader must divide by; dividing by
+    ///                         `window` would report "two of six" about a man
+    ///                         who has closed four.
+    ///   `overturnsInWindow` — the numerator.
+    ///   `window`            — how many recent cases the rule looks at.
+    ///   `overturnLimit`     — overturns inside the window that trip the chain.
+    ///   `minSample`         — closed cases before the rate judges anything,
+    ///                         and below which NO reader may show a rate.
+    ///
+    /// ⚠️ IT DOES NOT SAY "HE IS OVER THE LINE RIGHT NOW". The chain acts on an
+    /// EDGE — a fresh overturn while the rate stands, or the case that first
+    /// reaches `minSample` with the overturns already there — so a suspended or
+    /// accused arbiter and one whose numbers merely still read badly are
+    /// different states. The first is answered by `getArbiterStanding`
+    /// (`suspendedUntil`, `hasLiveRemovalProposal`); this is the evidence, not
+    /// the verdict.
+    ///
+    /// Sits in THIS facet and not the registry for the reason the readings
+    /// above moved here: the registry is the one at the EIP-170 wall, and this
+    /// is a reading about an arbiter's behaviour.
+    function getArbiterOutcomeRecord(address arbiter) external view returns (
+        uint256 closedCases,
+        uint256 overturnedCases,
+        uint256 windowSample,
+        uint256 overturnsInWindow,
+        uint256 window,
+        uint256 overturnLimit,
+        uint256 minSample
+    ) {
+        (closedCases, overturnedCases, windowSample, overturnsInWindow) =
+            ArbiterRegistryStorage.outcomeRecord(ArbiterRegistryStorage.data(), arbiter);
+        window        = ArbiterRegistryStorage.OUTCOME_WINDOW;
+        overturnLimit = ArbiterRegistryStorage.OUTCOME_OVERTURN_LIMIT;
+        minSample     = ArbiterRegistryStorage.OUTCOME_MIN_SAMPLE;
     }
 
     /// @notice The arbiter's bond. Forfeited into the vault on a removal for

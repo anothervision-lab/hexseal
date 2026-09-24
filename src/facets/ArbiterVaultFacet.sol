@@ -109,11 +109,20 @@ contract ArbiterVaultFacet {
     // were only deleted on 17 September 2026; until then a front-end lock read
     // the dead copy instead of these.
 
-    /// 80% of the dispute fee to the arbiter, the rest to the treasury.
+    /// 90% of the dispute fee to the arbiter, the rest to the treasury.
     /// Read by `creditDisputeFee` (the actual booking) and by `_splitTopUp`
     /// (what the screen promises) — one declaration, so the promise and the
     /// booking cannot disagree.
-    uint256 private constant ARBITER_SHARE_BPS = 8_000;
+    ///
+    /// ⚠️ 80% UNTIL 22 SEPTEMBER 2026, when the owner raised it. The seat
+    /// stopped being a place a man pays to sit in and became work he is paid
+    /// for; the protocol's ten points of the fee are what it keeps for running
+    /// the escrow, and the judge's ninety are what buy an hour of reading.
+    /// Worked through on the pots the owner named: $500 pays $13.50, $2 000
+    /// pays $54, $10 000 pays $270. Below about $110 the percentage cannot
+    /// reach `arbiterFloor` at all and the dispute's opener makes up the
+    /// difference — see `chargeDisputeOpening`.
+    uint256 private constant ARBITER_SHARE_BPS = 9_000;
 
     /// 10 USDC (6 decimals) — what an arbiter must receive for a dispute in
     /// total while nobody has set `arbiterFloor`.
@@ -352,8 +361,20 @@ contract ArbiterVaultFacet {
         uint256 toVault = vaultBack + share;
         uint256 toBond;
         if (bondBack != 0) {
-            if (d.isArbiter[arbiter_]) {
-                d.arbiterBond[arbiter_] += bondBack;
+            // ⚠️ BACK INTO THIS CASE'S OWN BOND (22 September 2026), which is
+            // where the advance came from. It is handed to the arbiter a few
+            // lines later in the same transaction: this call runs INSIDE
+            // `finalizeVerdict`, and `_releaseCaseBond` there pays out whatever
+            // is in the record once the escrow has moved.
+            //
+            // The record still exists here — nothing deletes it between the
+            // advance and this line — but the address is checked all the same:
+            // a zero there would send the money to nobody, and the bank is the
+            // right place for money with no owner.
+            ArbiterRegistryStorage.CaseBond storage cb = d.caseBonds[agreement];
+            if (cb.arbiter != address(0)) {
+                // uint96 cannot truncate: the sum is at most one deposit.
+                cb.amount += uint96(bondBack);
                 toBond = bondBack;
             } else {
                 toVault += bondBack;
@@ -547,6 +568,63 @@ contract ArbiterVaultFacet {
 
     function getRefundableBounty(address who) external view returns (uint256) {
         return ArbiterRegistryStorage.data().refundableBounty[who];
+    }
+
+    // -------- THE BOND A CASE CARRIES: COLLECTING IT --------
+
+    /// @notice The arbiter takes back the bond he put down for a case that
+    /// ended without his verdict.
+    ///
+    /// ⚠️ WHY THIS DOOR EXISTS AT ALL, AND WHY THE MONEY IS NOT PUSHED. A
+    /// case leaves an arbiter four ways: he finalizes it (and `finalizeVerdict`
+    /// hands the bond straight back — no press needed, that is the ordinary
+    /// ending), he lets go of it, a stranger abandons it for him, or the deal
+    /// times out. The last three all end up inside `clearDisputeClaim` or
+    /// beside it, and `clearDisputeClaim` is called BY THE CLONE under exactly
+    /// CLAIM_CLEAR_GAS (200 000) inside an empty try/catch. A clone is pinned
+    /// to its implementation for life, so that number can never be raised for a
+    /// deal that already exists, and a refund on that path was measured at
+    /// +46 000 gas — past the rig's 2x tripwire. Over the cap the catch
+    /// swallows the whole call, including the release of the claim, and the
+    /// arbiter is left holding a dispute for ever.
+    ///
+    /// So the money waits where it was booked and he comes for it. Gasless like
+    /// every other claimable here.
+    ///
+    /// ⚠️ THE GATE IS "NOBODY IS JUDGING THIS DEAL", not a flag of its own. A
+    /// live claim on the deal means the bond is still doing its job, whoever
+    /// holds it; an empty `disputeClaims` means the case let go of him. The
+    /// finalization path cannot be caught half-way: it clears the claim and
+    /// pushes the bond inside ONE transaction, so there is no block in which
+    /// this door could take the same money twice.
+    function withdrawCaseBond(address agreement) external {
+        address caller = _msgSender();
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+
+        ArbiterRegistryStorage.CaseBond memory b = d.caseBonds[agreement];
+        if (b.amount == 0 || b.arbiter != caller) revert ArbiterRegistryFacet.NoRefundableBounty();
+        if (d.disputeClaims[agreement] != address(0)) revert ArbiterRegistryFacet.DisputeAlreadyClaimed();
+
+        delete d.caseBonds[agreement];
+        address usdc = FactoryStorage.store().usdc;
+        bool ok = IUSDCFull(usdc).transfer(caller, b.amount);
+        require(ok, "ArbiterRegistry: case bond withdrawal failed");
+        emit ArbiterRegistryFacet.CaseBondReturned(agreement, caller, b.amount);
+    }
+
+    /// @notice What this deal's bond holds and whose it is — the read a screen
+    /// needs to show the button above, and the one a test asks instead of
+    /// counting slots.
+    function getCaseBond(address agreement) external view returns (uint256 amount, address arbiter) {
+        ArbiterRegistryStorage.CaseBond memory b = ArbiterRegistryStorage.data().caseBonds[agreement];
+        return (b.amount, b.arbiter);
+    }
+
+    /// @notice How many cases this arbiter is judging right now. One is the cap
+    /// (`MAX_CASES_AT_ONCE`), and the slot is freed by the signature of the
+    /// verdict, not by its finalization.
+    function getJudgingCount(address arbiter) external view returns (uint256) {
+        return ArbiterRegistryStorage.data().judgingCount[arbiter];
     }
 
     // -------- APPEAL PANEL: PAYMENT --------

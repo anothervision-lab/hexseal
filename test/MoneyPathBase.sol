@@ -238,7 +238,7 @@ abstract contract MoneyPathBase is Test {
         arbSels[8] = ArbiterRegistryFacet.raiseAppeal.selector;
         arbSels[9] = ArbiterRegistryFacet.voteOnAppeal.selector;
         arbSels[10] = ArbiterRegistryFacet.resolveAppeal.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](26);
+        bytes4[] memory arbSelsVault = new bytes4[](28);
         arbSelsVault[0] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.getDisputeClaimer.selector;
         arbSelsVault[2] = ArbiterVaultFacet.withdrawArbiterReward.selector;
@@ -267,6 +267,12 @@ abstract contract MoneyPathBase is Test {
         arbSelsVault[23] = ArbiterVaultFacet.quoteAppealDeposit.selector;
         arbSelsVault[24] = ArbiterVaultFacet.settleAppealDebts.selector;
         arbSelsVault[25] = ArbiterVaultFacet.getAppealDebts.selector;
+        // The bond THIS CASE carries (22 September 2026): a money exit and a
+        // ledger term. It is on this rig because the identity below has to see
+        // it — real USDC sits on the diamond from the claim until the verdict
+        // finalizes or the arbiter collects.
+        arbSelsVault[26] = ArbiterVaultFacet.withdrawCaseBond.selector;
+        arbSelsVault[27] = ArbiterVaultFacet.getCaseBond.selector;
 
         bytes4[] memory accSels = new bytes4[](3);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
@@ -386,14 +392,25 @@ abstract contract MoneyPathBase is Test {
     /// assertions stay tied to the number the diamond actually charges.
     uint256 internal seatBondHeld;
 
+    /// ⚠️ THERE IS NO SEAT BOND ANY MORE (22 September 2026). The name is
+    /// kept because every rig below calls it; what it does is what a seated
+    /// arbiter now actually needs — money and an allowance for the bond he
+    /// posts PER CASE, at the moment he claims a dispute.
+    ///
+    /// `seatBondHeld` stays a field and now reads zero, so every assertion
+    /// below that says "the diamond keeps nothing beyond the arbiter's bond"
+    /// goes on saying the true thing without being rewritten one by one.
     function _postSeatBond(address who) internal {
-        (, , uint256 seatBond, ) =
-            ArbiterApplicationsFacet(address(diamond)).getApplicationRequirements();
-        usdc.mint(who, seatBond);
-        vm.prank(who); usdc.approve(address(diamond), seatBond);
-        vm.prank(who); ArbiterApplicationsFacet(address(diamond)).postArbiterBond();
-        seatBondHeld = seatBond;
+        usdc.mint(who, CASE_BOND_PURSE);
+        vm.prank(who); usdc.approve(address(diamond), type(uint256).max);
+        seatBondHeld = 0;
     }
+
+    /// What a rig gives an arbiter to post case bonds out of. Generous on
+    /// purpose: the bond is a percentage of the pot with a $20 floor, and a rig
+    /// that ran out of it would fail with `CaseBondTransferFailed` in the
+    /// middle of a scene about something else entirely.
+    uint256 internal constant CASE_BOND_PURSE = 1_000_000_000;
 
     // ============================================================
     //  THE BALANCE IDENTITY
@@ -453,6 +470,20 @@ abstract contract MoneyPathBase is Test {
             address deal = _trackedDeals[i];
             total += ArbiterVaultFacet(address(diamond)).getDisputeBounty(deal);
 
+            // ---- the bond THIS CASE carries (added 22 September 2026) ----
+            //
+            // Real USDC on the diamond from the moment an arbiter claims the
+            // dispute until his verdict finalizes or he collects it with
+            // `withdrawCaseBond`. It was the first thing this identity caught
+            // when the per-case bond landed: 20 USDC held and nothing booking
+            // it, on the timeout path where the bond outlives the claim.
+            //
+            // Read through the mounted door rather than off the slot, so a
+            // record that stops being written makes this sum too small — and
+            // too small is the direction that goes red.
+            (uint256 caseBond, ) = ArbiterVaultFacet(address(diamond)).getCaseBond(deal);
+            total += caseBond;
+
             // ---- the appeal deposit in flight (added 4 September 2026) ----
             //
             // ⚠️ `appealDeposit` is NOT a balance. It is never zeroed: neither
@@ -493,7 +524,19 @@ abstract contract MoneyPathBase is Test {
 
     /// Deals whose per-agreement money the ledger should look at.
     address[] internal _trackedDeals;
-    function _trackDeal(address a) internal { _trackedDeals.push(a); }
+    /// ⚠️ IDEMPOTENT SINCE 22 SEPTEMBER 2026, and that is a correction rather
+    /// than a nicety. Every per-deal term below is summed ONCE PER ENTRY, so a
+    /// deal pushed twice counts its bounty and its case bond twice and the
+    /// identity reads "the diamond holds LESS than it books" — which is what
+    /// happened the moment `_claimByArbiter` began registering the deal it
+    /// claims and the scenes that already registered it kept doing so. The
+    /// list is at most a handful of deals per scene, so the scan is free.
+    function _trackDeal(address a) internal {
+        for (uint256 i = 0; i < _trackedDeals.length; i++) {
+            if (_trackedDeals[i] == a) return;
+        }
+        _trackedDeals.push(a);
+    }
 
     /// Addresses that can hold a per-address term. Seeded with the six the
     /// fixture funds; a test that brings its own arbiter registers him here, or
@@ -600,6 +643,14 @@ abstract contract MoneyPathBase is Test {
         ArbiterRegistryFacet(address(diamond)).claimDispute(
             address(a), salt, bytes32(uint256(0xB0)), bytes32(uint256(0x51))
         );
+        // ⚠️ TRACKED HERE AND NOT LEFT TO EACH SCENE (22 September 2026). From
+        // this call the diamond holds the bond this CASE carries, and a deal
+        // whose bond nothing books makes the identity below read a surplus —
+        // which is the one direction that hides every other miscount. Claiming
+        // is the moment that money arrives, so this is the place. Registering
+        // a deal twice is harmless because `_trackDeal` is idempotent — and it
+        // has to be, since every per-deal term is summed once per entry.
+        _trackDeal(address(a));
     }
 
     function _submitAndFinalize(Agreement a, bool clientWins) internal {

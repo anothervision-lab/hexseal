@@ -578,8 +578,8 @@ contract FactoryFacet {
         // The two checks cost one cold SLOAD each for an ordinary pair (the
         // seat table answers "not in the corps" and stops), on a transaction
         // that spends around half a million creating a clone.
-        MarketPresence.requireNotBondedArbiter(client);
-        MarketPresence.requireNotBondedArbiter(executor);
+        MarketPresence.requireNotJudging(client);
+        MarketPresence.requireNotJudging(executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (fs.agreementDeployer == address(0)) revert DeployerNotSet();
@@ -670,8 +670,8 @@ contract FactoryFacet {
         // does not live in a counter — a funded deal in his name, an NFT half
         // minted to him, and a screen showing a sitting arbiter as somebody's
         // executor. Naming an arbiter is refused outright.
-        MarketPresence.requireNotBondedArbiter(client);
-        MarketPresence.requireNotBondedArbiter(executor);
+        MarketPresence.requireNotJudging(client);
+        MarketPresence.requireNotJudging(executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (fs.agreementDeployer == address(0)) revert DeployerNotSet();

@@ -127,7 +127,7 @@ contract GovernanceHandoverUpgradeTest is Test, ArbiterSplitRig {
         // constants are gone: a number kept apart from the list it sizes is one
         // more thing to keep in step, and keeping it in step by hand is the
         // habit this file was rewritten to break.
-        sels = new bytes4[](10);
+        sels = new bytes4[](13);
         sels[0] = bytes4(keccak256("setDisputeDiscount(uint256)"));
         sels[1] = bytes4(keccak256("getDisputeDiscount()"));
         sels[2] = bytes4(keccak256("withdrawAppealShare(address)"));
@@ -141,6 +141,14 @@ contract GovernanceHandoverUpgradeTest is Test, ArbiterSplitRig {
         // that the appeal quorum moves with the corps.
         sels[8] = bytes4(keccak256("abandonClaim(address)"));
         sels[9] = bytes4(keccak256("getAppealPanel(address)"));
+        // And the three of 22 September 2026, when the seat stopped being
+        // hostage money and the bond moved to the CASE: the arbiter's door to
+        // collect the bond of a case that ended without his verdict, and the
+        // two reads a screen needs beside that button. All three on
+        // ArbiterVaultFacet.
+        sels[10] = bytes4(keccak256("withdrawCaseBond(address)"));
+        sels[11] = bytes4(keccak256("getCaseBond(address)"));
+        sels[12] = bytes4(keccak256("getJudgingCount(address)"));
     }
 
     ///   • getDisputeSubsidy(address) — a bare read of how much of
@@ -153,8 +161,21 @@ contract GovernanceHandoverUpgradeTest is Test, ArbiterSplitRig {
         // constants are gone: a number kept apart from the list it sizes is one
         // more thing to keep in step, and keeping it in step by hand is the
         // habit this file was rewritten to break.
-        sels = new bytes4[](1);
+        sels = new bytes4[](3);
         sels[0] = bytes4(keccak256("getDisputeSubsidy(address)"));
+        // The one of 20 September 2026, and on the accountability facet for the
+        // same reason as the read above it: getHandoverReadiness() hands out
+        // every term of the handover's SECOND condition, its floor and the
+        // verdict, out of the very function activateDAO() calls. It sits here
+        // rather than beside that door because ArbiterRegistryFacet is the
+        // fullest contract in the repository.
+        sels[1] = bytes4(keccak256("getHandoverReadiness()"));
+        // 21 September 2026, and on this facet for the same reason again: an
+        // arbiter's closed-case record plus the three numbers the chain judges
+        // the overturn share by, handed out together so that no screen keeps a
+        // copy of the floor it hides the share below. The rule is applied in
+        // ArbiterRegistryFacet.finalizeVerdict; only the reading sits here.
+        sels[2] = bytes4(keccak256("getArbiterOutcomeRecord(address)"));
     }
 
     ///   • notifyWorkHandedIn() — 31 August 2026, and on the DEAL registry,
@@ -163,14 +184,20 @@ contract GovernanceHandoverUpgradeTest is Test, ArbiterSplitRig {
     ///     at all, so the transition that starts the two-day auto-approve clock
     ///     -- after which silence hands the executor the whole pot -- was
     ///     invisible from the one address anything watches.
+    ///   • getLiveDeals() — 20 September 2026, and on the deal registry too:
+    ///     how many deals are open across the whole protocol right now, the
+    ///     O(1) twin of getActive().length + getDisputed().length. It is the
+    ///     first of the three terms of the handover's second condition, and the
+    ///     only one of them the market itself moves.
     function _grownDealRegistryAfterThisCut() internal pure returns (bytes4[] memory sels) {
         // ⚠️ THE SIZE IS THE LENGTH OF THE LIST DIRECTLY BELOW IT, and it used
         // to be a sum of separately declared allowance constants. Those
         // constants are gone: a number kept apart from the list it sizes is one
         // more thing to keep in step, and keeping it in step by hand is the
         // habit this file was rewritten to break.
-        sels = new bytes4[](1);
+        sels = new bytes4[](2);
         sels[0] = bytes4(keccak256("notifyWorkHandedIn()"));
+        sels[1] = bytes4(keccak256("getLiveDeals()"));
     }
 
     ///   • pauseNewDeals() / resumeNewDeals() / newDealsPausedUntil() /
@@ -198,9 +225,16 @@ contract GovernanceHandoverUpgradeTest is Test, ArbiterSplitRig {
         sels[4] = bytes4(keccak256("MAX_FEE_BPS()"));
     }
 
-    /// Two numbers from a recorded decision, copied here by a person.
+    /// Numbers from recorded decisions, copied here by a person.
+    ///
+    /// BEFORE is what the chain answered before the cut this script performed.
+    /// AFTER is what the FACETS IN THIS TREE answer today — not what that cut
+    /// delivered on 26 August 2026, which was 10 000. The guard under test takes
+    /// its expectation as an argument, so the script itself holds no number and
+    /// is not rewritten by this; what moved is the tree it is being run against.
+    /// 10 000 → 1 000 on 20 September 2026.
     uint256 constant THRESHOLD_BEFORE = 100_000;
-    uint256 constant THRESHOLD_AFTER  = 10_000;
+    uint256 constant THRESHOLD_AFTER  = 1_000;
 
     function setUp() public {
         upgrade = new UpgradeGovernanceHandover();
@@ -916,6 +950,12 @@ contract GovernanceHandoverUpgradeTest is Test, ArbiterSplitRig {
             remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
             IDiamondCut(address(d)).diamondCut(remove, address(0), "");
         }
+
+        // The three application doors this checkout stopped building on
+        // 22 September 2026, put back where the census still has them. See
+        // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
+        // applications facet that is already here rather than on a stub.
+        _mountRemovedApplicationDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

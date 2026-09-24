@@ -1,13 +1,29 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// Applications for a seat in the arbiter corps.
+// What is left of the arbiter applications mechanism, and what replaced it.
 //
-// The whole mechanism exists because the automatic door cannot open at the
-// start: `applyAsArbiter` measures a RECORD, and on a marketplace nobody has
-// been using yet there is no record to measure. So a person decides, by hand,
-// until governance is live — and the ratchet takes the door away at that
-// moment, not at somebody's discretion.
+// It existed because the automatic door could not open at the start:
+// `applyAsArbiter` refused `DAONotActive` on its first line, so before
+// governance nobody could put himself forward by any means. On 22 September
+// 2026 the owner removed that line — the self-service door is open and asks a
+// run of five clean deals — and removed the application door with it, on the
+// argument that it asked exactly the same thing and added only one person's
+// right to refuse somebody the rules already admit.
+//
+// So three selectors are gone from this facet and are measured here as gone:
+//
+//     applyForArbiterSeat()                    0x6fb78a56
+//     approveArbiterApplication(address)       0xbcd90be1
+//     rejectArbiterApplication(address,string) 0x8e7e21be
+//
+// ⚠️ FORTY-ODD SCENES WENT WITH THEM, and that is the change rather than a
+// loss of coverage: every one of them measured a door that no longer exists.
+// What is measured below is what survived — the withdrawal, the filter that
+// takes back an unproven seat, the ratchet, the two retired bond doors and the
+// reads — plus the two things the removal itself has to be held to: that the
+// three selectors are not mounted, and that the entrance which replaced them
+// works with governance asleep.
 //
 // ⚠️ THE RIG IS A WHOLE DIAMOND, not a bare facet, and it has to be. Three
 // things this facet does are invisible on a standalone contract:
@@ -48,6 +64,7 @@ import "../src/JobReceiptFacet.sol";
 import {MinimalForwarder} from "../src/MinimalForwarder.sol";
 import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 
 contract MockUSDCApplications {
     mapping(address => uint256) public balanceOf;
@@ -79,7 +96,7 @@ contract MockUSDCApplications {
     }
 }
 
-contract ArbiterApplicationsTest is Test {
+contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     DiamondProxy diamond;
     DeployFull   deploy;
     MockUSDCApplications usdc;
@@ -112,6 +129,11 @@ contract ArbiterApplicationsTest is Test {
     /// `uniqueActiveUsers` is field 8 of the same struct — the offset four
     /// other test files pin by brute force against the live getter.
     uint256 constant SLOT_UNIQUE_ACTIVE_USERS = 8;
+
+    /// Namespace base of ArbiterRegistryStorage, as the library declares it.
+    /// Used only by `_seedPendingApplication`, which finds the field inside it
+    /// by measurement rather than by counting declarations.
+    bytes32 constant ARB_BASE = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
 
     bytes32 constant FWD_TYPEHASH = keccak256(
         "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
@@ -207,9 +229,12 @@ contract ArbiterApplicationsTest is Test {
     /// The streak threshold is `private` over there and has no getter, so the
     /// oracle is the registry's own refusal: `InsufficientCleanStreak` carries
     /// the number it required.
+    ///
+    /// ⚠️ NO GOVERNANCE IS SWITCHED ON FOR THIS SCENE ANY MORE. Until
+    /// 22 September 2026 it had to be: `applyAsArbiter` refused `DAONotActive`
+    /// before it ever looked at the streak, so the refusal could not be reached.
     function test_MinCleanStreakMirrorMatchesRegistryRefusal() public {
         (, uint256 minStreak, , ) = app.getApplicationRequirements();
-        _activateDao();
 
         address candidate = address(0xC0FFEE);
         _seedRecord(candidate, 3_000, minStreak - 1);
@@ -221,742 +246,256 @@ contract ArbiterApplicationsTest is Test {
         reg.applyAsArbiter();
     }
 
-    /// The bond is `private` over there too. The oracle is the money: a
-    /// successful `applyAsArbiter` moves exactly as much USDC as this facet
-    /// says it will. A larger real bond fails on the allowance; a smaller one
-    /// moves a different amount. Either way this goes red.
-    function test_ArbiterBondMirrorMatchesWhatTheRegistryActuallyTakes() public {
+    /// The bond a seat costs, and the oracle is the money. The number this
+    /// facet publishes is zero since the per-case cut; a successful
+    /// `applyAsArbiter` has to move exactly that much and no more.
+    ///
+    /// ⚠️ THE APPLICANT IS LEFT SOLVENT AND WITH AN OPEN ALLOWANCE, on purpose.
+    /// A scene where the money could not have moved anyway proves nothing about
+    /// whether the door tried to move it.
+    function test_TheBondMirrorIsZeroAndTheRegistryTakesNothing() public {
         (, , uint256 bond, ) = app.getApplicationRequirements();
-        _activateDao();
+        assertEq(bond, 0, "this facet still advertises a price for a seat");
 
-        address candidate = address(0xB0AD);
-        _seedRecord(candidate, 3_000, 10);
-        usdc.mint(candidate, bond);
+        _approveSpend(applicant, type(uint256).max);
+        uint256 walletBefore   = usdc.balanceOf(applicant);
+        uint256 diamondBefore  = usdc.balanceOf(address(diamond));
 
-        uint256 heldBefore = usdc.balanceOf(address(diamond));
-
-        vm.prank(candidate);
-        usdc.approve(address(diamond), bond);
-        vm.prank(candidate);
+        vm.prank(applicant);
         reg.applyAsArbiter();
 
-        assertEq(usdc.balanceOf(candidate), 0, "the registry took a different amount than the mirror says");
-        assertEq(
-            usdc.balanceOf(address(diamond)) - heldBefore, bond,
-            "the diamond received a different amount than the mirror says"
-        );
+        assertTrue(regVault.isRegisteredArbiter(applicant), "the door did not seat him");
+        assertEq(usdc.balanceOf(applicant), walletBefore, "the seat took money from him");
+        assertEq(usdc.balanceOf(address(diamond)), diamondBefore, "the diamond took money for a seat");
+        assertEq(acc.getArbiterBond(applicant), 0, "a bond was booked that nobody paid");
     }
 
-    /// The appeal-deciding majority is `private` over there and reaches this
-    /// facet only as a mirror. The oracle is the registry refusing `addArbiter`
-    /// and naming the number in `ChiefBlocWouldDecideAppeal`.
-    function test_AppealDecidingVotesMirrorMatchesRegistryRefusal() public {
-        _setChief(chief);
-
-        vm.prank(chief);
-        reg.addArbiter(address(0xA101));
-        assertEq(reg.getChiefBloc(), 1, "one seating puts the chief's bloc at one");
-
-        // Two is the deciding majority at quorum, and the facet under test
-        // carries 2 as its mirror. If the registry's number were anything else,
-        // this call would either not revert at all or revert with a different
-        // second argument.
-        vm.prank(chief);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterRegistryFacet.ChiefBlocWouldDecideAppeal.selector, uint256(2), uint256(2)
-        ));
-        reg.addArbiter(address(0xA102));
+    /// The four numbers a form reads before a man signs anything.
+    function test_TheCorpsAsksForFiveCleanDealsAndNoExperience() public view {
+        (uint256 minXP, uint256 minStreak, uint256 bond, uint256 window) =
+            app.getApplicationRequirements();
+        assertEq(minXP,     0,      "experience opens nothing since 20 September 2026");
+        assertEq(minStreak, 5,      "the owner fixed the run of clean deals at five");
+        assertEq(bond,      0,      "a seat is free since 22 September 2026");
+        assertEq(window,    WINDOW, "the window a form counts down");
     }
 
-    /// The words cap is not mirrored at all — it is asked of the facet that
-    /// owns it, through the diamond. This scene proves the two doors really do
-    /// share one number rather than two that happen to agree today.
+    /// The words cap is asked of the facet that owns it rather than copied. The
+    /// door that still asks for words is `revokeUnprovenSeat`; until
+    /// 22 September 2026 `rejectArbiterApplication` asked too, and this scene
+    /// measured it there.
     function test_RefusalWordsUseTheSameCapAsTheRemovalDoors() public {
         uint256 cap = acc.getMaxReasonBytes();
-        _submit(applicant);
+        reg.addArbiter(applicant);
 
         string memory tooLong = _repeat("x", cap + 1);
         vm.expectRevert(abi.encodeWithSelector(
             ArbiterApplicationsFacet.ReasonTooLong.selector, cap + 1
         ));
-        app.rejectArbiterApplication(applicant, tooLong);
+        app.revokeUnprovenSeat(applicant, tooLong);
 
-        // And exactly at the cap it goes through.
-        app.rejectArbiterApplication(applicant, _repeat("x", cap));
-        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_REJECTED, "words exactly at the cap are accepted");
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 1 — a submission goes through, and it takes no money
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_1_SubmissionPassesOnRecordAndTakesNoBond() public {
-        uint256 t0 = vm.getBlockTimestamp();
-        uint256 walletBefore  = usdc.balanceOf(applicant);
-        uint256 diamondBefore = usdc.balanceOf(address(diamond));
-
-        vm.expectEmit(true, false, false, true, address(diamond));
-        emit ArbiterApplicationsFacet.ArbiterApplicationSubmitted(applicant, t0, t0 + WINDOW);
-
-        vm.prank(applicant);
-        app.applyForArbiterSeat();
-
-        (uint8 state, uint256 submittedAt, uint256 expiresAt, uint256 decidedAt, address decidedBy) =
-            app.getArbiterApplication(applicant);
-        assertEq(state, ST_PENDING, "the application stands");
-        assertEq(submittedAt, t0, "filed now");
-        assertEq(expiresAt, t0 + WINDOW, "and it runs seven days");
-        assertEq(decidedAt, 0, "nobody has decided it");
-        assertEq(decidedBy, address(0), "and nobody is named as having decided it");
-
-        // The whole point of the owner's decision: money does not move here.
-        assertEq(usdc.balanceOf(applicant), walletBefore, "the applicant's USDC did not move");
-        assertEq(usdc.balanceOf(address(diamond)), diamondBefore, "the diamond took nothing");
-        assertEq(acc.getArbiterBond(applicant), 0, "and no bond is recorded against him");
-        assertFalse(regVault.isRegisteredArbiter(applicant), "an application is not a seat");
-    }
-
-    /// The same door through a real forwarder, signed, relayed by a third
-    /// address. This is what proves the gasless half: whoever is worth seating
-    /// has a record of deals, not necessarily a balance of ETH.
-    function test_1b_SubmissionThroughForwarderCreditsTheHumanNotTheForwarder() public {
-        _forwardFrom(APPLICANT_PK, abi.encodeWithSelector(app.applyForArbiterSeat.selector));
-
-        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_PENDING, "the application belongs to the signer");
-
-        (uint8 fwdState, , , , ) = app.getArbiterApplication(address(forwarder));
-        assertEq(fwdState, ST_NONE, "and not to the forwarder");
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 2 — a submission is refused on record
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_2a_SubmissionRefusedOnXP() public {
-        address thin = address(0x7411);
-        _seedRecord(thin, 2_999, 10);
-
-        vm.prank(thin);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterRegistryFacet.InsufficientXP.selector, uint256(2_999), uint256(3_000)
-        ));
-        app.applyForArbiterSeat();
-
-        assertEq(app.getApplicantCount(), 0, "a refused submission leaves nothing in the public list");
-    }
-
-    function test_2b_SubmissionRefusedOnCleanStreak() public {
-        address flaky = address(0x7412);
-        _seedRecord(flaky, 10_000, 9);
-
-        vm.prank(flaky);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterRegistryFacet.InsufficientCleanStreak.selector, uint256(9), uint256(10)
-        ));
-        app.applyForArbiterSeat();
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 3 — approval seats the man and takes NOTHING
-    // ══════════════════════════════════════════════════════════════════════
-
-    /// Owner's decision of 13 September 2026, and the scene that turned over
-    /// with it. Until that day this read `test_3_ApprovalTakesTheBondOnceAndSeats`
-    /// and asserted the opposite of every money line below.
-    ///
-    /// ⚠️ THE ALLOWANCE IS GRANTED HERE ON PURPOSE, and it is the whole point of
-    /// the scene. A door that takes nothing because there was nothing to take
-    /// proves nothing. This applicant has the money AND has approved the
-    /// diamond to spend it — every condition the old charge needed — and the
-    /// approval still leaves both balances exactly where they were. The witness
-    /// is the WALLET, not the state flag: a bond recorded in storage without a
-    /// transfer is precisely the failure this scene exists to catch.
-    function test_3_ApprovalSeatsTheManAndTakesNothing() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        uint256 walletBefore  = usdc.balanceOf(applicant);
-        uint256 diamondBefore = usdc.balanceOf(address(diamond));
-
-        // Zero in the log, because zero moved.
-        vm.expectEmit(true, true, false, true, address(diamond));
-        emit ArbiterApplicationsFacet.ArbiterApplicationApproved(applicant, owner, 0);
-
-        app.approveArbiterApplication(applicant);
-
-        assertTrue(regVault.isRegisteredArbiter(applicant), "he is in the corps");
-        assertEq(acc.getArbiterBond(applicant), 0, "and his seat carries no bond at all");
-        assertEq(usdc.balanceOf(applicant), walletBefore, "not a cent left his wallet");
-        assertEq(usdc.balanceOf(address(diamond)), diamondBefore, "and the diamond took nothing");
-        assertEq(
-            usdc.allowance(applicant, address(diamond)), bond,
-            "the allowance he granted is still there, untouched and still spendable"
-        );
-        assertFalse(app.isArbiterActive(applicant), "a seat with no bond behind it may not act");
-        assertEq(acc.getSeatedBy(applicant), owner, "seated by the person who pressed the button");
-
-        (uint8 state, , , uint256 decidedAt, address decidedBy) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_APPROVED, "the application is decided");
-        assertEq(decidedAt, vm.getBlockTimestamp(), "at this moment");
-        assertEq(decidedBy, owner, "by this person");
-
-        // A second press is still refused, and still moves nothing.
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_APPROVED
-        ));
-        app.approveArbiterApplication(applicant);
-        assertEq(usdc.balanceOf(applicant), walletBefore, "and still nothing was taken");
-        assertEq(regVault.getArbiters().length, 1, "and he is in the corps list exactly once");
-    }
-
-    /// He catches up afterwards, which is the half the decision buys.
-    ///
-    /// The allowance granted before the approval is the same allowance
-    /// `postArbiterBond` spends — nothing has to be granted twice.
-    function test_3b_TheSeatHeWasGivenForNothingIsTheSeatHePaysForLater() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-        app.approveArbiterApplication(applicant);
-
-        uint256 walletBefore = usdc.balanceOf(applicant);
-
-        vm.prank(applicant);
-        app.postArbiterBond();
-
-        assertEq(acc.getArbiterBond(applicant), bond, "now the seat carries its bond");
-        assertEq(walletBefore - usdc.balanceOf(applicant), bond, "paid out of his own wallet");
-        assertTrue(app.isArbiterActive(applicant), "and only now may he act");
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 4 — the approver's decision no longer breaks on the applicant's
-    //           wallet, which is the entire reason the two were pulled apart
-    // ══════════════════════════════════════════════════════════════════════
-    //
-    // ⚠️ BOTH SCENES BELOW USED TO EXPECT A REVERT, and they are the sharp end
-    // of the owner's decision of 13 September 2026 rather than a loosening of
-    // it. `BondNotApproved` and `BondBalanceTooLow` still exist and are still
-    // named — they are simply met on `postArbiterBond` now, by the man who can
-    // do something about them, instead of on an approval by a man who cannot.
-    //
-    // What they used to mean is worth writing down, because it is what was
-    // wrong: a refusal from inside `_takeBond` unwound the WHOLE approval, so
-    // an applicant who had not approved the diamond could not be seated at all.
-    // The approver pressed his own button and it failed on somebody else's
-    // inaction.
-
-    function test_4a_AnApplicantWhoGrantedNoAllowanceIsStillSeated() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        // No approve() at all — the commonest case, and until 13 September 2026
-        // the case that made the approval revert.
-
-        app.approveArbiterApplication(applicant);
-
-        assertTrue(regVault.isRegisteredArbiter(applicant), "the seat is his");
-        assertEq(acc.getArbiterBond(applicant), 0, "and it carries nothing");
-        assertFalse(app.isArbiterActive(applicant), "so he may not act on it yet");
-        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_APPROVED, "the application is decided, not left standing");
-
-        // And the refusal did not vanish from the protocol — it moved to the
-        // door where the man who has to fix it is the one who reads it.
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.BondNotApproved.selector, uint256(0), bond
-        ));
-        vm.prank(applicant);
-        app.postArbiterBond();
-    }
-
-    function test_4b_AnApplicantWithAnEmptyWalletIsStillSeated() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-        usdc.burnFrom(applicant, usdc.balanceOf(applicant) - (bond - 1));
-
-        app.approveArbiterApplication(applicant);
-
-        assertTrue(regVault.isRegisteredArbiter(applicant), "a thin wallet seats a man all the same");
-        assertEq(acc.getArbiterBond(applicant), 0, "with nothing behind the seat");
-        assertFalse(app.isArbiterActive(applicant), "and no right to act until he funds it");
-
-        // Same refusal, same words, moved to his own door.
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.BondBalanceTooLow.selector, bond - 1, bond
-        ));
-        vm.prank(applicant);
-        app.postArbiterBond();
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 5 — a week later he no longer passes, so he is not seated
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_5_ApprovalRefusesWhenTheRecordWentBadWhileWaiting() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        // He applied clean; in the days that followed a verdict of his was
-        // overturned and the streak went to nothing.
-        _seedRecord(applicant, 3_000, 0);
-
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterRegistryFacet.InsufficientCleanStreak.selector, uint256(0), uint256(10)
-        ));
-        app.approveArbiterApplication(applicant);
-
-        assertFalse(regVault.isRegisteredArbiter(applicant), "he is not seated");
-        assertEq(acc.getArbiterBond(applicant), 0, "and his money was not taken on the way to refusing him");
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 6 — seven days and the application is gone
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_6_ExpiredApplicationCannotBeApproved() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        vm.warp(vm.getBlockTimestamp() + WINDOW);
-
-        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_EXPIRED, "the reader says expired without anyone sending a transaction");
-
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_EXPIRED
-        ));
-        app.approveArbiterApplication(applicant);
-        assertFalse(regVault.isRegisteredArbiter(applicant), "and nobody is seated on a dead application");
-    }
-
-    function test_6b_ApplicationLivesUntilTheLastSecond() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        vm.warp(vm.getBlockTimestamp() + WINDOW - 1);
-        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_PENDING, "one second before the end it is still alive");
-
-        app.approveArbiterApplication(applicant);
-        assertTrue(regVault.isRegisteredArbiter(applicant), "and can still be approved");
-    }
-
-    /// The other half of expiry: the address is free to apply again, and the
-    /// dead record leaves no wait behind — expiry is not a refusal.
-    function test_6c_AfterExpiryTheSameAddressMayApplyAgain() public {
-        _submit(applicant);
-        vm.warp(vm.getBlockTimestamp() + WINDOW);
-
-        vm.prank(applicant);
-        app.applyForArbiterSeat();
-
-        (uint8 state, uint256 submittedAt, , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_PENDING, "the new application stands");
-        assertEq(submittedAt, vm.getBlockTimestamp(), "and it is dated now, not seven days ago");
-        assertEq(app.getApplicantCount(), 1, "the public list still names him once");
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 7 — a refusal costs seven days
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_7_RefusedApplicantWaitsSevenDaysAndThenMayApply() public {
-        _submit(applicant);
-
-        uint256 refusedAt = vm.getBlockTimestamp();
-        vm.expectEmit(true, true, false, true, address(diamond));
-        emit ArbiterApplicationsFacet.ArbiterApplicationRejected(
-            applicant, owner, REFUSAL, refusedAt + WINDOW
-        );
-        app.rejectArbiterApplication(applicant, REFUSAL);
-
-        (uint8 state, , , uint256 decidedAt, address decidedBy) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_REJECTED, "refused");
-        assertEq(decidedAt, refusedAt, "at this moment");
-        assertEq(decidedBy, owner, "and the refusal has a name on it");
-
-        // One second before the wait is over.
-        vm.warp(refusedAt + WINDOW - 1);
-        vm.prank(applicant);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.RejectedTooRecently.selector, refusedAt + WINDOW
-        ));
-        app.applyForArbiterSeat();
-
-        // And on the far side of it.
-        vm.warp(refusedAt + WINDOW);
-        vm.prank(applicant);
-        app.applyForArbiterSeat();
-        (uint8 again, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(again, ST_PENDING, "seven days later the door is open again");
-    }
-
-    function test_7b_RefusalWithoutWordsIsNotAllowed() public {
-        _submit(applicant);
         vm.expectRevert(ArbiterApplicationsFacet.ReasonRequired.selector);
-        app.rejectArbiterApplication(applicant, "");
+        app.revokeUnprovenSeat(applicant, "");
 
-        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_PENDING, "a wordless refusal decides nothing");
+        // Exactly the cap goes through, so the refusals above are about the
+        // length and not about the door.
+        app.revokeUnprovenSeat(applicant, _repeat("x", cap));
+        assertFalse(regVault.isRegisteredArbiter(applicant), "the seat was not taken back");
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // SCENE 8 — withdrawing leaves nothing in the way
+    // THE DOOR THAT WAS REMOVED (22 September 2026)
     // ══════════════════════════════════════════════════════════════════════
 
-    function test_8_WithdrawalWorksAndLeavesNoWaitBehind() public {
-        _submit(applicant);
+    /// ⚠️ THE EXPECTED SIDE HERE IS A LITERAL SELECTOR, hand-computed with
+    /// `cast sig` and written down, NOT derived from the facet under test — the
+    /// functions do not exist any more, so there is nothing on the facet to
+    /// derive it from, and that is exactly the property being measured.
+    ///
+    ///     applyForArbiterSeat()                    0x6fb78a56
+    ///     approveArbiterApplication(address)       0xbcd90be1
+    ///     rejectArbiterApplication(address,string) 0x8e7e21be
+    ///
+    /// The diamond in this rig is cut by `DeployFull`'s own builders, so this
+    /// goes red the moment any of the three is put back into that list.
+    ///
+    /// ⚠️ WHAT IT DOES NOT SAY: that the three are off the LIVE diamond. They
+    /// are not — they are mounted on 0x760F0736... until a cut takes them off
+    /// with `Remove`, and that cut is a separate piece of work. This measures
+    /// what a fresh deployment carries.
+    function test_TheThreeApplicationDoorsAreNotMounted() public {
+        bytes4[3] memory gone = [bytes4(0x6fb78a56), bytes4(0xbcd90be1), bytes4(0x8e7e21be)];
+        for (uint256 i = 0; i < gone.length; i++) {
+            (bool ok, ) = address(diamond).call(abi.encodeWithSelector(gone[i], address(0), ""));
+            assertFalse(ok, "a removed application door still answers");
+        }
 
-        vm.expectEmit(true, false, false, false, address(diamond));
-        emit ArbiterApplicationsFacet.ArbiterApplicationWithdrawn(applicant);
+        // And the door that replaced all three does answer, so the loop above is
+        // not passing because the whole diamond is deaf.
+        _seedRecord(applicant, 0, 5);
+        vm.prank(applicant);
+        reg.applyAsArbiter();
+        assertTrue(regVault.isRegisteredArbiter(applicant), "the entrance that stayed does not work");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WITHDRAWAL — the applicant's own door out, and all that is left of the
+    // application mechanism
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// ⚠️ THE PENDING RECORD IS WRITTEN INTO STORAGE, and there is no other way
+    /// to get one any more: the door that filed applications was removed on
+    /// 22 September 2026, so every record this door can ever meet is one filed
+    /// BEFORE that — which is the situation being played here.
+    ///
+    /// The seed is not trusted: `_seedPendingApplication` finds the field by
+    /// writing and reading back through the live getter and refuses rather than
+    /// guess, so a layout that moves turns the SETUP red instead of quietly
+    /// seeding nothing.
+    function test_APreExistingApplicationCanStillBeWithdrawn() public {
+        _seedPendingApplication(applicant);
+        (uint8 before_, , , , ) = app.getArbiterApplication(applicant);
+        assertEq(before_, ST_PENDING, "setup: the record is not standing");
+
         vm.prank(applicant);
         app.withdrawArbiterApplication();
 
-        (uint8 state, , , uint256 decidedAt, address decidedBy) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_WITHDRAWN, "taken back");
-        assertEq(decidedAt, vm.getBlockTimestamp(), "at this moment");
-        assertEq(
-            decidedBy, address(0),
-            "and nobody is recorded as having decided it: he withdrew, he was not refused"
-        );
-
-        // Same block, same address, straight back in. A withdrawal is not a
-        // refusal, so none of the seven-day wait applies to it.
-        vm.prank(applicant);
-        app.applyForArbiterSeat();
-        (uint8 again, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(again, ST_PENDING, "he may apply again immediately");
-        assertEq(app.getApplicantCount(), 1, "and the public list still names him exactly once");
+        (uint8 state, , , , address decidedBy) = app.getArbiterApplication(applicant);
+        assertEq(state, ST_WITHDRAWN, "the record was not taken back");
+        assertEq(decidedBy, address(0), "his own withdrawal was recorded as a decision about him");
     }
 
-    function test_8b_WithdrawalThroughForwarderCreditsTheHuman() public {
-        _submit(applicant);
+    /// The same door through a real forwarder, signed by the applicant and sent
+    /// by a third address. This is the scene that holds `_msgSender()` in this
+    /// facet: corrupt that body to `msg.sender` and the withdrawal lands on the
+    /// forwarder instead of the man.
+    function test_WithdrawalThroughTheForwarderCreditsTheHuman() public {
+        _seedPendingApplication(applicant);
+
         _forwardFrom(APPLICANT_PK, abi.encodeWithSelector(app.withdrawArbiterApplication.selector));
 
         (uint8 state, , , , ) = app.getArbiterApplication(applicant);
         assertEq(state, ST_WITHDRAWN, "the withdrawal belongs to the signer, not the forwarder");
+        (uint8 fwdState, , , , ) = app.getArbiterApplication(address(forwarder));
+        assertEq(fwdState, ST_NONE, "the forwarder's own record was written");
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 9 — the chief decides on the same footing as the owner
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_9a_ChiefApproves() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _setChief(chief);
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        vm.prank(chief);
-        app.approveArbiterApplication(applicant);
-
-        assertTrue(regVault.isRegisteredArbiter(applicant), "the chief seated him");
-        assertEq(acc.getSeatedBy(applicant), chief, "and the chain says it was the chief");
-    }
-
-    /// ⚠️ TWO PEOPLE SEATING THE SAME MAN IN THE SAME BLOCK — asked because the
-    /// decoupling removed the external call that used to sit inside this door,
-    /// and with it the only place a second press could have interleaved.
-    ///
-    /// They do not fight, and nothing about that depends on the bond: the
-    /// application is a state machine with one `Pending` slot, and the first
-    /// press moves it to `Approved` before anything else happens. The second
-    /// press — different person, same block — reads the state the first left
-    /// and refuses by name. The thing that must NOT happen is the man being
-    /// seated twice: `arbiterList` would then carry him twice and every quorum
-    /// counted off that array would be wrong.
-    function test_9c_TwoDecidersInTheSameBlockSeatHimOnce() public {
-        _setChief(chief);
-        _submit(applicant);
-
-        app.approveArbiterApplication(applicant);
-
-        vm.prank(chief);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_APPROVED
-        ));
-        app.approveArbiterApplication(applicant);
-
-        assertEq(regVault.getArbiters().length, 1, "he is on the roster more than once");
-        assertEq(acc.getSeatedBy(applicant), owner, "the second press rewrote the provenance");
-        assertEq(acc.getSeatedCountBy(chief), 0, "the refused press still counted against the chief");
-        assertEq(acc.getArbiterBond(applicant), 0, "and neither press left a bond behind");
-    }
-
-    function test_9b_ChiefRejects() public {
-        _setChief(chief);
-        _submit(applicant);
-
-        vm.prank(chief);
-        app.rejectArbiterApplication(applicant, REFUSAL);
-
-        (uint8 state, , , , address decidedBy) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_REJECTED, "refused by the chief");
-        assertEq(decidedBy, chief, "with his name on it");
-    }
-
-    function test_9c_StrangerDecidesNothing() public {
-        _submit(applicant);
-
-        vm.prank(stranger);
-        vm.expectRevert(ArbiterApplicationsFacet.NotOwnerOrChief.selector);
-        app.approveArbiterApplication(applicant);
-
-        vm.prank(stranger);
-        vm.expectRevert(ArbiterApplicationsFacet.NotOwnerOrChief.selector);
-        app.rejectArbiterApplication(applicant, REFUSAL);
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SCENE 10 — the ratchet: governance arrives and this door is finished
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_10_AfterTheDaoManualAdmissionIsClosedAndTheAutomaticDoorWorks() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-        assertTrue(app.isManualAdmissionOpen(), "before governance this door is the door");
-
-        _activateDao();
-        assertFalse(app.isManualAdmissionOpen(), "and afterwards it is not");
-
-        // Nothing manual works any more, for anybody.
-        vm.expectRevert(ArbiterApplicationsFacet.ManualAdmissionClosed.selector);
-        app.approveArbiterApplication(applicant);
-
-        vm.expectRevert(ArbiterApplicationsFacet.ManualAdmissionClosed.selector);
-        app.rejectArbiterApplication(applicant, REFUSAL);
-
-        address newcomer = address(0x0FF1CE);
-        _seedRecord(newcomer, 3_000, 10);
-        vm.prank(newcomer);
-        vm.expectRevert(ArbiterApplicationsFacet.ManualAdmissionClosed.selector);
-        app.applyForArbiterSeat();
-
-        // The successor door is open, and it needs no human decision.
+    /// Nothing standing, nothing to take back — and the refusal carries the
+    /// state that IS there, because "never applied" and "took it back an hour
+    /// ago" are two different things to show a person.
+    function test_WithdrawingNothingIsRefusedByName() public {
         vm.prank(applicant);
-        reg.applyAsArbiter();
-        assertTrue(regVault.isRegisteredArbiter(applicant), "the automatic door seats him");
+        vm.expectRevert(abi.encodeWithSelector(
+            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_NONE
+        ));
+        app.withdrawArbiterApplication();
     }
 
-    /// The other half of the ratchet, and it is not the same statement: a
-    /// person may always clean up his own dead record, even after the door has
-    /// gone. Forcing him to leave it standing in a public list would be spite.
-    function test_10b_WithdrawalStillWorksAfterTheDao() public {
-        _submit(applicant);
+    /// An expired record is not a standing one, and the refusal says so rather
+    /// than saying "none".
+    function test_AnExpiredApplicationReadsAsExpiredAndCannotBeWithdrawn() public {
+        _seedPendingApplication(applicant);
+        vm.warp(vm.getBlockTimestamp() + WINDOW);
+
+        (uint8 state, , , , ) = app.getArbiterApplication(applicant);
+        assertEq(state, ST_EXPIRED, "the clock was not folded into the read");
+
+        vm.prank(applicant);
+        vm.expectRevert(abi.encodeWithSelector(
+            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_EXPIRED
+        ));
+        app.withdrawArbiterApplication();
+    }
+
+    /// ⚠️ DELIBERATELY NOT GATED ON THE RATCHET. Forcing a person to leave his
+    /// own dead record in a public list to prove a point would be spite.
+    function test_WithdrawalStillWorksAfterTheDao() public {
+        _seedPendingApplication(applicant);
         _activateDao();
+        assertFalse(app.isManualAdmissionOpen(), "setup: the ratchet did not turn");
 
         vm.prank(applicant);
         app.withdrawArbiterApplication();
         (uint8 state, , , , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_WITHDRAWN, "he can still take back his own application");
+        assertEq(state, ST_WITHDRAWN, "the ratchet swallowed a withdrawal");
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // CIRCUMSTANCES — the five questions this project asks of everything
+    // THE RATCHET — what is left of it, and the door it still shuts
     // ══════════════════════════════════════════════════════════════════════
 
-    /// Two submissions in a row: the second is refused and the FIRST IS INTACT.
-    /// The second half is the one worth checking — a door that refuses but
-    /// half-overwrites is worse than one that accepts.
-    function test_C1_SecondSubmissionIsRefusedAndTheFirstSurvives() public {
-        uint256 t0 = vm.getBlockTimestamp();
-        _submit(applicant);
-
-        vm.warp(t0 + 1 days);
-        vm.prank(applicant);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.ApplicationAlreadyPending.selector, t0
-        ));
-        app.applyForArbiterSeat();
-
-        (uint8 state, uint256 submittedAt, uint256 expiresAt, , ) = app.getArbiterApplication(applicant);
-        assertEq(state, ST_PENDING, "the first application still stands");
-        assertEq(submittedAt, t0, "still dated when it was filed");
-        assertEq(expiresAt, t0 + WINDOW, "and it did not get a fresh week out of the attempt");
-        assertEq(app.getApplicantCount(), 1, "and he is named once, not twice");
-    }
-
-    /// Approval and withdrawal inside one block, both orders. Nothing here
-    /// depends on the clock, so whichever lands first must leave the second
-    /// with nothing to do — and must leave the state consistent either way.
-    function test_C2a_WithdrawThenApproveInOneBlock() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-        uint256 walletBefore = usdc.balanceOf(applicant);
-
-        vm.prank(applicant);
-        app.withdrawArbiterApplication();
-
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_WITHDRAWN
-        ));
-        app.approveArbiterApplication(applicant);
-
-        assertFalse(regVault.isRegisteredArbiter(applicant), "he withdrew, so he is not in the corps");
-        assertEq(usdc.balanceOf(applicant), walletBefore, "and his money never moved");
-        assertEq(acc.getArbiterBond(applicant), 0, "no bond stands against a withdrawn application");
-    }
-
-    function test_C2b_ApproveThenWithdrawInOneBlock() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        app.approveArbiterApplication(applicant);
-
-        vm.prank(applicant);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_APPROVED
-        ));
-        app.withdrawArbiterApplication();
-
-        assertTrue(regVault.isRegisteredArbiter(applicant), "he is seated and cannot un-seat himself this way");
-        assertEq(acc.getArbiterBond(applicant), 0, "and the seat he got carries no bond");
-    }
-
-    /// A sitting arbiter applying again. Refused by the same error the
-    /// automatic door uses, so a caller decodes one selector either way.
-    function test_C3_SittingArbiterCannotApply() public {
+    /// `isManualAdmissionOpen()` is one read that answers "is the hand still in
+    /// this at all". It now governs exactly one door: `revokeUnprovenSeat`.
+    function test_TheRatchetShutsTheFilterDoorAndNothingElse() public {
+        assertTrue(app.isManualAdmissionOpen(), "setup: the hand is already out");
         reg.addArbiter(applicant);
 
+        _activateDao();
+        assertFalse(app.isManualAdmissionOpen(), "the ratchet did not turn");
+
+        vm.expectRevert(ArbiterApplicationsFacet.ManualAdmissionClosed.selector);
+        app.revokeUnprovenSeat(applicant, REFUSAL);
+
+        // And the automatic entrance is unaffected by the ratchet in either
+        // direction — it never was the thing the ratchet governed.
+        address candidate = address(0xC0FFEE);
+        _seedRecord(candidate, 0, 5);
+        vm.prank(candidate);
+        reg.applyAsArbiter();
+        assertTrue(regVault.isRegisteredArbiter(candidate), "the ratchet shut the automatic door");
+    }
+
+    /// Seating by hand dies at the HANDOVER, which is a different predicate from
+    /// the one above: `isDaoActive() && daoAddress != 0`. Both hold here, so the
+    /// scene shows the door shut; the two are kept apart in the source because
+    /// they part company while a successor is unnamed.
+    function test_SeatingByHandDiesAtTheHandover() public {
+        _activateDao();
+        vm.expectRevert(ArbiterRegistryFacet.SeatingHandedOver.selector);
+        reg.addArbiter(address(0xC0FFEE));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // THE RETIRED BOND DOORS AND THE READS
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// Both bond doors answer by name rather than by a bare failure. They are
+    /// kept mounted for exactly that: a removed selector answers a pressed
+    /// button with nothing a screen can read out.
+    function test_TheRetiredBondDoorsAnswerByName() public {
         vm.prank(applicant);
-        vm.expectRevert(ArbiterRegistryFacet.AlreadyArbiter.selector);
-        app.applyForArbiterSeat();
+        vm.expectRevert(ArbiterApplicationsFacet.SeatBondRetired.selector);
+        app.postArbiterBond();
+
+        vm.prank(applicant);
+        vm.expectRevert(ArbiterApplicationsFacet.SeatBondRetired.selector);
+        app.postArbiterBondWithPermit(vm.getBlockTimestamp() + 1 hours, 27, bytes32(0), bytes32(0));
     }
 
-    /// Approving something that was never filed. Named, and it names the state
-    /// it found: "nobody ever applied" is a different message to send than "it
-    /// ran out yesterday".
-    function test_C4_ApprovingAnApplicationThatDoesNotExist() public {
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.NoPendingApplication.selector, ST_NONE
-        ));
-        app.approveArbiterApplication(address(0xDEAD));
+    /// `getBondState` answers NONE or UNPOSTED and nothing else, because nothing
+    /// writes a seat bond any more. It stays mounted because every live
+    /// Agreement clone calls this selector and a clone is pinned to its
+    /// implementation for life.
+    function test_GetBondStateAnswersOnlyNoneOrUnposted() public {
+        (uint8 none, , ) = app.getBondState(stranger);
+        assertEq(none, 0, "a stranger is not NONE");
 
-        vm.expectRevert(ArbiterApplicationsFacet.ApplicantZeroAddress.selector);
-        app.approveArbiterApplication(address(0));
-    }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // SEAMS — limits that live on the OTHER door and would otherwise have a
-    // way round them through this one
-    // ══════════════════════════════════════════════════════════════════════
-
-    /// `addArbiter` caps the chief's bloc below the number of votes that
-    /// decides an appeal. Without the same cap here, the chief would grow his
-    /// bloc through this door at one press per applicant and the cap over there
-    /// would be decoration.
-    function test_S1_ChiefCannotGrowHisBlocThroughApprovals() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _setChief(chief);
-
-        // First seating: allowed, bloc goes to one.
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-        vm.prank(chief);
-        app.approveArbiterApplication(applicant);
-        assertEq(reg.getChiefBloc(), 1, "the chief's bloc is one");
-
-        // Second: would reach the deciding majority, so it is refused HERE,
-        // with the registry's own error.
-        address second = address(0xA202);
-        _seedRecord(second, 3_000, 10);
-        usdc.mint(second, bond);
-        _submit(second);
-        _approveSpend(second, bond);
-
-        vm.prank(chief);
-        vm.expectRevert(abi.encodeWithSelector(
-            ArbiterRegistryFacet.ChiefBlocWouldDecideAppeal.selector, uint256(2), uint256(2)
-        ));
-        app.approveArbiterApplication(second);
-
-        assertFalse(regVault.isRegisteredArbiter(second), "the second was not seated");
-        assertEq(reg.getChiefBloc(), 1, "and the bloc did not grow");
-
-        // The owner is under no such cap, exactly as in addArbiter: he is the
-        // one who decides composition, and capping him would cap his ability to
-        // dilute the chief's bloc.
-        app.approveArbiterApplication(second);
-        assertTrue(regVault.isRegisteredArbiter(second), "the owner seats him");
-    }
-
-    /// Undoing a removal is the mirror of a removal, and removing is not the
-    /// chief's. `addArbiter` says so; this door has to say the same, or the
-    /// rule has a second entrance.
-    function test_S2_ChiefCannotReseatARemovedArbiterThroughApprovals() public {
-        (, , uint256 bond, ) = app.getApplicationRequirements();
-        _setChief(chief);
-
-        // A real removal, through the real doors, so `removedAt` is written by
-        // the code that owns it rather than by vm.store.
         reg.addArbiter(applicant);
-        acc.proposeRemoval(
-            applicant, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("the evidence"), REFUSAL
-        );
-        vm.warp(vm.getBlockTimestamp() + acc.getRemovalDelay());
-        acc.removeArbiterForCause(
-            applicant, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("the evidence"), address(0), REFUSAL
-        );
-        assertFalse(regVault.isRegisteredArbiter(applicant), "setup: he is out of the corps");
+        (uint8 seated, uint256 bond, ) = app.getBondState(applicant);
+        assertEq(seated, 1, "a seat does not read as UNPOSTED");
+        assertEq(bond,   0, "a seat carries a bond after all");
 
-        _submit(applicant);
-        _approveSpend(applicant, bond);
-
-        vm.prank(chief);
-        vm.expectRevert(ArbiterRegistryFacet.ReseatingRemovedIsOwnerOnly.selector);
-        app.approveArbiterApplication(applicant);
-
-        // The owner may, and he pays the ordinary price: the removal window
-        // stays on the man, because this door is not a way to buy past it.
-        app.approveArbiterApplication(applicant);
-        assertTrue(regVault.isRegisteredArbiter(applicant), "the owner reseated him");
-        assertTrue(
-            acc.isSuspended(applicant),
-            "and the removal's own suspension window survives the reseating"
-        );
+        assertTrue(app.isArbiterActive(applicant), "a free seat is not allowed to act");
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // THE PUBLIC LIST
-    // ══════════════════════════════════════════════════════════════════════
-
-    function test_L1_ListNamesEveryApplicantOnceInOrder() public {
-        address a = address(0xA1A1);
-        address b = address(0xB2B2);
-        _seedRecord(a, 3_000, 10);
-        _seedRecord(b, 3_000, 10);
-
-        _submit(a);
-        _submit(applicant);
-        _submit(b);
-
-        address[] memory all = app.getApplicants();
-        assertEq(all.length, 3, "three people pushed the door");
-        assertEq(all[0], a, "in the order they first did");
-        assertEq(all[1], applicant);
-        assertEq(all[2], b);
-        assertEq(app.getApplicantCount(), 3, "and the count agrees");
-    }
-
-    function test_L2_PagingPastTheEndIsEmptyNotARevert() public {
-        _submit(applicant);
-
-        address[] memory page = app.getApplicantsPage(0, 10);
-        assertEq(page.length, 1, "a window wider than the list returns the list");
-        assertEq(page[0], applicant);
-
-        assertEq(app.getApplicantsPage(1, 10).length, 0, "and past the end it returns nothing");
-        assertEq(app.getApplicantsPage(0, 0).length, 0, "a zero window returns nothing too");
+    /// The public list, and the paged read over it. Nothing can be pushed into
+    /// it any more — the door that did was removed — so what these hold is that
+    /// the reads survive an empty list rather than reverting on it.
+    function test_TheApplicantListReadsEmptyAndPagesWithoutReverting() public view {
+        assertEq(app.getApplicantCount(), 0, "somebody is in a list nothing can write to");
+        assertEq(app.getApplicants().length, 0, "the list is not empty");
+        assertEq(app.getApplicantsPage(0, 10).length, 0, "paging an empty list is not empty");
+        assertEq(app.getApplicantsPage(5, 10).length, 0, "paging past the end should be empty, not a revert");
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -983,9 +522,34 @@ contract ArbiterApplicationsTest is Test {
         assertEq(rep.getCleanStreak(who), streak, "seeding the streak hit the wrong slot");
     }
 
-    function _submit(address who) internal {
-        vm.prank(who);
-        app.applyForArbiterSeat();
+    /// A STANDING APPLICATION, WRITTEN STRAIGHT INTO STORAGE, because no door
+    /// files one any more. Every record `withdrawArbiterApplication` can ever
+    /// meet is one filed before 22 September 2026, and this is that record.
+    ///
+    /// ⚠️ THE FIELD IS FOUND, NOT COUNTED. Counting the declarations of
+    /// `ArbiterRegistryStorage.Data` gives the wrong slot whenever two
+    /// neighbours pack into one — `address chiefArbiter` and `bool
+    /// daoActiveManual` do exactly that, and a hand-counted offset has already
+    /// been measured wrong once in this repository. So each offset is tried,
+    /// the live getter is asked where the write landed, and every slot touched
+    /// on the way is put back.
+    ///
+    /// The struct packs `state` (uint8), `submittedAt` and `decidedAt` (uint64
+    /// each) into its first slot and `decidedBy` into the second, so one word
+    /// is enough to make a record stand.
+    function _seedPendingApplication(address who) internal {
+        uint64 ts = uint64(vm.getBlockTimestamp());
+        bytes32 packed = bytes32(uint256(ST_PENDING) | (uint256(ts) << 8));
+
+        for (uint256 f = 0; f < 64; f++) {
+            bytes32 slot = keccak256(abi.encode(who, uint256(ARB_BASE) + f));
+            bytes32 old = vm.load(address(diamond), slot);
+            vm.store(address(diamond), slot, packed);
+            (uint8 state, uint256 submittedAt, , , ) = app.getArbiterApplication(who);
+            if (state == ST_PENDING && submittedAt == ts) return;
+            vm.store(address(diamond), slot, old);
+        }
+        revert("rig: arbiterApplications not found - the storage layout moved");
     }
 
     function _approveSpend(address who, uint256 amount) internal {
@@ -1017,6 +581,7 @@ contract ArbiterApplicationsTest is Test {
         reg.setDAOAddress(daoSuccessor);
         vm.prank(daoSuccessor);
         reg.acceptDAOAddress();
+        _seedHandoverLiveness(address(diamond));
         reg.activateDAO();
         assertTrue(reg.isDaoActive(), "setup: governance is live");
     }

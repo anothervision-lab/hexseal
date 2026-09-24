@@ -270,7 +270,7 @@ contract ServiceBoardFacet {
         // Rule B: a seat with a bond behind it does not sell work. Asked of
         // `_msgSender()`, so the answer is about the person and not about the
         // forwarder that relayed him.
-        MarketPresence.requireNotBondedArbiter(executor);
+        MarketPresence.requireNotJudging(executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         // Posting a service: there is no deal amount yet, nothing to take a
@@ -326,7 +326,7 @@ contract ServiceBoardFacet {
         // floor is pulled from `executor`'s wallet on his permit signature, so
         // he is the person who would become a seller here. Checked before the
         // paper is presented, so a refusal leaves his signature unspent.
-        MarketPresence.requireNotBondedArbiter(executor);
+        MarketPresence.requireNotJudging(executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         // Posting a service: there is no deal amount yet, nothing to take a
@@ -467,8 +467,8 @@ contract ServiceBoardFacet {
         // owner's seat — a service posted before the rule, whose executor has
         // since taken a bonded seat, takes no new requests instead of
         // collecting ones nobody may accept.
-        MarketPresence.requireNotBondedArbiter(client);
-        MarketPresence.requireNotBondedArbiter(svc.executor);
+        MarketPresence.requireNotJudging(client);
+        MarketPresence.requireNotJudging(svc.executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (IRegistry(fs.diamond).hasActivePair(client, svc.executor)) revert ActiveDealExists();
@@ -534,8 +534,8 @@ contract ServiceBoardFacet {
         // Rule B, both sides, on the PARAMETER for the client: the relayer
         // presses this and the money is pulled on `client`'s permit signature,
         // so he is the party here. Checked before the paper is presented.
-        MarketPresence.requireNotBondedArbiter(client);
-        MarketPresence.requireNotBondedArbiter(svc.executor);
+        MarketPresence.requireNotJudging(client);
+        MarketPresence.requireNotJudging(svc.executor);
 
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         if (IRegistry(fs.diamond).hasActivePair(client, svc.executor)) revert ActiveDealExists();
@@ -594,8 +594,8 @@ contract ServiceBoardFacet {
         // request predates the rule). Neither is locked in by the refusal: the
         // executor has `rejectRequest`, the client has `cancelRequest`, and the
         // escrow comes back on both.
-        MarketPresence.requireNotBondedArbiter(sender);
-        MarketPresence.requireNotBondedArbiter(req.client);
+        MarketPresence.requireNotJudging(sender);
+        MarketPresence.requireNotJudging(req.client);
 
         // Effects first
         req.status = ServiceBoardStorage.RequestStatus.ACCEPTED;

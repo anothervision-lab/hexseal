@@ -1619,8 +1619,8 @@ contract TreasuryTest is Test {
             "the deployed, immutable treasury still carries 100_000 - it can only change by deploying another treasury"
         );
         assertEq(
-            facet.getDaoThreshold(), 10_000,
-            "the registry threshold is 10_000 - a condition on the owner's press, no longer a trigger"
+            facet.getDaoThreshold(), 1_000,
+            "the registry threshold is 1_000 - a condition on the owner's press, no longer a trigger"
         );
         assertTrue(
             treasury.DAO_THRESHOLD() != facet.getDaoThreshold(),

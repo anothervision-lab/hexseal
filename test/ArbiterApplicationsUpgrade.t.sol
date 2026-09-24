@@ -78,7 +78,16 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     // SIXTEEN since 17 September 2026: `getBondState(address)`, the read that
     // tells a sagging seat from one that never paid. It reaches the live
     // diamond through the appeal-economics cut, not through this script.
+    //
+    // ⚠️ AND THE TWO NUMBERS PARTED COMPANY ON 22 SEPTEMBER 2026. The Add
+    // list is still SIXTEEN — this script is the record of a cut that mounted
+    // sixteen selectors, and a record is not rewritten — but the facet compiles
+    // to THIRTEEN: `applyForArbiterSeat`, `approveArbiterApplication` and
+    // `rejectArbiterApplication` were removed by the owner's decision. The
+    // script's own pre-flight names those three as the whole of the difference,
+    // so a fourth would still be red, and so would one of the three coming back.
     uint256 constant ADDED_SELECTORS = 16;
+    uint256 constant COMPILED_SELECTORS = 13;
 
     /// The one selector DealMetadataFacet ever answered, written out here
     /// rather than borrowed from DeployFull.
@@ -115,7 +124,7 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
         // And said out loud as a number a person fixed, so a facet that
         // silently grows a twelfth function stops here too.
         assertEq(upgrade.addSelectors().length, ADDED_SELECTORS, "the cut no longer adds the whole facet");
-        assertEq(upgrade.artifactSelectors().length, ADDED_SELECTORS, "the facet exposes a different number of functions");
+        assertEq(upgrade.artifactSelectors().length, COMPILED_SELECTORS, "the facet exposes a different number of functions");
     }
 
     /// Every added selector against the LIVE CHAIN as it was read on 24 August

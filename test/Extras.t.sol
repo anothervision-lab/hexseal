@@ -221,20 +221,13 @@ contract ExtrasTest is Test {
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an
-        // unbonded seat is refused by every arbiter door. This rig mounts the
-        // registry by hand and has no applications facet, so the field is
-        // written directly — slot 12 of the arbiter namespace, pinned by
-        // test/StorageLayout.t.sol. No USDC moves, and nothing here refunds or
-        // forfeits a bond.
-        vm.store(
-            address(diamond),
-            keccak256(abi.encode(
-                arbiter,
-                uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 12
-            )),
-            bytes32(uint256(50_000_000))
-        );
+        // ⚠️ THE SEAT BOND IS GONE (22 September 2026), so slot 12 is no longer
+        // written by hand here. A seat costs nothing; what an arbiter needs is
+        // money and an allowance for the bond he posts PER CASE, inside
+        // `claimDispute`.
+        usdc.mint(arbiter, 1_000_000_000);
+        vm.prank(arbiter);
+        usdc.approve(address(diamond), type(uint256).max);
     }
 
     // ============================================================

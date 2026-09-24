@@ -169,8 +169,20 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
         assertEq(replace.length, 8, "ReputationFacet: expected 8 Replace selectors");
         assertEq(add.length, 1, "ReputationFacet: expected 1 Add selector");
         _assertDisjoint(replace, add, "ReputationFacet");
-        _assertSameSelectorSet(_concat(replace, add), _abiSelectors("ReputationFacet"), "ReputationFacet");
-        _assertSameSelectorSet(_concat(replace, add), deploy.reputationFacetSelectors(), "ReputationFacet vs DeployFull");
+        // The cross-check against the live ABI and against DeployFull was
+        // dropped on 20 September 2026, exactly as it was dropped for
+        // ArbiterRegistryFacet above and for the same reason: this script was
+        // really broadcast (see the UPDATE in the file header), so Replace+Add
+        // here is a RECORD of what was mounted on 31 July 2026. The facet's ABI
+        // has grown since (getStreakStanding, 20 September), and demanding
+        // equality with today's ABI is demanding that the past match the
+        // present. What still holds the present: DeployFullSelectors compares
+        // the deploy script with the compiled facet, DeployFullMatchesChain
+        // compares the tree with the chain census, and this file still checks
+        // the historical lists are disjoint and correctly wired below.
+        //
+        // ⚠️ NOT a silencing. The nine selectors this script really cut are
+        // still named one by one, and a change to any of THEM goes red here.
     }
 
     // ── FacetCut[] builder checks ─────────────────────────────────────────
@@ -307,7 +319,14 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
         // this archived script never touched it. The arbiter registry's two new
         // selectors of the same day (abandonClaim, getAppealPanel) do NOT land
         // here: that facet's list is this script's own frozen delivery of 63.
-        assertEq(total, 183, "post-upgrade diamond should route exactly 183 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
+        // 183 -> 184 on 20 September 2026, the handover's second condition: the
+        // deal registry gained getLiveDeals(), and RegistryFacet is one of the
+        // nine read LIVE from DeployFull, so its growth lands here although this
+        // archived script never touched it. ONE and not two — the other selector
+        // of the same rule, getHandoverReadiness(), is on
+        // ArbiterAccountabilityFacet, which is not among the eleven groups this
+        // sum covers at all.
+        assertEq(total, 184, "post-upgrade diamond should route exactly 184 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
 
         bytes4[] memory flat = new bytes4[](total);
         uint256 k = 0;

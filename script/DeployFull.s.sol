@@ -135,6 +135,18 @@ pragma solidity ^0.8.20;
 // in Agreement, so the cut needs a new implementation and a new deployer, and
 // the deals that already exist keep the old behaviour for ever (EIP-1167).
 //
+// Then 253, on 22 September 2026, THREE DOORS INTO THE CORPS BECOME TWO (the
+// owner's decision). ArbiterApplicationsFacet LOSES three selectors —
+// applyForArbiterSeat, approveArbiterApplication, rejectArbiterApplication (16
+// against the previous 13 here; on chain those three are already mounted and
+// have to come off with `Remove`). The application asked exactly what the
+// self-service door asks and added only a person's right to refuse somebody
+// the rules already admit; the self-service door itself stopped waiting for
+// governance in the same change, so the ladder now ends in a seat. `addArbiter`
+// keeps its selector and loses the chief: it is the owner's alone, because it
+// is the one entrance that measures nothing at all.
+// 256 -> 253, the facet count unchanged.
+//
 // To recount without relying on the eye:
 //   grep -o "new bytes4\[\]([0-9]*)" script/DeployFull.s.sol \
 //     | sed 's/.*(\([0-9]*\))/\1/' | awk '{s+=$1} END {print s}'
@@ -148,10 +160,11 @@ pragma solidity ^0.8.20;
 //   FEE_RECIPIENT      — non-zero; without it the platform fees would go silently
 //                        to the deployer key.
 //   INITIAL_ARBITER    — non-zero; with not one arbiter, no dispute can be closed
-//                        other than by a timeout refunding the client 100%
-//                        (applyAsArbiter requires DAO mode, which a fresh
-//                        deployment does not have, and addArbiter is
-//                        onlyOwnerOrChief).
+//                        other than by a timeout refunding the client 100%.
+//                        Since 22 September 2026 `applyAsArbiter` no longer
+//                        waits for governance, but it asks for a run of five
+//                        clean deals, and a fresh deployment has no deals at
+//                        all; `addArbiter` is the owner's.
 // All four are checked before a single vm.startBroadcast call — it is cheaper to
 // stumble at once than after the script has already deployed twelve implementations
 // and the Diamond.
@@ -494,7 +507,7 @@ contract DeployFull is Script {
     // syncOfferAcceptance (anybody's repair for a lost announcement) and
     // isOfferPending (the read).
     function registryFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](19);
+        sels = new bytes4[](20);
         sels[0]  = RegistryFacet.initRegistry.selector;
         sels[1]  = RegistryFacet.register.selector;
         sels[2]  = RegistryFacet.updateStatus.selector;
@@ -514,6 +527,10 @@ contract DeployFull is Script {
         sels[16] = RegistryFacet.notifyOfferAccepted.selector;
         sels[17] = RegistryFacet.syncOfferAcceptance.selector;
         sels[18] = RegistryFacet.isOfferPending.selector;
+        // The market's own pulse, appended 20 September 2026: the O(1) twin of
+        // getActive().length + getDisputed().length, and the first of the two
+        // terms of the handover's liveness condition.
+        sels[19] = RegistryFacet.getLiveDeals.selector;
     }
 
     // FactoryFacet — 28 selectors (setPaused/isPaused/getProtocolArbiter/
@@ -733,7 +750,7 @@ contract DeployFull is Script {
     // subgraph see no difference at all — a facet is a row in the proxy's routing
     // table, not an endpoint.
     function arbiterVaultFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](34);
+        sels = new bytes4[](37);
 
         // Rewards
         sels[0] = ArbiterVaultFacet.withdrawArbiterReward.selector;
@@ -787,6 +804,13 @@ contract DeployFull is Script {
         // The bank's way out for appeal debts, and their read (second pass, same day)
         sels[32] = ArbiterVaultFacet.settleAppealDebts.selector;
         sels[33] = ArbiterVaultFacet.getAppealDebts.selector;
+        // The bond a CASE carries (22 September 2026): the arbiter's way to
+        // collect it when the deal ended without his verdict, and the two reads
+        // a screen needs to know whether to offer the button and whether his
+        // one slot is free.
+        sels[34] = ArbiterVaultFacet.withdrawCaseBond.selector;
+        sels[35] = ArbiterVaultFacet.getCaseBond.selector;
+        sels[36] = ArbiterVaultFacet.getJudgingCount.selector;
     }
 
     // ArbiterAccountabilityFacet — 35 selectors (the number on this line read "31"
@@ -813,7 +837,7 @@ contract DeployFull is Script {
     // (86.4%) and there was not enough room. It shares the same ArbiterRegistryStorage
     // namespace — no data is moved.
     function arbiterAccountabilityFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](36);
+        sels = new bytes4[](38);
         sels[0] = ArbiterAccountabilityFacet.suspendArbiter.selector;
         sels[1] = ArbiterAccountabilityFacet.liftSuspension.selector;
         sels[2] = ArbiterAccountabilityFacet.isSuspended.selector;
@@ -846,6 +870,12 @@ contract DeployFull is Script {
         sels[6] = ArbiterAccountabilityFacet.getMistakeThreshold.selector;
         sels[7] = ArbiterAccountabilityFacet.getMaxArbiterMistakesMirror.selector;
         sels[8] = ArbiterAccountabilityFacet.getDaoThresholdMirror.selector;
+        // The handover's SECOND condition, appended 20 September 2026, and the
+        // whole of it: every term with its floor and a verdict, out of the same
+        // HandoverLib.readiness() that activateDAO() calls. It reads across
+        // three namespaces rather than this facet's constants, which is why it
+        // is not grouped with the three above it.
+        sels[36] = ArbiterAccountabilityFacet.getHandoverReadiness.selector;
 
         // The chief's proposal (15 August 2026): removal stays the owner's
         // irreversible right (or daoAddress's after the handover) — the chief puts only
@@ -952,94 +982,95 @@ contract DeployFull is Script {
         // registry stands 90 bytes under the EIP-170 ceiling and could not hold
         // one more function. Same storage, same POSITION, same diamond address.
         sels[35] = ArbiterAccountabilityFacet.getDisputeSubsidy.selector;
+
+        // ── The overturn SHARE, and the rule the chain judges it by
+        //    (21 September 2026) ──
+        // NOT YET ON CHAIN — it is listed in the pending-cut literal of
+        // test/DeployFullMatchesChain.t.sol, and the day the cut is signed that
+        // line goes and the census is re-read.
+        //
+        // It carries the three rule numbers out with the record on purpose: the
+        // web client decides from them whether a rate may be shown at all, and a
+        // copy of that floor on the screen would be a second threshold nothing
+        // compares against the one the chain suspends on.
+        sels[37] = ArbiterAccountabilityFacet.getArbiterOutcomeRecord.selector;
     }
 
-    // ArbiterApplicationsFacet — 11 selectors (24 August 2026).
+    // ArbiterApplicationsFacet — 13 selectors (22 September 2026).
     //
-    // The thirteenth facet. The door into the arbiter corps before the DAO is
-    // switched on: until it, the only entrance was addArbiter, and applyAsArbiter
-    // reverts DAONotActive on its first line — that is, NOBODY could file an
-    // application. The self-enrolment gate measures a record (3 000 XP ≈ thirty
-    // deals), and at the start there is no record; lowering the threshold would leave
-    // the bond as the filter, that is, would sell the seat. Hence a decision made by
-    // hand — and it ends with an EVENT: the isDaoActive() ratchet closes this door
-    // with the same DAO activation that closes addArbiter.
+    // The thirteenth facet, and what is left of it. It was built as the interim
+    // door into the arbiter corps: `applyAsArbiter` refused `DAONotActive` on
+    // its first line, so before governance nobody could put himself forward by
+    // any means and the only entrance was the owner's hand.
     //
-    // Why a separate facet rather than an addition to one of the two neighbours — see
-    // the header of src/facets/ArbiterApplicationsFacet.sol: the registry had little
-    // room to spare, and the accountability facet has room but its name is already
-    // half untrue, and a second layer of that untruth is not worth introducing.
+    // ⚠️ THAT PREMISE WAS REMOVED ON 22 SEPTEMBER 2026, and three selectors
+    // went with it — `applyForArbiterSeat`, `approveArbiterApplication`,
+    // `rejectArbiterApplication`. The self-service door is open now and asks a
+    // run of five clean deals; the application asked exactly the same thing and
+    // added only a person's right to refuse somebody the rules already admit.
     //
-    // ⚠️ THE ROOM ARGUMENT STOPPED BEING THEORETICAL ON 8 SEPTEMBER 2026. The
-    // figure that stood here ("1 207 bytes to spare") was a snapshot and had gone
-    // stale; measured that day the registry stood 209 bytes clear of the EIP-170
-    // ceiling before the bond work and 44 after it. `postArbiterBond` below is
-    // here BECAUSE it would not fit there — see its docstring.
+    // ⚠️ WHAT THIS LIST IS AND IS NOT. It is what a FRESH deployment mounts.
+    // The live diamond still carries the three removed selectors until a cut
+    // takes them off with `Remove`, and that cut must keep them in a group of
+    // their own: `Replace` reverts on an unmounted selector and `Add` on a
+    // mounted one, and either mistake drops the whole cut in one transaction.
+    //
+    // Why a separate facet rather than an addition to one of the two neighbours
+    // — see the header of src/facets/ArbiterApplicationsFacet.sol: the registry
+    // stands under a thousand bytes clear of the EIP-170 ceiling.
     function arbiterApplicationsFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](16);
+        sels = new bytes4[](13);
 
-        // The applicant's doors are BOTH gasless (ERC-2771): somebody worth seating
-        // has a record of deals, not necessarily an ETH balance.
-        sels[0] = ArbiterApplicationsFacet.applyForArbiterSeat.selector;
-        sels[1] = ArbiterApplicationsFacet.withdrawArbiterApplication.selector;
-
-        // The decision doors are administrative (the owner or, before the DAO, the
-        // chief) and read a raw msg.sender. The bond is debited HERE, on approval, and
-        // not on filing: the decision is made by a human by hand, and by not answering
-        // they would be holding somebody else's money for who knows how long.
-        sels[2] = ArbiterApplicationsFacet.approveArbiterApplication.selector;
-        sels[3] = ArbiterApplicationsFacet.rejectArbiterApplication.selector;
+        // The applicant's own door out. Gasless (ERC-2771), like everything on
+        // the applicant's side of this facet.
+        //
+        // ⚠️ IT OUTLIVED THE DOOR IN. Nothing can become Pending any more, so
+        // this can only ever clear a record filed before the removal — of which
+        // the live chain has none (`getApplicantCount()` reads 0, measured
+        // 22 September 2026). It is mounted because taking a man's ability to
+        // clear his own record away is a decision to be taken out loud.
+        sels[0] = ArbiterApplicationsFacet.withdrawArbiterApplication.selector;
 
         // Reads. getArbiterApplication folds expiry into the answer — otherwise an
         // application would look alive forever (an event on expiry is deliberately not
         // provided: there is no transaction that would send it).
-        sels[4]  = ArbiterApplicationsFacet.getArbiterApplication.selector;
-        sels[5]  = ArbiterApplicationsFacet.getApplicationWindow.selector;
-        sels[6]  = ArbiterApplicationsFacet.getApplicationRequirements.selector;
-        sels[7]  = ArbiterApplicationsFacet.isManualAdmissionOpen.selector;
-        sels[8]  = ArbiterApplicationsFacet.getApplicants.selector;
-        sels[9]  = ArbiterApplicationsFacet.getApplicantCount.selector;
-        sels[10] = ArbiterApplicationsFacet.getApplicantsPage.selector;
+        sels[1] = ArbiterApplicationsFacet.getArbiterApplication.selector;
+        sels[2] = ArbiterApplicationsFacet.getApplicationWindow.selector;
+        sels[3] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
+        sels[4] = ArbiterApplicationsFacet.isManualAdmissionOpen.selector;
+        sels[5] = ArbiterApplicationsFacet.getApplicants.selector;
+        sels[6] = ArbiterApplicationsFacet.getApplicantCount.selector;
+        sels[7] = ArbiterApplicationsFacet.getApplicantsPage.selector;
 
-        // The bond a hand-seated arbiter posts for himself, and the read that lets
-        // a form know he still owes it (8 September 2026). Gasless like the
-        // applicant's other doors and, unlike every other door of this facet,
-        // NOT retired by the DAO ratchet — a man seated before the handover must
-        // still be able to pay after it.
-        sels[11] = ArbiterApplicationsFacet.postArbiterBond.selector;
-        sels[12] = ArbiterApplicationsFacet.isArbiterActive.selector;
+        // The two retired bond doors. Both answer `SeatBondRetired`, and they are
+        // MOUNTED on purpose: a removed selector answers a pressed button with a
+        // bare failure and no name, this answers with one a screen can read out.
+        // They come off when the screens that press them do.
+        sels[8]  = ArbiterApplicationsFacet.postArbiterBond.selector;
+        sels[9]  = ArbiterApplicationsFacet.postArbiterBondWithPermit.selector;
+        sels[10] = ArbiterApplicationsFacet.isArbiterActive.selector;
 
         // Taking back a granted seat that nothing has been earned in
         // (11 September 2026). Administrative, raw msg.sender, and retired by the
-        // same DAO ratchet as the two decision doors above — after the handover
-        // arbiters seat themselves and removal belongs to the successor.
+        // DAO ratchet — after the handover arbiters seat themselves and removal
+        // belongs to the successor.
         //
         // ⚠️ It is NOT a second removal door. It refuses every arbiter with a
         // record, so the procedure — proposal, 48-hour pause, right of reply —
-        // still owns everyone it owned before. The bond comes back in full,
-        // which is the other half of why this is a filter and not a penalty.
+        // still owns everyone it owned before.
         //
         // No companion read is mounted on purpose: a form decides whether to
         // show the button by simulating THIS call and reading the named error it
         // refuses with. A second function answering "may I" would be a second
         // copy of the rule, and the copy that drifted would be the one saying
         // yes.
-        sels[13] = ArbiterApplicationsFacet.revokeUnprovenSeat.selector;
+        sels[11] = ArbiterApplicationsFacet.revokeUnprovenSeat.selector;
 
-        // The same bond as sels[11], carried in on a signed EIP-2612 paper
-        // instead of an allowance granted beforehand (11 September 2026).
-        //
-        // ⚠️ IT IS A SECOND DOOR, NOT A REPLACEMENT. sels[11] stays mounted for
-        // everybody who has already approved the diamond. The reason the second
-        // door had to exist at all is that `approve` is a transaction sent to
-        // USDC, which does not trust our forwarder — so that step could never be
-        // made gasless from our side, and the arbiter it is asked of has earned
-        // nothing yet to pay the gas with.
-        sels[14] = ArbiterApplicationsFacet.postArbiterBondWithPermit.selector;
-
-        // Where a seat's bond stands — unposted, sagging after a lost appeal, or
-        // whole — and what a top-up would take (17 September 2026).
-        sels[15] = ArbiterApplicationsFacet.getBondState.selector;
+        // Where a seat's bond stands. Since 22 September 2026 it answers NONE or
+        // UNPOSTED and nothing else, and it stays mounted because every live
+        // Agreement clone calls this selector and a clone is pinned to its
+        // implementation for life.
+        sels[12] = ArbiterApplicationsFacet.getBondState.selector;
     }
 
     // TreasuryLinkFacet — 9 selectors
@@ -1095,7 +1126,7 @@ contract DeployFull is Script {
     // ReputationFacet — 9 selectors (getUnresolvedDisputes — a counter of disputes
     // that ended without a verdict)
     function reputationFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](9);
+        sels = new bytes4[](10);
         sels[0] = ReputationFacet.autoAwardXP.selector;
         sels[1] = ReputationFacet.claimXP.selector;
         sels[2] = ReputationFacet.notifyExecutorFault.selector;
@@ -1105,6 +1136,10 @@ contract DeployFull is Script {
         sels[6] = ReputationFacet.isDealWin.selector;
         sels[7] = ReputationFacet.getCleanStreak.selector;
         sels[8] = ReputationFacet.getUnresolvedDisputes.selector;
+        // 20 September 2026. NOT YET ON CHAIN — it is listed in the pending-cut
+        // literal of test/DeployFullMatchesChain.t.sol, and the day the cut is
+        // signed that line goes and the census is re-read.
+        sels[9] = ReputationFacet.getStreakStanding.selector;
     }
 
     function _cut(address facet, IDiamondCut.FacetCutAction action, bytes4[] memory sels)

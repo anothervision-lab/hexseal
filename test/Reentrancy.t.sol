@@ -587,12 +587,14 @@ contract ReentrancyTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
+    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
+    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
+    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
+    /// name is kept because every scene in this file calls it.
     function _bondSeat(address who) internal {
-        vm.store(
-            address(diamond),
-            keccak256(abi.encode(who, uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 12)),
-            bytes32(uint256(50_000_000))
-        );
+        malUSDC.mint(who, 1_000_000_000);
+        vm.prank(who);
+        malUSDC.approve(address(diamond), type(uint256).max);
     }
 
 }

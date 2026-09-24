@@ -323,7 +323,7 @@ contract DisputeFeeTest is Test {
 
     /// The 80/20 split and both counters — the arbiter really claimed the dispute,
     /// and their address is passed nowhere as an argument.
-    function testCreditDisputeFeeSplitsEightyTwenty() public {
+    function testCreditDisputeFeeSplitsNinetyTen() public {
         address agreement = _createAgreement();
         address arb = address(0xA1);
         _disputeAndClaim(agreement, arb);
@@ -336,12 +336,12 @@ contract DisputeFeeTest is Test {
         ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 4_800_000, "arbiter 80%");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),      1_200_000, "treasury 20%");
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 5_400_000, "arbiter 90%");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),        600_000, "treasury 10%");
     }
 
     /// The treasury's share is computed by subtraction, so no unit is lost on a
-    /// non-round amount. 1_000_003 * 8000 / 10000 = 800_002 (floor), remainder
+    /// non-round amount. 1_000_003 * 9000 / 10000 = 900_002 (floor), remainder
     /// 200_001.
     function testCreditDisputeFeeLosesNoUnitOnOddAmount() public {
         address agreement = _createAgreement();
@@ -356,7 +356,7 @@ contract DisputeFeeTest is Test {
 
         uint256 toArb = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb);
         uint256 toTre = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
-        assertEq(toArb, 800_002, "arbiter share floors");
+        assertEq(toArb, 900_002, "arbiter share floors");
         assertEq(toArb + toTre, 1_000_003, "parts must sum to the whole");
     }
 
@@ -383,20 +383,20 @@ contract DisputeFeeTest is Test {
         ArbiterVaultFacet(address(diamond)).creditDisputeFee(1_000_003);
         vm.stopPrank();
 
-        // 6_000_000 -> 4_800_000/1_200_000; 1_000_003 -> 800_002/200_001.
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 4_800_000 + 800_002, "arbiter reward must accumulate");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),      1_200_000 + 200_001, "treasury slice must accumulate");
+        // 6_000_000 -> 5_400_000/600_000; 1_000_003 -> 900_002/100_001.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 5_400_000 + 900_002, "arbiter reward must accumulate");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),        600_000 + 100_001, "treasury slice must accumulate");
     }
 
     /// The verdict was overturned (overturnVerdict) — the arbiter was wrong and
-    /// gets nothing. The treasury keeps its ordinary 20% and NOT A CENT MORE;
-    /// the arbiter's forfeited 80% goes to the arbiter bank (17 September 2026,
+    /// gets nothing. The treasury keeps its ordinary 10% and NOT A CENT MORE;
+    /// the arbiter's forfeited 90% goes to the arbiter bank (17 September 2026,
     /// the owner's decision, journal item 205). Until that day this test was
     /// `testCreditDisputeFeeOverturnedSendsEntireFeeToTreasury` and asserted the
     /// opposite — the whole fee into the treasury slice.
     ///
     /// With no appeal behind the overturn there is nothing to pay back, so the
-    /// whole 80% lands in the bank. The appeal branches are in
+    /// whole 90% lands in the bank. The appeal branches are in
     /// test/AppealEconomics.t.sol.
     function testCreditDisputeFeeOverturnedSendsTheForfeitedShareToTheBankNotTheTreasury() public {
         address agreement = _createAgreement();
@@ -414,10 +414,10 @@ contract DisputeFeeTest is Test {
         vm.stopPrank();
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "overturned arbiter gets nothing");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 1_200_000, "the treasury keeps its 20% and no more");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 600_000, "the treasury keeps its 10% and no more");
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance() - bankBefore, 4_800_000,
-            "the forfeited 80% goes to the arbiter bank"
+            ArbiterVaultFacet(address(diamond)).getVaultBalance() - bankBefore, 5_400_000,
+            "the forfeited 90% goes to the arbiter bank"
         );
     }
 
@@ -442,7 +442,7 @@ contract DisputeFeeTest is Test {
         vm.prank(arb);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
 
-        assertEq(usdc.balanceOf(arb) - before, 4_800_000, "reward must actually reach the arbiter's wallet");
+        assertEq(usdc.balanceOf(arb) - before, 5_400_000, "reward must actually reach the arbiter's wallet");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "counter must be cleared");
     }
 
@@ -466,7 +466,7 @@ contract DisputeFeeTest is Test {
         vm.prank(address(0xBEEF));
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
 
-        assertEq(usdc.balanceOf(recipient) - before, 1_200_000, "slice must reach the fee recipient");
+        assertEq(usdc.balanceOf(recipient) - before, 600_000, "slice must reach the fee recipient");
         assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "counter must be cleared");
     }
 
@@ -491,12 +491,14 @@ contract DisputeFeeTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
+    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
+    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
+    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
+    /// name is kept because every scene in this file calls it.
     function _bondSeat(address who) internal {
-        vm.store(
-            address(diamond),
-            keccak256(abi.encode(who, uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 12)),
-            bytes32(uint256(50_000_000))
-        );
+        usdc.mint(who, 1_000_000_000);
+        vm.prank(who);
+        usdc.approve(address(diamond), type(uint256).max);
     }
 
 }

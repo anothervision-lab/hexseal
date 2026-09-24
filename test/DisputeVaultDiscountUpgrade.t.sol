@@ -125,7 +125,7 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
     /// Held to "real, and covering nothing this cut mounted" by
     /// test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](8);
+        sels = new bytes4[](11);
         sels[0] = bytes4(keccak256("withdrawAppealShare(address)"));
         sels[1] = bytes4(keccak256("getAppealShareOwed(address,address)"));
         sels[2] = bytes4(keccak256("getAppealLedger(address)"));
@@ -137,6 +137,41 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         // that the appeal quorum moves with the corps.
         sels[6] = bytes4(keccak256("abandonClaim(address)"));
         sels[7] = bytes4(keccak256("getAppealPanel(address)"));
+        // And the three of 22 September 2026, when the seat stopped being
+        // hostage money and the bond moved to the CASE: the arbiter's door to
+        // collect the bond of a case that ended without his verdict, and the
+        // two reads a screen needs beside that button. All three on
+        // ArbiterVaultFacet.
+        sels[8] = bytes4(keccak256("withdrawCaseBond(address)"));
+        sels[9] = bytes4(keccak256("getCaseBond(address)"));
+        sels[10] = bytes4(keccak256("getJudgingCount(address)"));
+    }
+
+    /// The same device for the OTHER facet, which until 20 September 2026 had
+    /// not grown at all since this cut and therefore needed no list.
+    ///
+    ///   • getHandoverReadiness() — 20 September 2026. Every term of the
+    ///     handover's SECOND condition (deals open now, the run of clean
+    ///     disputes, the number of different arbiters who earned it), each with
+    ///     its floor and its verdict, out of the same function activateDAO()
+    ///     itself calls. It sits on the accountability facet rather than beside
+    ///     that door for the measured reason the other reads did: the arbiter
+    ///     registry is the fullest contract in the repository.
+    ///
+    ///   • getArbiterOutcomeRecord(address) — 21 September 2026. An arbiter's
+    ///     closed-case record (how many he closed, how many of those came back
+    ///     overturned, and the share inside the recent window) TOGETHER WITH
+    ///     the three numbers the chain judges that share by. The rule itself is
+    ///     applied in ArbiterRegistryFacet.finalizeVerdict; only the reading
+    ///     sits here, and the rule numbers travel with it so that no screen
+    ///     keeps a copy of the floor below which a share may not be shown.
+    ///
+    /// Held to "real, and covering nothing this cut mounted" by the second half
+    /// of test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted.
+    function _grownAccountabilityAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](2);
+        sels[0] = bytes4(keccak256("getHandoverReadiness()"));
+        sels[1] = bytes4(keccak256("getArbiterOutcomeRecord(address)"));
     }
 
     function test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted() public view {
@@ -146,6 +181,18 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
             assertTrue(_contains(regAbi, grown[i]), "the allowance is stale: no such function in the registry pair's ABI");
             assertFalse(_contains(upgrade.registryReplaceSelectors(), grown[i]), "the allowance covers a selector this cut REPLACED");
             assertFalse(_contains(upgrade.registryAddSelectors(), grown[i]), "the allowance covers a selector this cut ADDED");
+        }
+
+        // The same two questions of the accountability allowance. Asked
+        // separately rather than folded in: the two lists are checked against
+        // DIFFERENT ABIs, and one loop over both would have to guess which.
+        bytes4[] memory grownAcc = _grownAccountabilityAfterThisCut();
+        bytes4[] memory accAbi =
+            upgrade.artifactSelectors("out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json");
+        for (uint256 i = 0; i < grownAcc.length; i++) {
+            assertTrue(_contains(accAbi, grownAcc[i]), "the allowance is stale: no such function on the accountability facet");
+            assertFalse(_contains(upgrade.accountabilityReplaceSelectors(), grownAcc[i]), "the allowance covers a selector this cut REPLACED");
+            assertFalse(_contains(upgrade.accountabilityAddSelectors(), grownAcc[i]), "the allowance covers a selector this cut ADDED");
         }
     }
 
@@ -172,7 +219,7 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
             upgrade.registryReplaceSelectors(),
             _concat(upgrade.registryAddSelectors(), _grownAfterThisCut()),
             upgrade.accountabilityReplaceSelectors(),
-            upgrade.accountabilityAddSelectors()
+            _concat(upgrade.accountabilityAddSelectors(), _grownAccountabilityAfterThisCut())
         );
 
         assertEq(upgrade.registryReplaceSelectors().length, REGISTRY_SELECTORS);
@@ -250,7 +297,7 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
                 upgrade.artifactSelectors("out/ArbiterAccountabilityFacet.sol/ArbiterAccountabilityFacet.json"),
                 _censusAt(".selectors", ".count")
             ),
-            ADDED_ACCOUNTABILITY,
+            ADDED_ACCOUNTABILITY + _grownAccountabilityAfterThisCut().length,
             "the compiled ArbiterAccountabilityFacet gains a different number of functions than this cut adds"
         );
     }
@@ -336,7 +383,10 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
             "ArbiterRegistry vs DeployFull"
         );
         _assertSameSet(
-            _concat(upgrade.accountabilityReplaceSelectors(), upgrade.accountabilityAddSelectors()),
+            _concat(
+                _concat(upgrade.accountabilityReplaceSelectors(), upgrade.accountabilityAddSelectors()),
+                _grownAccountabilityAfterThisCut()
+            ),
             deploy.arbiterAccountabilityFacetSelectors(),
             "ArbiterAccountability vs DeployFull"
         );
@@ -385,7 +435,12 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         // Pre-flight, exactly as run() calls it — bar the growth queued behind
         // this cut, which rides with the Add group for the reason given in
         // test_ListsCoverExactlyTheCompiledFacets.
-        upgrade.assertListsCoverTheCompiledFacets(regSels, _concat(regAdd, _grownAfterThisCut()), accSels, accAdd);
+        upgrade.assertListsCoverTheCompiledFacets(
+            regSels,
+            _concat(regAdd, _grownAfterThisCut()),
+            accSels,
+            _concat(accAdd, _grownAccountabilityAfterThisCut())
+        );
         address previousRegistry = upgrade.assertAllMountedOnOneFacet(regSels, address(diamond));
         address previousAccountability = upgrade.assertAllMountedOnOneFacet(accSels, address(diamond));
         assertTrue(previousRegistry != previousAccountability, "the two groups sit on the same facet");
@@ -949,6 +1004,12 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
             remove[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
             IDiamondCut(address(d)).diamondCut(remove, address(0), "");
         }
+
+        // The three application doors this checkout stopped building on
+        // 22 September 2026, put back where the census still has them. See
+        // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
+        // applications facet that is already here rather than on a stub.
+        _mountRemovedApplicationDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

@@ -40,6 +40,7 @@ pragma solidity ^0.8.20;
 // exist.
 // ============================================================
 
+import {Vm} from "forge-std/Vm.sol";
 import {DeployFull} from "../script/DeployFull.s.sol";
 import {LegacyPreSplitArbiterFacet} from "./legacy/LegacyPreSplitArbiterFacet.sol";
 import {ArbiterRegistryFacet, ArbiterRegistryStorage} from "../src/facets/ArbiterRegistryFacet.sol";
@@ -56,6 +57,29 @@ import {
 } from "../src/DiamondProxy.sol";
 
 abstract contract ArbiterTwoFacetBench {
+    /// The base of FactoryStorage, and `usdc` is its FIRST field (slot +0).
+    /// Held against the live layout by test/StorageLayout.t.sol.
+    bytes32 internal constant BENCH_FACTORY_BASE =
+        0x6e1a7c9e564b098cf0d979de1ae0cacf8bfb22a7e8f2c8f4c244a2031b744700;
+
+    /// Puts a token under the bench that says yes to everything.
+    ///
+    /// ⚠️ WHY A LIGHT BENCH NEEDS A TOKEN AT ALL SINCE 22 SEPTEMBER 2026.
+    /// `claimDispute` now takes a bond for the case, out of `FactoryStorage.usdc`.
+    /// On a bench that never called `initFactory` that address is zero, and a
+    /// high-level call into a codeless address reverts in this frame — so every
+    /// scene about claiming would fail with a bare `EvmError: Revert` that says
+    /// nothing about what it was measuring. The token below is deliberately
+    /// permissive: these rigs are about the anchor, the key and the record, not
+    /// about who can afford a bond, and a rig that had to mint and approve in
+    /// every scene would be measuring the wallet instead.
+    function _seedBenchUsdc(address proxy) internal returns (address token) {
+        token = address(new BenchAlwaysYesUSDC());
+        Vm(address(uint160(uint256(keccak256("hevm cheat code"))))).store(
+            proxy, BENCH_FACTORY_BASE, bytes32(uint256(uint160(token)))
+        );
+    }
+
     /// Deploys a proxy with both arbiter facets and returns two handles TO ONE
     /// AND THE SAME ADDRESS. The caller (the test contract) becomes the owner,
     /// as it was on the old bench after a `vm.store` into the owner slot.
@@ -118,6 +142,12 @@ abstract contract ArbiterTwoFacetBench {
         reg   = ArbiterRegistryFacet(address(diamond));
         acc   = ArbiterAccountabilityFacet(address(diamond));
         vault = ArbiterVaultFacet(address(diamond));
+
+        // Since 22 September 2026 `claimDispute` takes a bond for the case out
+        // of `FactoryStorage.usdc`, and this bench never calls `initFactory` —
+        // so without a token under it every scene about claiming would die on a
+        // high-level call into address zero. See `_seedBenchUsdc`.
+        _seedBenchUsdc(address(diamond));
     }
 
     /// Plays out, on a bench of a HISTORICAL cut, what the next cut on chain will
@@ -187,3 +217,27 @@ abstract contract ArbiterTwoFacetBench {
 // import in the two benches: where the double is declared is how it gets found,
 // and moving that twice would create two places to look.
 // ════════════════════════════════════════════════════════════════════════
+
+/// A token that always says yes: it is the bench's stand-in for USDC, used only
+/// where the scene is not about money. It keeps balances so that a test CAN
+/// assert on them, and it never refuses.
+contract BenchAlwaysYesUSDC {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 amount) external { balanceOf[to] += amount; }
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+    function transfer(address to, uint256 amount) external returns (bool) {
+        if (balanceOf[msg.sender] >= amount) balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        if (balanceOf[from] >= amount) balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}

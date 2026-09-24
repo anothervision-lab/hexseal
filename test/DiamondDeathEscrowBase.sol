@@ -390,12 +390,13 @@ abstract contract DiamondDeathEscrowBase is Test {
         appSels[2] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
     }
 
+    /// ⚠️ THERE IS NO SEAT BOND ANY MORE (22 September 2026). The name is
+    /// kept because the rigs below call it; what it does is what a seated
+    /// arbiter now needs — money and an allowance for the bond he posts PER
+    /// CASE, when he claims a dispute.
     function _postSeatBond(address who) internal {
-        (, , uint256 seatBond, ) =
-            ArbiterApplicationsFacet(address(diamond)).getApplicationRequirements();
-        usdc.mint(who, seatBond);
-        vm.prank(who); usdc.approve(address(diamond), seatBond);
-        vm.prank(who); ArbiterApplicationsFacet(address(diamond)).postArbiterBond();
+        usdc.mint(who, 1_000_000_000);
+        vm.prank(who); usdc.approve(address(diamond), type(uint256).max);
     }
 
     // ============================================================

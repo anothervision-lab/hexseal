@@ -10,6 +10,7 @@ import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 
 contract MockUSDC {
     mapping(address => uint256) public balanceOf;
@@ -94,7 +95,7 @@ contract ReentrantUSDC {
     }
 }
 
-contract DiamondTest is Test {
+contract DiamondTest is Test, HandoverReadinessSeed {
     DiamondProxy diamond;
     MockUSDC usdc;
     
@@ -252,7 +253,7 @@ contract DiamondTest is Test {
         // facet they have to be mounted on. Leaving them in the list above
         // would route them to a facet that does not implement them — the
         // call arrives and reverts.
-        bytes4[] memory accSels = new bytes4[](12);
+        bytes4[] memory accSels = new bytes4[](13);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterDeals.selector;
         accSels[1] = ArbiterAccountabilityFacet.getArbiterReward.selector;
         accSels[2] = ArbiterAccountabilityFacet.getArbiterMistakeStreak.selector;
@@ -273,9 +274,13 @@ contract DiamondTest is Test {
         accSels[9]  = ArbiterAccountabilityFacet.getCleanVerdicts.selector;
         accSels[10] = ArbiterAccountabilityFacet.getOverturnedVerdicts.selector;
         accSels[11] = ArbiterAccountabilityFacet.getArbiterStanding.selector;
+        // The handover's second condition, mounted 20 September 2026 so that
+        // `_seedHandoverLiveness` has the reader it sweeps against. Without it
+        // the seeding cannot find the three counters and says so loudly.
+        accSels[12] = ArbiterAccountabilityFacet.getHandoverReadiness.selector;
 
         // ReputationFacet selectors
-        bytes4[] memory reputationSelectors = new bytes4[](8);
+        bytes4[] memory reputationSelectors = new bytes4[](9);
         reputationSelectors[0] = ReputationFacet.claimXP.selector;
         reputationSelectors[1] = ReputationFacet.getXP.selector;
         reputationSelectors[2] = ReputationFacet.getUniqueActiveUsers.selector;
@@ -284,6 +289,10 @@ contract DiamondTest is Test {
         reputationSelectors[5] = ReputationFacet.autoAwardXP.selector;
         reputationSelectors[6] = ReputationFacet.notifyExecutorFault.selector;
         reputationSelectors[7] = ReputationFacet.getCleanStreak.selector;
+        // 20 September 2026. The streak, the deals that bought none of it and
+        // the rule behind both, in one read — mounted here because the scenes
+        // about the clean streak in this file now ask the diamond for it.
+        reputationSelectors[8] = ReputationFacet.getStreakStanding.selector;
 
         IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](9);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, registrySelectors);
@@ -824,26 +833,44 @@ contract DiamondTest is Test {
         ReputationFacet(address(diamond)).notifyExecutorFault(address(0xBAD));
     }
 
-    function testClientXPFrozenAbove1000() public {
+    /// ⚠️ INVERTED ON 20 SEPTEMBER 2026, AND IT IS ONE OF THE LOCKS ON PHASE 2
+    /// STAYING DEAD. It used to assert that a client past 1000 XP earned NOTHING
+    /// from any further deal. That rule existed to slow the climb toward the
+    /// 3 000 XP that opened the arbiter corps; the corps stopped asking for XP,
+    /// so the brake stood in front of nothing and stopped an honest client's
+    /// standing from growing while telling them nothing about why.
+    ///
+    /// Put Phase 2 back and this goes red: the client's XP would stop moving.
+    function testClientXpKeepsGrowingPastTheOldPhase2Line() public {
         address bigClient = address(uint160(31000));
         _growXP(bigClient, false, 1000, 31500);
         uint256 xpAtThreshold = ReputationFacet(address(diamond)).getXP(bigClient);
-        assertGe(xpAtThreshold, 1000);
+        assertGe(xpAtThreshold, 1000, "setup: he is past the line the brake used to stand on");
 
         address freshExecutor = address(uint160(31999));
         _completeDeal(bigClient, freshExecutor);
 
-        assertEq(ReputationFacet(address(diamond)).getXP(bigClient), xpAtThreshold);
+        assertGt(
+            ReputationFacet(address(diamond)).getXP(bigClient),
+            xpAtThreshold,
+            "a client past 1000 XP keeps earning - the Phase-2 freeze is gone"
+        );
     }
 
-    function testExecutorXPGatedByStreakAbove1000() public {
+    /// ⚠️ INVERTED ON 20 SEPTEMBER 2026 — the second Phase-2 lock. It used to
+    /// assert that an executor past 1000 XP earned NOTHING until his clean
+    /// streak was back at ten. That gate is gone with the rest of Phase 2, and
+    /// what stands in its place is the plain rule: a deal pays if the
+    /// counterparty carried standing, whatever the streak is doing.
+    ///
+    /// The scene still BREAKS the streak with a lost dispute, because the whole
+    /// value of it is the contrast: streak at zero, XP still moving. Put
+    /// Phase 2 back and the second assertion goes red.
+    function testExecutorXpIsNoLongerGatedByTheStreak() public {
         address bigExecutor = address(uint160(32000));
         _growXP(bigExecutor, true, 1000, 32500);
         uint256 xpAtThreshold = ReputationFacet(address(diamond)).getXP(bigExecutor);
-        assertGe(xpAtThreshold, 1000);
-        // _growXP only ever uses fresh counterparties with clean releases, so by construction
-        // the streak that carried this address past 1000 XP is already >= CLEAN_STREAK_REQUIRED (10).
-        assertGe(ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), 10);
+        assertGe(xpAtThreshold, 1000, "setup: past the line the brake used to stand on");
 
         // Break the streak with a lost dispute.
         address disputeClient = address(uint160(32900));
@@ -863,37 +890,30 @@ contract DiamondTest is Test {
         vm.prank(disputeClient);
         Agreement(disputedAgreement).raiseDispute();
         _claimDispute(disputedAgreement);
-        _resolveDispute(disputedAgreement, true); // client wins — executor loses, streak resets to 0
+        _resolveDispute(disputedAgreement, true); // client wins - executor loses, streak resets
 
-        assertEq(ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), 0);
+        assertEq(
+            ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), 0,
+            "setup: the run really is broken"
+        );
 
-        // One clean deal right after the reset: streak stays below 10 either way (this
-        // counterparty is also fresh, so it doesn't even count toward the streak under
-        // Mechanism 1) — no XP granted regardless.
+        // One clean deal, with a counterparty who already carries standing.
+        // Under Phase 2 this paid nothing (streak 0 < 10). Now it pays.
         uint256 xpAfterLoss = ReputationFacet(address(diamond)).getXP(bigExecutor);
-        address freshClient1 = address(uint160(32901));
-        usdc.mint(freshClient1, 1_000_000 * 10**6);
-        _completeDeal(freshClient1, bigExecutor);
-        assertEq(ReputationFacet(address(diamond)).getXP(bigExecutor), xpAfterLoss);
+        address warmClient = address(uint160(32950));
+        usdc.mint(warmClient, 1_000_000 * 10**6);
+        _warmUpClientXP(warmClient);
+        _completeDeal(warmClient, bigExecutor);
 
-        // Rebuild the streak to 10. Mechanism 1 requires each deal's client to already
-        // have >= MIN_COUNTERPARTY_XP (50) — a single warmed-up counterparty, reused
-        // across all 11 deals (warmup + 10 counted), satisfies this without hitting MAX_WINS_PAIR
-        // (that cap only gates the win/volume XP bonus, not cleanStreak accounting). The warmup
-        // deal gives the counterparty initial XP; the next 10 deals all count toward the streak.
-        address streakClient = address(uint160(33000));
-        usdc.mint(streakClient, 1_000_000 * 10**6);
-        _warmUpClientXP(streakClient);
-        for (uint256 i = 0; i < 10; i++) {
-            _completeDeal(streakClient, bigExecutor);
-        }
-        assertEq(ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), 10);
-
-        // The deal that brought the streak to exactly 10 already counts under the new rule.
-        uint256 xpAtStreak10 = ReputationFacet(address(diamond)).getXP(bigExecutor);
-        assertGt(xpAtStreak10, xpAfterLoss);
+        assertGt(
+            ReputationFacet(address(diamond)).getXP(bigExecutor), xpAfterLoss,
+            "a broken streak no longer freezes an executor's standing"
+        );
+        assertEq(
+            ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), 1,
+            "and the streak starts again from one, as it always did"
+        );
     }
-
     function testCleanStreakDoesNotIncrementWhenClientBelowMinCounterpartyXP() public {
         address freshClient = address(uint160(35001));
         address freshExecutor = address(uint160(35002));
@@ -913,18 +933,42 @@ contract DiamondTest is Test {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
     }
 
-    function testPhase2XPBlockedWhenDealCounterpartyBelowMinXP() public {
+    /// The third of the Phase-2 scenes, inverted the same way and for the same
+    /// reason. A deal with a BRAND NEW counterparty used to buy a veteran
+    /// executor nothing at all. It still buys no clean STREAK — that rule is
+    /// untouched and is what stops a ring of fresh wallets — but it now pays XP
+    /// like any other deal.
+    ///
+    /// ⚠️ The two halves are deliberately asserted together. "XP moves, streak
+    /// does not" is the exact shape of the change; either half alone would stay
+    /// green under a mistake in the other.
+    function testAFreshCounterpartyPaysXpButStillBuysNoStreak() public {
         address bigExecutor = address(uint160(35100));
         _growXP(bigExecutor, true, 1000, 35500);
         assertGe(ReputationFacet(address(diamond)).getXP(bigExecutor), 1000);
-        assertGe(ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), 10);
 
-        uint256 xpBefore = ReputationFacet(address(diamond)).getXP(bigExecutor);
+        uint256 xpBefore     = ReputationFacet(address(diamond)).getXP(bigExecutor);
+        uint256 streakBefore = ReputationFacet(address(diamond)).getCleanStreak(bigExecutor);
+
         address freshClient = address(uint160(35999));
         usdc.mint(freshClient, 1_000_000 * 10**6);
         _completeDeal(freshClient, bigExecutor);
 
-        assertEq(ReputationFacet(address(diamond)).getXP(bigExecutor), xpBefore);
+        assertGt(
+            ReputationFacet(address(diamond)).getXP(bigExecutor), xpBefore,
+            "the Phase-2 gate is gone: the deal pays XP"
+        );
+        assertEq(
+            ReputationFacet(address(diamond)).getCleanStreak(bigExecutor), streakBefore,
+            "and the counterparty rule is NOT gone: a newcomer buys no streak"
+        );
+
+        // And the person is told so, by name, instead of being left to work it
+        // out. The running total is the half a screen can read after a reload.
+        (, uint256 stalled, uint256 minCounterpartyXP) =
+            ReputationFacet(address(diamond)).getStreakStanding(bigExecutor);
+        assertEq(stalled, 1, "the deal that bought no streak is counted and visible");
+        assertEq(minCounterpartyXP, 50, "and the rule that did it is readable from the same call");
     }
 
     // ============ ARBITER DEMOTION ============
@@ -956,6 +1000,7 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).setDAOAddress(dao);
         vm.prank(dao);
         ArbiterRegistryFacet(address(diamond)).acceptDAOAddress();
+        _seedHandoverLiveness(address(diamond));
         ArbiterRegistryFacet(address(diamond)).activateDAO();
         assertTrue(ArbiterRegistryFacet(address(diamond)).isDaoActive(), "setup: governance is live");
     }
@@ -990,7 +1035,7 @@ contract DiamondTest is Test {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(candidate), 0);
 
         vm.prank(candidate);
-        vm.expectRevert(abi.encodeWithSelector(ArbiterRegistryFacet.InsufficientCleanStreak.selector, 0, 10));
+        vm.expectRevert(abi.encodeWithSelector(ArbiterRegistryFacet.InsufficientCleanStreak.selector, 0, 5));
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
     }
 
@@ -1003,38 +1048,34 @@ contract DiamondTest is Test {
         assertGe(ReputationFacet(address(diamond)).getCleanStreak(candidate), 10);
 
         vm.prank(candidate);
-        usdc.approve(address(diamond), ARBITER_BOND);
-        vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ARBITER_BOND);
+        // Zero, and it is the point rather than an omission: a seat costs
+        // nothing since 22 September 2026.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
     }
 
-    /// ⚠️ A PREMISE OF THE PUBLIC DOCUMENT.
+    /// ⚠️ THE PREMISE OF THE PUBLIC DOCUMENT, TURNED ROUND (22 September 2026).
     ///
-    /// docs/DECENTRALIZATION.md states that today the arbiter corps cannot be
-    /// entered by any road but the owner's hand: self-enrolment is locked until
-    /// the DAO is switched on. The whole paragraph stands on ONE line of code —
-    /// `if (!isDaoActive()) revert DAONotActive();`, the first line of
-    /// applyAsArbiter.
+    /// This scene used to assert the opposite: `applyAsArbiter` refusing
+    /// `DAONotActive` while governance slept, because docs/DECENTRALIZATION.md
+    /// said the corps could be entered by no road but the owner's hand. That
+    /// line is the line the owner's decision removed — the ladder "work
+    /// cleanly, then judge" ended in a wall, since the automatic door unlocked
+    /// only after the handover it was meant to prepare for.
     ///
-    /// Until this test NOTHING guarded that line: removing it gave 0 red out of
-    /// 852, and the word `DAONotActive` appeared in the whole of test/ exactly
-    /// once, and that inside a docstring as text. The document's claim could have
-    /// become false in silence — and today's unreachability of the arbiter open
-    /// items rests on it too ("there is one arbiter, and it is the owner").
+    /// What is measured now is the same door from the other side: governance
+    /// asleep, a candidate with the record, and he walks in. The mirror above
+    /// (testApplyAsArbiterSucceedsWithBothConditions) does the same with the DAO
+    /// switched on, so the pair says the door does not care either way.
     ///
-    /// The candidate here is eligible ON EVERY OTHER COUNT — XP, clean streak,
-    /// an approved bond — that is, without the DAO gate the call WOULD HAVE gone
-    /// through. That is what makes the measurement honest: removing the line does
-    /// not shift the failure onto a neighbouring cause, it removes the failure
-    /// altogether, and expectRevert goes red by itself.
-    ///
-    /// The mirror of the scene is testApplyAsArbiterSucceedsWithBothConditions
-    /// above: the same candidate, the same preparation, the DAO switched on, and
-    /// self-enrolment goes through. The pair clamps the gate from both sides.
-    function testApplyAsArbiterRevertsWhileTheDaoSleeps() public {
+    /// ⚠️ THE APPOINTED LOCK FOR THIS CHANGE IS NOT THIS FILE. It is
+    /// test/ArbiterSelfEnrolment.t.sol, which also drives the door through a
+    /// real forwarder from a wallet with no ETH. This scene is kept because the
+    /// old assertion lived here and a reader who goes looking for it must find
+    /// what replaced it, not a gap.
+    function testApplyAsArbiterWorksWhileTheDaoSleeps() public {
         // The DAO is NOT switched on — not by address, not by flag, not by threshold.
         assertFalse(
             ArbiterRegistryFacet(address(diamond)).isDaoActive(),
@@ -1047,15 +1088,11 @@ contract DiamondTest is Test {
         assertGe(ReputationFacet(address(diamond)).getCleanStreak(candidate), 10);
 
         vm.prank(candidate);
-        usdc.approve(address(diamond), ARBITER_BOND);
-
-        vm.prank(candidate);
-        vm.expectRevert(ArbiterRegistryFacet.DAONotActive.selector);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
-        assertFalse(
+        assertTrue(
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate),
-            "he did not get into the corps"
+            "the ladder still ends in a wall"
         );
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0,
@@ -1078,13 +1115,23 @@ contract DiamondTest is Test {
 
         // ⚠️ THE SCENE WAS REBUILT WHEN THE THIRD MISTAKE STOPPED REMOVING.
         // It now SUSPENDS AND ACCUSES in the chain's name, and the takedown goes
-        // through the common door after 48 hours. XP is cut as before (the seat is
-        // touched, not the points), and the counter is DELIBERATELY not reset: a
-        // streak of judging mistakes has not ended just because the chain noticed
-        // it. The button does not need the counter anyway — it reads the RECORD and
-        // fires at zero, and ten lines below it is pressed in this very scene.
+        // through the common door after 48 hours. The counter is DELIBERATELY not
+        // reset: a streak of judging mistakes has not ended just because the chain
+        // noticed it. The button does not need the counter anyway — it reads the
+        // RECORD and fires at zero, and ten lines below it is pressed in this very
+        // scene.
+        //
+        // ⚠️ AND THE XP LINE WAS TURNED OVER ON 21 SEPTEMBER 2026. It used to
+        // read `assertEq(getXP(flakyArbiter), 2500)` — the flat landing point the
+        // accusation used to write. The reset is gone: the accusation takes the
+        // seat's standing, not the record of work. This man never had XP to begin
+        // with (he was seated by hand, and a judge earns none by judging), so what
+        // the assertion says out loud is that the chain did NOT put 2500 there.
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
-        assertEq(ReputationFacet(address(diamond)).getXP(flakyArbiter), 2500);
+        assertEq(
+            ReputationFacet(address(diamond)).getXP(flakyArbiter), 0,
+            "the accusation writes nothing into the record of work"
+        );
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(flakyArbiter), 3);
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(flakyArbiter));
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).isSuspended(flakyArbiter));
@@ -1098,13 +1145,37 @@ contract DiamondTest is Test {
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(flakyArbiter), 0);
     }
 
-    function testArbiterDemotionResetIsFlatNotSubtractive() public {
-        // An arbiter with a large pre-existing XP balance must still land at exactly 2500,
-        // not 2500-minus-something or their-balance-minus-a-fixed-amount.
+    /// ⚠️ THIS SCENE WAS TURNED OVER ON 21 SEPTEMBER 2026, NAME AND ALL. It
+    /// used to be `testArbiterDemotionResetIsFlatNotSubtractive`, and it held the
+    /// opposite rule: an arbiter with a large earned balance "must still land at
+    /// exactly 2500", flat, whatever he had. That was the point of
+    /// DEMOTION_XP_RESET — to drop a punished man below the entrance threshold
+    /// (3000) so the way back into the corps had to be earned a second time.
+    ///
+    /// WHY THE RULE CHANGED. The entrance stopped asking for XP on 20 September
+    /// 2026 and asks for the clean streak, which a removal already takes
+    /// (`test_ARemovalForCauseTakesTheKeyToTheCorps`) — so the barrier the reset
+    /// bought is there without it. What the reset still did was rewrite a record
+    /// of work already done, backwards, to make a punishment land. Experience is
+    /// how much a man worked; editing it is a forgery of history, not a penalty.
+    /// The penalty is the forfeited bond, the lost seat, the zeroed clean streak
+    /// and a permanent public record of the removal. Renamed rather than deleted,
+    /// and the old name is written here on purpose: the record quotes it.
+    ///
+    /// ⚠️ WHAT IS *NOT* BEING SAID: that judging badly is free. It is not.
+    /// OVERTURN_XP_SLASH (200) still takes points for EACH overturn at the moment
+    /// that one mistake is proven, and this scene counts all three of them out —
+    /// so a mutation that quietly removed the per-mistake slash reddens here too,
+    /// from the other side.
+    ///
+    /// THE MUTATION THIS IS WRITTEN AGAINST: put
+    /// `rep.xp[arbiterAddr] = 2500;` back at the top of
+    /// `ArbiterRegistryFacet._suspendAndAccuse` and leave everything else alone.
+    function testAutomaticDemotionLeavesTheRecordOfWorkAlone() public {
         address veteranArbiter = address(uint160(43000));
         _growXP(veteranArbiter, true, 10_000, 43500);
         uint256 xpBeforeDemotion = ReputationFacet(address(diamond)).getXP(veteranArbiter);
-        assertGe(xpBeforeDemotion, 10_000);
+        assertGe(xpBeforeDemotion, 10_000, "setup: he carries a real record of work");
         ArbiterRegistryFacet(address(diamond)).addArbiter(veteranArbiter);
         _bondSeat(veteranArbiter);
 
@@ -1112,42 +1183,73 @@ contract DiamondTest is Test {
         _disputeAndOverturn(address(uint160(43101)), address(uint160(43201)), veteranArbiter);
         _disputeAndOverturn(address(uint160(43102)), address(uint160(43202)), veteranArbiter);
 
-        assertEq(ReputationFacet(address(diamond)).getXP(veteranArbiter), 2500);
+        // Three proven mistakes, three slashes of OVERTURN_XP_SLASH, and NOTHING
+        // ELSE: no landing point, no flattening, no rewrite of what he earned.
+        // Spelled as "what he had minus the three charges" rather than as a
+        // literal, so that a change to either number is visible as itself.
+        assertEq(
+            ReputationFacet(address(diamond)).getXP(veteranArbiter),
+            xpBeforeDemotion - 3 * 200,
+            "the accusation charges for the three mistakes and rewrites nothing else"
+        );
+        assertGe(
+            ReputationFacet(address(diamond)).getXP(veteranArbiter), 9_000,
+            "and he is emphatically NOT put back at the old landing point of 2500"
+        );
     }
 
-    function testApplyAsArbiterPullsBond() public {
+    /// ⚠️ THE SEAT IS FREE SINCE 22 SEPTEMBER 2026, and this scene is the
+    /// inverse of the one it replaces (`testApplyAsArbiterPullsBond`): the door
+    /// must take NOTHING. The money an arbiter puts at risk is posted per CASE,
+    /// inside `claimDispute`.
+    function testApplyAsArbiterTakesNothing() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45000));
         _growXP(candidate, true, 3000, 45500);
 
         uint256 balanceBefore = usdc.balanceOf(candidate);
         vm.prank(candidate);
-        usdc.approve(address(diamond), ARBITER_BOND);
-        vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ARBITER_BOND);
-        assertEq(usdc.balanceOf(candidate), balanceBefore - ARBITER_BOND);
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
+        assertEq(usdc.balanceOf(candidate), balanceBefore, "not a cent left his wallet");
     }
 
-    function testApplyAsArbiterRevertsWithoutBondApproval() public {
+    /// And it does not need an allowance either. This is the scene that used to
+    /// be `testApplyAsArbiterRevertsWithoutBondApproval`: an empty allowance was
+    /// the reason the door refused, and now it is not a reason at all.
+    function testApplyAsArbiterNeedsNoAllowance() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45100));
         _growXP(candidate, true, 3000, 45600);
 
         vm.prank(candidate);
-        vm.expectRevert("Allowance exceeded");
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
+
+        assertTrue(
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate),
+            "a man who granted the diamond nothing is seated all the same"
+        );
     }
 
-    function testArbiterBondForfeitedOnDemotion() public {
+    /// ⚠️ REWRITTEN 22 SEPTEMBER 2026, AND THE TITLE IS THE CHANGE. A removal
+    /// used to burn the seat bond into the arbiter bank. There is no seat bond,
+    /// so it burns nothing — and that is a consequence of the owner's decision
+    /// rather than a gap: the sanction for a bad arbiter is the record, the
+    /// suspension and the loss of the seat. The money an arbiter risks belongs
+    /// to a CASE and is drawn only by an appeal that overturns him.
+    ///
+    /// The two halves the old scene measured still hold in order: the chain's
+    /// accusation touches no money, and neither does the removal.
+    function testDemotionForfeitsNothingBecauseTheSeatCostsNothing() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45200));
         _growXP(candidate, true, 3000, 45700);
         vm.prank(candidate);
-        usdc.approve(address(diamond), ARBITER_BOND);
-        vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
+        // He claims three disputes below, and each claim asks him for that
+        // case's bond.
+        _bondSeat(candidate);
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
@@ -1159,8 +1261,8 @@ contract DiamondTest is Test {
         // the person is still an arbiter and the money is still theirs — an
         // accusation is not a punishment.
         assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ARBITER_BOND,
-            "the chain's accusation does not touch the money"
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0,
+            "there is no seat bond for an accusation to touch"
         );
 
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
@@ -1169,15 +1271,20 @@ contract DiamondTest is Test {
 
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
-        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + ARBITER_BOND);
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            "the bank did not grow: a removal forfeits nothing now"
+        );
     }
 
-    function testResignAsArbiterRefundsBondAndClearsStatus() public {
+    /// ⚠️ LEAVING PAYS NOTHING SINCE 22 SEPTEMBER 2026, and that is the whole
+    /// of what changed: a seat holds no money to give back. It still clears the
+    /// status, which is what the door is for, and the man walks out owning
+    /// exactly what he owned walking in.
+    function testResignAsArbiterPaysNothingAndClearsStatus() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45300));
         _growXP(candidate, true, 3000, 45400);
-        vm.prank(candidate);
-        usdc.approve(address(diamond), ARBITER_BOND);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1188,7 +1295,7 @@ contract DiamondTest is Test {
 
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
-        assertEq(usdc.balanceOf(candidate), balanceAfterApply + ARBITER_BOND);
+        assertEq(usdc.balanceOf(candidate), balanceAfterApply, "leaving the corps moves no money");
     }
 
     function testResignAsArbiterRevertsIfNotArbiter() public {
@@ -1558,7 +1665,18 @@ contract DiamondTest is Test {
         // punished" would have looked exactly like "punished".
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(flakyArbiter));
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(flakyArbiter));
-        assertEq(ReputationFacet(address(diamond)).getXP(flakyArbiter), 2500);
+
+        // ⚠️ TURNED OVER ON 21 SEPTEMBER 2026: this line read
+        // `assertEq(getXP(flakyArbiter), 2500)`, the flat landing point the
+        // accusation used to write. The reset is gone. On THIS path the record is
+        // doubly untouched — notifyArbiterTimeout deliberately slashes nothing
+        // either (there was no ruling to overturn) — so a zero here is the whole
+        // statement: three timeouts stop the man and accuse him, and write not one
+        // point into what he earned as a worker.
+        assertEq(
+            ReputationFacet(address(diamond)).getXP(flakyArbiter), 0,
+            "a timeout neither slashes nor resets the record of work"
+        );
 
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
         vm.prank(address(uint160(51999)));
@@ -2107,7 +2225,7 @@ contract DiamondTest is Test {
 
     function testArbiterRegistryAddRevertIfNotOwner() public {
         vm.prank(client);
-        vm.expectRevert(ArbiterRegistryFacet.NotOwnerOrChief.selector);
+        vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
         ArbiterRegistryFacet(address(diamond)).addArbiter(address(0x10));
     }
 
@@ -2117,12 +2235,24 @@ contract DiamondTest is Test {
     // ArbiterAccountabilityFacet.removeArbiterForCause (the ArbiterRemovalForCause
     // suite).
 
-    function testArbiterRegistryChiefCanAdd() public {
+    /// ⚠️ THE CHIEF LOST THIS DOOR ON 22 SEPTEMBER 2026 and this scene was
+    /// turned round. It used to assert that he could seat. The owner's
+    /// decision: `addArbiter` asks for no record at all, which makes it the
+    /// widest hole in the corps, and it was held by a man who had himself been
+    /// appointed. Everything else the chief has — proposing a removal,
+    /// suspending, answering — is untouched.
+    function testArbiterRegistryChiefCannotAdd() public {
         address chief = address(0x20);
         ArbiterRegistryFacet(address(diamond)).setChiefArbiter(chief);
         assertEq(ArbiterVaultFacet(address(diamond)).getChiefArbiter(), chief);
 
         vm.prank(chief);
+        vm.expectRevert(ArbiterRegistryFacet.NotOwner.selector);
+        ArbiterRegistryFacet(address(diamond)).addArbiter(address(0x21));
+        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(address(0x21)));
+
+        // And the owner's press on the same man goes through, so the refusal is
+        // about who pressed and not about the man.
         ArbiterRegistryFacet(address(diamond)).addArbiter(address(0x21));
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(address(0x21)));
     }
@@ -2632,6 +2762,7 @@ contract DiamondTest is Test {
         uint256 diamondBalBefore = usdc.balanceOf(address(diamond));
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         assertEq(usdc.balanceOf(address(diamond)), diamondBalBefore + 20 * 10**6);
 
         // Frozen — finalizeVerdict can't proceed until the appeal resolves.
@@ -2662,6 +2793,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 40 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(executor);
         vm.expectRevert(ArbiterRegistryFacet.AlreadyAppealed.selector);
@@ -2682,8 +2814,18 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
     }
 
-    function testRaiseAppeal_RevertsWithTooFewArbiters() public {
-        // No extra arbiters registered — only the default `arbiter` exists.
+    /// ⚠️ THE DOOR STOPPED COUNTING ON 23 SEPTEMBER 2026, so this scene asks
+    /// the opposite question to the one it used to ask. It was
+    /// `testRaiseAppeal_RevertsWithTooFewArbiters`: the only arbiter is the one
+    /// who ruled, nobody may review the case, and `raiseAppeal` refused with
+    /// `InsufficientArbitersForAppeal`. Answering that needed a walk over the
+    /// whole roster, paid for by the appellant, growing with a corps that has
+    /// no ceiling. The appeal is now let in and the question is answered at the
+    /// end of the review window instead — where a panel that never assembled
+    /// costs the appellant nothing (test/AppealPanel.t.sol holds the refund).
+    function testRaiseAppeal_IsLetInEvenWithNobodyToHearIt() public {
+        // No extra arbiters registered — only the default `arbiter` exists, and
+        // he is the one whose verdict is being challenged.
         address agr = _disputeToVerdict(client, executor, true);
 
         usdc.mint(executor, 100 * 10**6);
@@ -2691,8 +2833,13 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
 
         vm.prank(executor);
-        vm.expectRevert(ArbiterRegistryFacet.InsufficientArbitersForAppeal.selector);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
+
+        assertTrue(
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).appealed,
+            "the door refused an appeal it no longer has the means to judge"
+        );
     }
 
     function testRaiseAppeal_RevertsIfOwnerFrozeBeforeAnyAppeal() public {
@@ -2723,6 +2870,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         ArbiterRegistryStorage.PendingVerdict memory before = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertEq(before.votesOverturn, 0);
@@ -2757,6 +2905,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.expectEmit(true, true, false, true, address(diamond));
         emit ArbiterRegistryFacet.AppealVoteCast(agr, a2, true);
@@ -2788,6 +2937,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(arbiter); // the one who ruled
         vm.expectRevert(ArbiterRegistryFacet.CannotVoteOnOwnVerdict.selector);
@@ -2812,6 +2962,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.warp(block.timestamp + 4 days + 1); // APPEAL_REVIEW_WINDOW
 
@@ -2830,6 +2981,7 @@ contract DiamondTest is Test {
         uint256 executorBalBefore = usdc.balanceOf(executor);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
@@ -2885,6 +3037,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         uint256 balAfterPaying = usdc.balanceOf(executor);
 
         _voteOverturn(agr, a2, a3, a4);
@@ -2921,6 +3074,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         uint256 balAfterPaying = usdc.balanceOf(executor);
 
         _voteOverturn(agr, a2, a3, a4);
@@ -2958,6 +3112,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         _voteOverturn(agr, a2, a3, a4);
 
@@ -2988,6 +3143,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         uint256 balAfterPaying = usdc.balanceOf(executor);
 
         _voteOverturn(agr, a2, a3, a4);
@@ -3030,12 +3186,21 @@ contract DiamondTest is Test {
         usdc.mint(executor, 200 * 10**6);
 
         uint256 firstPot;
+        // ⚠️ THE WARP BELOW READS THE CLOCK THROUGH `vm.getBlockTimestamp()`
+        // AND NOT THROUGH `block.timestamp`, and inside THIS loop that is the
+        // difference between a green run and a red one (measured 24 September
+        // 2026). `block.timestamp` compiles to TIMESTAMP, which via_ir is free
+        // to treat as a loop invariant and hoist: both iterations then warped
+        // to the same second, the second appeal's seats never opened, and the
+        // scene failed with AppealSeatsNotOpenYet. The cheatcode is an external
+        // call and cannot be hoisted.
         for (uint256 i = 0; i < 2; i++) {
             address agr = _disputeToVerdict(client, executor, true);
             vm.prank(executor);
             usdc.approve(address(diamond), 20 * 10**6);
             vm.prank(executor);
             ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+            vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
             _voteOverturn(agr, a2, a3, a4);
 
@@ -3129,6 +3294,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         assertEq(
             ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).appealDeposit,
@@ -3149,6 +3315,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 balAfterPaying   = usdc.balanceOf(executor);
         uint256 diamondAfterPaying = usdc.balanceOf(address(diamond));
@@ -3190,6 +3357,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         _setStoredAppealDeposit(agr, 7 * 10**6);
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
@@ -3225,6 +3393,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 balAfterPaying = usdc.balanceOf(executor);
         _setStoredAppealDeposit(agr, 0);
@@ -3320,6 +3489,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
@@ -3392,6 +3562,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
@@ -3434,6 +3605,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.expectRevert(ArbiterRegistryFacet.AppealInProgress.selector);
         ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, true);
@@ -3488,6 +3660,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(client);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
@@ -3592,6 +3765,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(cli);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
         vm.prank(address(0x7299));
@@ -3779,6 +3953,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(cli);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
@@ -3835,6 +4010,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(cli);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
@@ -3875,6 +4051,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
@@ -3904,11 +4081,17 @@ contract DiamondTest is Test {
     // since resolveAppeal() uses strict `>` (votesOverturn > votesUphold) to decide overturn.
     // Requires a 4th eligible voter beyond the 3 from _addAppealQuorumArbiters(), since the
     // ruling arbiter can't vote on its own verdict and 3 eligible voters can never tie.
+    /// ⚠️ A TIE IS TWO VOTES NOW, NOT FOUR (23 September 2026). The panel has
+    /// three seats and the fourth arbiter is refused, so 2-vs-2 is a tally that
+    /// can no longer exist and three votes can never tie. The rule this scene
+    /// holds is unchanged — a tie is not a majority, so the verdict stands —
+    /// and it has moved to the only turnout that can still produce one.
+    ///
+    /// It also has to WAIT for the window: with a seat still open, a tie is not
+    /// a reason to settle early, or the side the verdict favours could buy the
+    /// outcome by pressing the door first.
     function testResolveAppeal_TiedVoteUpholdsNotOverturn() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-        address a5 = address(0x33);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(a5);
-        _bondSeat(a5);
+        (address a2, address a3,) = _addAppealQuorumArbiters();
 
         address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
 
@@ -3917,30 +4100,30 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
-        vm.prank(a5);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
 
-        // Confirm the tally really is a 2-vs-2 tie before resolving.
+        // Confirm the tally really is a tie before resolving.
         (uint256 uphold, uint256 overturnVotes) = ArbiterVaultFacet(address(diamond)).getAppealVotes(agr);
-        assertEq(uphold, 2);
-        assertEq(overturnVotes, 2);
+        assertEq(uphold, 1);
+        assertEq(overturnVotes, 1);
 
+        vm.expectRevert(ArbiterRegistryFacet.AppealWindowNotClosed.selector);
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        vm.warp(block.timestamp + 4 days + 1);
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
 
-        // Tie at quorum -> uphold path taken: the ruling arbiter is not penalized.
-        // Since 17 September 2026 the deposit pays the four voters equally
-        // ($5 each, nothing left over) instead of going to the vault.
-        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "four votes divide $20 with no remainder");
-        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a5), 5 * 10**6, "each of four voters is owed $5");
+        // Tie with a panel seated -> uphold path taken: the ruling arbiter is
+        // not penalized, and the two who did sit are paid $10 each out of the
+        // $20, with nothing left over for the vault.
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "two votes divide $20 with no remainder");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 10 * 10**6, "each of two voters is owed $10");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization, not the executor.
@@ -3963,6 +4146,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
         uint256 execBefore  = usdc.balanceOf(executor);
@@ -3991,6 +4175,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // only 1 of 3
@@ -4018,6 +4203,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
         ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
@@ -4032,7 +4218,16 @@ contract DiamondTest is Test {
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr); // second call must revert
     }
 
-    function testAppealUnavailableBelowQuorum_OverturnVerdictStillWorks() public {
+    /// The owner's own safety valve is untouched by the appeal flow, measured
+    /// on a corps that holds nobody who could review anything.
+    ///
+    /// ⚠️ NO APPEAL IS RAISED HERE ANY MORE (23 September 2026). It used to be
+    /// refused at the door, and the refusal was what made the rest of this
+    /// scene readable: nothing had been taken, so the balance at the end was
+    /// the mint plus the payout. Raising one now would freeze the verdict and
+    /// lock the deposit for four days, which is a different scene. What this
+    /// one holds is the valve.
+    function testOverturnVerdictWorksWithNobodyToHearAnAppeal() public {
         // setUp() registers only the default `arbiter` — no extra arbiters here.
         address agr = _disputeToVerdict(client, executor, true);
 
@@ -4040,18 +4235,14 @@ contract DiamondTest is Test {
         vm.prank(executor);
         usdc.approve(address(diamond), 20 * 10**6);
 
-        vm.prank(executor);
-        vm.expectRevert(ArbiterRegistryFacet.InsufficientArbitersForAppeal.selector);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-
         // The pre-existing owner/DAO safety valve is untouched.
         ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1);
 
         vm.warp(block.timestamp + 24 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
-        // raiseAppeal reverted before ever pulling the deposit (the quorum check runs
-        // before transferFrom) — executor keeps the full 100 USDC mint, plus the payout.
+        // Nothing was ever pulled from the executor — he keeps the full 100 USDC
+        // mint, plus the payout.
         assertEq(usdc.balanceOf(executor), 100 * 10**6 + AMOUNT);
     }
 
@@ -4075,6 +4266,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.expectRevert(ArbiterRegistryFacet.AppealInProgress.selector);
         ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
@@ -4089,6 +4281,7 @@ contract DiamondTest is Test {
         usdc.approve(address(diamond), 20 * 10**6);
         vm.prank(executor);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         // Owner (test contract) attempts to unfreeze mid-appeal — must revert, not bypass
         // the in-progress vote.
@@ -4126,12 +4319,19 @@ contract DiamondTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
+    /// ⚠️ THERE IS NO SEAT BOND ANY MORE (22 September 2026), so this no
+    /// longer writes `arbiterBond` slot 12 by hand. What a seated arbiter now
+    /// needs is money and an allowance for the bond he posts PER CASE, inside
+    /// `claimDispute`. The name is kept because every rig in this file calls it.
     function _bondSeat(address who) internal {
-        vm.store(
-            address(diamond),
-            keccak256(abi.encode(who, uint256(ARB_STORAGE_BASE) + 12)),
-            bytes32(uint256(50_000_000))
-        );
+        usdc.mint(who, CASE_BOND_PURSE);
+        vm.prank(who);
+        usdc.approve(address(diamond), type(uint256).max);
     }
+
+    /// Generous on purpose: a case bond is a percentage of the pot with a $20
+    /// floor, and a rig that ran out would fail with `CaseBondTransferFailed`
+    /// in the middle of a scene about something else.
+    uint256 constant CASE_BOND_PURSE = 1_000_000_000;
 
 }
