@@ -134,8 +134,9 @@ isDaoActive()            → false
 facets()                 → 14 facets, 264 selectors
 ```
 
-- **Rows 1–35 are functions of the diamond's facets**; rows 36 and 37 are separate contracts,
-  and the selector of `withdrawReserve` is present in the deployed bytecode of both. There is
+- **Rows 1–35 are functions of the diamond's facets**; `ProtocolTreasury.withdrawReserve`
+  (row 36) and `Treasury.withdrawReserve` (row 37) are separate contracts, and that selector
+  is present in the deployed bytecode of both. There is
   no row 38: the table has held 37 rows since the cut of 9 October 2026.
 - Rows 30–32 are the spent initializers, and no two of them fail the same way. Called from the
   owner's address with `eth_call` on 9 October 2026: `RegistryFacet.initRegistry` (row 31) is
@@ -149,8 +150,8 @@ facets()                 → 14 facets, 264 selectors
   address on 9 October 2026, `acceptOwnership` (row 34) reverts `Diamond: not pending owner`
   and `acceptDAOAddress` (row 35) reverts `NotProposedDaoAddress` — not because either door is
   shut but because `pendingOwner()` and `getPendingDAOAddress()` are both the zero address, so
-  there is nobody entitled to accept. Row 34 is the transaction that hands over the key, and it
-  works the moment a successor is named.
+  there is nobody entitled to accept. Row 34 (`acceptOwnership`) is the transaction that hands
+  over the key, and it works the moment a successor is named.
 - The earlier `Treasury` holds 0 USDC, and `getFeeRecipient()` is the `ProtocolTreasury`
   (`0x7901B687B8720C767F32b7BaB73c133396a2277E`).
 - ⚠️ **The facet-by-facet bytecode comparison below is from 16 September 2026 and has not been

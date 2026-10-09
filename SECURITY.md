@@ -14,9 +14,10 @@
   commands to check that are in [`CHANGELOG.md`](CHANGELOG.md). No key decides a dispute now —
   a verdict is overturned only by a panel of three arbiters voting on an appeal. What the
   owner key can and cannot still do is listed in
-  [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md), together with the event that ends
-  each power. A report that the owner key can upgrade the contracts is not a finding; it is
-  the documented design.
+  [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md), which also names, power by power,
+  which ones the code gives up on a recorded event and which ones it gives up on nothing.
+  For most of them there is no such event, and that page says which. A report that the owner
+  key can upgrade the contracts is not a finding; it is the documented design.
 
 ## Reporting
 
