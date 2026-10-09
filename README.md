@@ -59,7 +59,7 @@ human can still override. The split as the code stands:
 | Release of escrowed funds | **Contract** | Client approval, timeout approval, refund, or an arbiter verdict. No key moves a deal's money outside those paths — `src/Agreement.sol` |
 | Raising a dispute | **Contract** | Only the client or the executor of that deal — `src/Agreement.sol` |
 | Reputation | **Contract** | Awarded inside the completion call, not mintable — `src/facets/ReputationFacet.sol` |
-| Treasury distribution ladder | **Contract** | The percentages are compile-time constants; changing them means replacing the contract — `src/Treasury.sol` |
+| Treasury distribution ladder | **Owner key, under ceilings the treasury fixes** | The three shares are *stored state* the owner may change with `setTreasuryShares` — not compile-time constants, as this row claimed until 9 October 2026. What the owner cannot do is raise one past its ceiling: `FOUNDATION_BPS_MAX` = 6 000, `VAULT_BPS_MAX` = 1 000 and `PAYROLL_BPS_MAX` = 2 000 are `constant` in `src/ProtocolTreasury.sol`, which leaves the reserve a guaranteed tenth (`RESERVE_BPS_MIN` = 1 000). Live on 9 October 2026: vault 1 000, payroll 2 000, foundation 5 000 — read `getTreasuryVaultBps()` and its two neighbours off the diamond — `src/facets/TreasuryLinkFacet.sol` |
 | **Which code runs** | **Owner key** | The Diamond owner can replace any facet through `diamondCut`. This power subsumes every guarantee above: they hold while it is not used |
 | A dispute verdict before it is finalized | **Contract** | ~~`overturnVerdict` replaces an unfinalized verdict; `freezeVerdict` and `unfreezeVerdict` hold it unexecuted~~ — **all three removed from the diamond on 9 October 2026** and mounted on nothing: `facetAddress()` answers the zero address for each. No key, and no DAO address, can overturn, freeze or release a verdict. A verdict is overturned only by a panel of three arbiters voting on an appeal, within 72 hours of the ruling — `src/facets/ArbiterRegistryFacet.sol`, and [`CHANGELOG.md`](CHANGELOG.md) for the commands |
 | **A dispute taken off its arbiter** | **Owner key** | `releaseDisputeClaim` still exists, and this row is the honest half of the one above: before a verdict is submitted the owner can take a claimed dispute off the arbiter holding it, with no written reason. It cannot decide the dispute or move the escrow; if nobody else claims the case, the deal settles on its timeout — `src/facets/ArbiterRegistryFacet.sol` |
@@ -70,8 +70,13 @@ human can still override. The split as the code stands:
 
 Governance moves to a multisig with a timelock before mainnet, and the powers above are
 given up in a fixed order after that. That order, and the event that triggers each step,
-is in [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md). It is a plan; nothing in this
-repository implements it yet.
+is in [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md). That *order* is still a plan,
+but the handover itself is no longer only a plan: `setDAOAddress`, `acceptDAOAddress`,
+`activateDAO` and `isDaoActive` are implemented in
+`src/facets/ArbiterRegistryFacet.sol` and mounted on the diamond today —
+`cast call <diamond> "facetAddress(bytes4)(address)" 0x02950d24` answers a facet, not the
+zero address. What has not happened is the pressing: no DAO address has been proposed, none
+has accepted, and `isDaoActive()` answers `false`.
 
 ## Architecture
 
@@ -85,16 +90,36 @@ DiamondProxy (EIP-2535)             one address, never changes; facets upgrade b
 ├── ArbiterRegistryFacet               roster, commit-reveal claims and verdicts, appeals,
 │                                      timeout recovery, on-chain arbiter chat keys
 ├── ArbiterAccountabilityFacet         suspension, removal for cause, right of reply
-├── ArbiterApplicationsFacet           applications for an arbiter seat before governance
+├── ArbiterApplicationsFacet           withdrawing an application, revoking a seat that
+│                                      has nothing on its record, and the application and
+│                                      bond views. Applying itself lives on
+│                                      ArbiterRegistryFacet (applyAsArbiter); the three
+│                                      doors that approved an application were cut on
+│                                      24 Sep 2026 and postArbiterBond now reverts
+│                                      SeatBondRetired
 ├── ReputationFacet                    XP, clean streaks, unique active users
 ├── JobReceiptFacet                    soulbound receipt NFT
-└── DealMetadataFacet                  on-chain SVG/JSON metadata for the deal NFT
+├── ArbiterVaultFacet                  the arbiter bank: floor per dispute, top-up
+│                                      discount, pay-in and the door out to the foundation
+└── TreasuryLinkFacet                  fee split, arbiter vault target, payroll stream
+
+Unmounted (the contract is still deployed and verified, but nothing routes to it)
+└── DealMetadataFacet                  on-chain SVG/JSON metadata for the deal NFT.
+                                       Agreement took the picture back inside the
+                                       clone and the caller disappeared; the cut
+                                       that unmounted it was signed 14 Sep 2026.
 
 Standalone contracts (not facets)
 ├── Agreement.sol                      one escrow contract per deal, cloned via EIP-1167
 ├── AgreementDeployer.sol              clones the Agreement implementation for the factory
 ├── MinimalForwarder.sol               EIP-712 forwarder for meta-transactions (ERC-2771)
-├── Treasury.sol                       protocol treasury, immutable after deployment
+├── ProtocolTreasury.sol               the live treasury: getFeeRecipient() points here.
+│                                      No admin and no upgrade path; every share has a
+│                                      frozen ceiling and distribute() is permissionless
+├── Treasury.sol                       the earlier treasury, superseded and holding 0
+│                                      USDC. Still deployed, nothing routes income to it
+├── AgreementRenderer.sol              on-chain SVG/JSON for the deal NFT, called by the
+│                                      Agreement clone itself
 └── SVGRenderer.sol                    on-chain SVG/JSON rendering for the receipt NFT
 ```
 
@@ -131,7 +156,7 @@ public constants in `src/Agreement.sol` and readable from any deployed clone.
 
 | Path | Contents |
 |---|---|
-| `src/` | The protocol contracts — 17 Solidity files |
+| `src/` | The protocol contracts. `find src -name '*.sol' \| wc -l` counts them — 22 on 9 October 2026, eleven of them directly in `src/` and the rest under `src/facets/` |
 | `test/` | Foundry tests |
 | `script/` | Deployment and upgrade scripts |
 | `docs/DECENTRALIZATION.md` | What one key can still do, and when each power ends |
@@ -155,9 +180,16 @@ forge build
 forge test
 ```
 
-`forge test` runs 1467 tests across 72 suites and takes a few seconds; the count is printed
-in the last line of its output. The suite runs entirely offline — no RPC endpoint and no
-network access are needed.
+`forge test` prints its own totals on the last line — the number of suites, the number of
+tests, and how many of each passed. That line is the count; this file deliberately does not
+carry one, because a test count written into a README has no way to stay true and nothing in
+the repository checks it.
+
+⚠️ Run `forge clean` first if a previous build used `--skip test`: `forge test` after such a
+build will quietly run a fraction of the suite and still report `0 failed`. The suite count
+on the last line is what gives this away, so read both numbers, not just the failures.
+
+The suite runs entirely offline — no RPC endpoint and no network access are needed.
 
 Dependencies are pinned to release tags rather than branch tips: OpenZeppelin Contracts
 v5.7.0 and forge-std v1.16.2. Check with

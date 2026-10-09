@@ -82,7 +82,7 @@ Counted from the code: **37 functions**. The owner is admitted to 33, the chief 
 | # | Function | Who may call it | Words | What it does today |
 |---|---|---|---|---|
 | 1 | `DiamondCutFacet.diamondCut` | owner | no | Adds, replaces or removes any facet and can run initialisation code in the diamond's storage. Subsumes everything below. |
-| 2 | `OwnershipFacet.transferOwnership` | owner | no | Names the next owner; nothing moves until that address calls `acceptOwnership` (row 36). A new call overwrites the name; the zero address is refused. |
+| 2 | `OwnershipFacet.transferOwnership` | owner | no | Names the next owner; nothing moves until that address calls `acceptOwnership` itself. A new call overwrites the name; the zero address is refused. |
 | 3 | `FactoryFacet.setFeeRecipient` | owner | no | Where every fee is sent. Live value: the `ProtocolTreasury` contract. |
 | 4 | `FactoryFacet.setFeeBps` | owner | no | The fee rate, capped at 2,000 (20%) by `MAX_FEE_BPS`. Live value 500 (5%). |
 | 5 | `FactoryFacet.setFeeFloor` | owner | no | The minimum fee; zero is refused. Live value 1 USDC. |
@@ -99,20 +99,20 @@ Counted from the code: **37 functions**. The owner is admitted to 33, the chief 
 | 16 | `ArbiterVaultFacet.setDisputeDiscount` | owner | no | What the arbiter vault takes off a dispute top-up. No bound in the code. Live value 3 USDC. |
 | 17 | `ArbiterRegistryFacet.setChiefArbiter` | owner | no | Names any address as chief arbiter, or none. Refuses once governance is active. |
 | 18 | `ArbiterRegistryFacet.activateDAO` | owner | no | The governance switch, and it is manual: refuses until a DAO address has accepted, until the diamond counts at least 1,000 unique active users, and until the court is live on its own three floors — 15 deals open at the moment of the press, 8 disputes finalized on an arbiter's verdict in a row with no governance hand in any of them, and 3 different arbiters among them; one-way. See "The four stages". |
-| 19 | `ArbiterRegistryFacet.setDAOAddress` | owner, DAO address | no | Only *proposes* a DAO address (row 37 takes office). The owner proposes until governance is active with a DAO address in office; after that only the sitting DAO address may. The zero address is refused. |
+| 19 | `ArbiterRegistryFacet.setDAOAddress` | owner, DAO address | no | Only *proposes* a DAO address; `acceptDAOAddress` takes office. The owner proposes until governance is active with a DAO address in office; after that only the sitting DAO address may. The zero address is refused. |
 | 20 | `ArbiterRegistryFacet.clearStuckVerdict` | owner | no | Deletes the pending-verdict record of a deal that is no longer `DISPUTED`; nothing else limits it. |
 | 21 | `ArbiterAccountabilityFacet.removeArbiterForCause` | owner, DAO address | unless the chain verifies the cause | Executes a human-laid removal proposal that is at least 48 hours old and under 14 days, on the same cause code. Takes the seat. **It forfeits no money, on the chain since 24 September 2026**: the only field it takes is `arbiterBond`, which is zero for every seat now that the bond is posted per CASE, and a case's bond is not touched by a removal at all. Rewards already earned are not touched either. A cause the chain verifies (at least two judicial mistakes in a row, or a recorded silence) is checked; any other cause needs an evidence digest and words. The caller is the removal authority: the owner until governance is active with a DAO address in office, then only the DAO address. |
 | 22 | `ArbiterRegistryFacet.addArbiter` | owner | no | Seats an arbiter, by name, taking no money and measuring nothing. **The chief lost this door with the cut of 24 September 2026**: it is the one entrance that asks for no record at all, which makes it the widest hole in the corps, and it was held by a man who had himself been appointed. The cap on his bloc went with the power rather than being kept beside it. Closes for everyone once governance is active with a DAO address in office. |
 | 23 | `ArbiterAccountabilityFacet.suspendArbiter` | owner, chief arbiter | no | 72 hours from the press. ~~Restartable without limit~~ **until 8 October 2026, when the restart was given a ceiling: three presses against one arbiter, and the fourth refuses in words that name the removal door instead. The count goes back to zero once the arbiter has stood a week with nobody pressing at him — measured from the last press, so a calendar boundary cannot be stood on to double it.** The ceiling is on the HAND and not on the chain: the automatic suspension that follows a third judicial mistake is written by the protocol itself and is not counted here. Blocks new claims and resignation, and holds execution of verdicts he already submitted. The two who hold this door share one count between them. The chief loses it when governance activates; the owner keeps it. |
-| 24 | `ArbiterAccountabilityFacet.liftSuspension` | owner, chief arbiter, DAO address | no | Ends a suspension early. An ordinary one: owner or chief (the chief only until governance activates, the owner always). One left by a removal, or one standing while the chain's own accusation is live: only the removal authority (row 21). |
+| 24 | `ArbiterAccountabilityFacet.liftSuspension` | owner, chief arbiter, DAO address | no | Ends a suspension early. An ordinary one: owner or chief (the chief only until governance activates, the owner always). One left by a removal, or one standing while the chain's own accusation is live: only the removal authority (`removeArbiterForCause`, row 21). |
 | 25 | `ArbiterAccountabilityFacet.proposeRemoval` | owner, chief arbiter, DAO address | unless the chain verifies the cause | Serves the 48-hour notice a removal needs. Owner or chief until governance is active with a DAO address in office, then only the DAO address. A cause the chain does not verify needs an evidence digest and words; a verified cause is checked only when the removal is executed. |
 | 26 | `ArbiterAccountabilityFacet.withdrawProposal` | owner, chief arbiter, DAO address | no | Cancels a removal proposal. Before handover the owner may cancel any, a chief only his own or one the chain laid; after handover only the DAO address. Cancelling a chain-laid accusation also clears the arbiter's judicial-mistake streak. |
 | 27 | `ArbiterRegistryFacet.releaseDisputeClaim` | owner | no | Takes a claimed dispute off its arbiter before a verdict, inside the dispute window. If nobody else claims, the deal settles on the timeout, which asks about delivery before attendance — four endings, in this order: nothing ever handed in — the whole escrow to the client, whoever answered; handed in and both answered — half each; handed in and the executor stayed silent — a quarter to the executor and three quarters to the client; handed in and the client stayed silent — a quarter to the client and three quarters to the executor. ~~The attendance rule alone~~ settled it until 25 September 2026. The arbiter's own silence, left to run instead, brings the full refund to the client. Repeatable. Does not check whether the caller is a party. The claiming arbiter may also release his own claim; that is not a role and is not counted. |
 | 28 | `ArbiterVaultFacet.fundVault` | owner, fee recipient | no | Pays USDC **in** to the arbiter vault. A donation, not a lever. |
 | 29 | `TreasuryLinkFacet.fundArbiterPayroll` | owner, fee recipient | no | Pays USDC **in** to the arbiter payroll. |
-| 30 | `FactoryFacet.initFactory` | owner | no | Spent. On the chain it reverts `AlreadyInitialized` even when called from the owner's address. |
-| 31 | `RegistryFacet.initRegistry` | owner | no | Spent. Same. |
-| 32 | `FactoryFacet.initFeeModel` | owner | no | Spent. Same. |
+| 30 | `FactoryFacet.initFactory` | owner | no | Spent, and no longer routed: `facetAddress()` for its selector is the zero address, so the diamond answers the owner `Diamond: function not found` like anyone else. |
+| 31 | `RegistryFacet.initRegistry` | owner | no | Spent. Still routed, and reverts `AlreadyInitialized` even when called from the owner's address. |
+| 32 | `FactoryFacet.initFeeModel` | owner | no | Spent, and no longer routed either — the zero address again. |
 | 33 | `ArbiterApplicationsFacet.revokeUnprovenSeat` | owner, chief arbiter | always | Takes back a seat that has nothing on its record — no dispute ever taken, no verdict, no mistake, no earnings, no one seated by it, not the chief — while no suspension or removal proposal stands. It refunds whatever bond the seat carries, which is zero for every seat since the bond moved onto the case. The owner may revoke any granted seat, a chief only a seat he granted. Closes once governance is active. |
 | 34 | `OwnershipFacet.acceptOwnership` | pending owner | no | The named successor takes the key, and with it every power on this page. |
 | 35 | `ArbiterRegistryFacet.acceptDAOAddress` | pending DAO address | no | The proposed DAO address takes office by its own transaction — a raw `msg.sender` check, deliberately not a gasless path. Carries no owner check. |
@@ -134,11 +134,23 @@ isDaoActive()            → false
 facets()                 → 14 facets, 264 selectors
 ```
 
-- **Rows 1–38 live in the diamond**; rows 36 and 37 are separate contracts, and the selector of
-  `withdrawReserve` is present in the deployed bytecode of both.
-- Rows 33–35 were each called from the owner's address with `eth_call` on 16 September 2026;
-  all three revert with `AlreadyInitialized()` (`0x0dc149f0`). They are spent initializers and
-  nothing since has un-spent them.
+- **Rows 1–35 are functions of the diamond's facets**; rows 36 and 37 are separate contracts,
+  and the selector of `withdrawReserve` is present in the deployed bytecode of both. There is
+  no row 38: the table has held 37 rows since the cut of 9 October 2026.
+- Rows 30–32 are the spent initializers, and no two of them fail the same way. Called from the
+  owner's address with `eth_call` on 9 October 2026: `RegistryFacet.initRegistry` (row 31) is
+  still routed and reverts `AlreadyInitialized()` (`0x0dc149f0`), while
+  `FactoryFacet.initFactory` (row 30, `0xf74b9ce8`) and `FactoryFacet.initFeeModel` (row 32,
+  `0x4d4403c1`) are not routed at all — `facetAddress()` answers the zero address for both and
+  the diamond replies `Diamond: function not found`. Unreachable by either road, and nothing
+  has un-spent them.
+- Rows 33–35 are **not** spent initializers; all three are mounted and live. `facetAddress()`
+  answers a real facet for `0xcea8e5be`, `0x79ba5097` and `0x02950d24`. Called from the owner's
+  address on 9 October 2026, `acceptOwnership` (row 34) reverts `Diamond: not pending owner`
+  and `acceptDAOAddress` (row 35) reverts `NotProposedDaoAddress` — not because either door is
+  shut but because `pendingOwner()` and `getPendingDAOAddress()` are both the zero address, so
+  there is nobody entitled to accept. Row 34 is the transaction that hands over the key, and it
+  works the moment a successor is named.
 - The earlier `Treasury` holds 0 USDC, and `getFeeRecipient()` is the `ProtocolTreasury`
   (`0x7901B687B8720C767F32b7BaB73c133396a2277E`).
 - ⚠️ **The facet-by-facet bytecode comparison below is from 16 September 2026 and has not been
