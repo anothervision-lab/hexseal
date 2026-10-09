@@ -379,7 +379,18 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
                 _concat(upgrade.registryReplaceSelectors(), upgrade.registryAddSelectors()),
                 _grownAfterThisCut()
             ),
-            _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
+            // ⚠️ AND THE THREE THE PAIR LOST ON 9 OCTOBER 2026 GO ON DEPLOYFULL'S
+            // SIDE, which is the mirror of the growth above. The governance hand over
+            // a verdict — `overturnVerdict(address,bool)`, `freezeVerdict(address)`,
+            // `unfreezeVerdict(address)` — left ArbiterRegistryFacet and left the
+            // diamond the same day, so `DeployFull` no longer mounts them while this
+            // cut's record still does. Named by their bytes in
+            // ArbiterSplitRig.verdictHandDoors(), never counted: a fourth door
+            // leaving still reds here.
+            _concat(
+                _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
+                verdictHandDoors()
+            ),
             "ArbiterRegistry vs DeployFull"
         );
         _assertSameSet(
@@ -1010,6 +1021,10 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
         // applications facet that is already here rather than on a stub.
         _mountRemovedApplicationDoors(address(d), census);
+        // And the three doors of the governance hand over a verdict, which left the
+        // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
+        // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
+        _mountRemovedVerdictHandDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

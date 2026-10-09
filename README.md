@@ -16,7 +16,12 @@ Testnet, unaudited.
   application is test USDC. No real funds are at risk.
 - There has been **no external audit**.
 - The protocol is decentralized in its logic and not yet in its governance: one key can
-  upgrade any facet and can overturn a dispute verdict before it is finalized. The full
+  upgrade any facet, and upgrading a facet subsumes every other power. ~~It can also
+  overturn a dispute verdict before it is finalized~~ — **not since 9 October 2026**, when
+  that door and the two that froze and released a verdict were removed from the diamond.
+  No key can decide a dispute now; a verdict is overturned only by a panel of three
+  arbiters voting on an appeal. [`CHANGELOG.md`](CHANGELOG.md) gives the command that
+  checks this against the chain. The full
   list of what that key can and cannot do, and the event that ends each power, is in
   [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md).
 - Do not point this at mainnet funds.
@@ -56,7 +61,8 @@ human can still override. The split as the code stands:
 | Reputation | **Contract** | Awarded inside the completion call, not mintable — `src/facets/ReputationFacet.sol` |
 | Treasury distribution ladder | **Contract** | The percentages are compile-time constants; changing them means replacing the contract — `src/Treasury.sol` |
 | **Which code runs** | **Owner key** | The Diamond owner can replace any facet through `diamondCut`. This power subsumes every guarantee above: they hold while it is not used |
-| **A dispute verdict before it is finalized** | **Owner key**, or the DAO address once one is set | `overturnVerdict` replaces an unfinalized verdict; `freezeVerdict` and `unfreezeVerdict` hold it unexecuted — `src/facets/ArbiterRegistryFacet.sol` |
+| A dispute verdict before it is finalized | **Contract** | ~~`overturnVerdict` replaces an unfinalized verdict; `freezeVerdict` and `unfreezeVerdict` hold it unexecuted~~ — **all three removed from the diamond on 9 October 2026** and mounted on nothing: `facetAddress()` answers the zero address for each. No key, and no DAO address, can overturn, freeze or release a verdict. A verdict is overturned only by a panel of three arbiters voting on an appeal, within 72 hours of the ruling — `src/facets/ArbiterRegistryFacet.sol`, and [`CHANGELOG.md`](CHANGELOG.md) for the commands |
+| **A dispute taken off its arbiter** | **Owner key** | `releaseDisputeClaim` still exists, and this row is the honest half of the one above: before a verdict is submitted the owner can take a claimed dispute off the arbiter holding it, with no written reason. It cannot decide the dispute or move the escrow; if nobody else claims the case, the deal settles on its timeout — `src/facets/ArbiterRegistryFacet.sol` |
 | **Treasury reserve withdrawal gate** | **Contract, except against the owner key** | The gate holds against a manually set "DAO is active" flag. It does not hold against the Diamond owner, who has three routes past it, the cheapest costing about 31,700 gas and not visible through the Diamond's own function list — `src/Treasury.sol` |
 | Who the first arbiters are | **Owner key** | A launch decision. Seated by hand with `addArbiter`, which posts no bond — `src/facets/ArbiterRegistryFacet.sol` |
 | Protocol fee | **Owner key** | 5 % of the deal amount with a $1 floor, both stored and settable — `setFeeBps` / `setFeeFloor` in `src/FactoryFacet.sol` |

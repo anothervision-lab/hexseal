@@ -192,6 +192,13 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
         _postRealBond(arbiter);
+
+        // ⚠️ THE APPEAL PANEL IS SEATED HERE AND NOWHERE LATER (9 October 2026).
+        // Every mistake run in this file now ends in a panel vote, and
+        // `addArbiter` stops working the moment governance is handed over — which
+        // four scenes do before they drive a run. See _ensureAppealPanel.
+        _addFreshArbiter(PANEL_A);
+        _addFreshArbiter(PANEL_B);
     }
 
     // ── Helpers (moved from test/Diamond.t.sol with minimal edits) ──
@@ -233,7 +240,78 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(agreementAddr, true);
 
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreementAddr, false);
+        // ⚠️ THE OVERTURN IS THE PANEL'S NOW (9 October 2026). This was one line,
+        // `overturnVerdict(agreementAddr, false)`, pressed by the owner.
+        //
+        // ⚠️ AND IT HAD TO BE THE PANEL RATHER THAN A TIMEOUT, which would have
+        // been far cheaper. `_causeForPath` in the facet sends
+        // `AgreementTimeout` and `ClaimAbandoned` to CAUSE_TIMEOUTS_MIRROR and
+        // everything else -- `AppealVote` included -- to
+        // CAUSE_OVERTURNED_VERDICTS_MIRROR. Twenty-one places in this file assert
+        // `Cause.OverturnedVerdicts`, and `_requireProven` proves that cause by
+        // reading the cumulative overturn counter, which a timeout deliberately
+        // does not touch. A timeout here would have laid `Timeouts` instead and
+        // taken test_TheTimeoutPathAccusesWithTimeouts's whole contrast away with
+        // it -- that scene exists to show the two roads lay DIFFERENT causes, and
+        // if every road were a timeout it would pass while proving nothing.
+        _panelOverturns(agreementAddr, exec);
+    }
+
+    /// The two seats an appeal needs, seated once in `setUp` and only topped up
+    /// here. `_appealVotesRequired` is two, and two votes the same way are a
+    /// formed panel that cannot tie, so a third seat would buy nothing and cost
+    /// one more arbiter in every count this file makes.
+    ///
+    /// ⚠⚠ THE ADDRESSES ARE PICKED AGAINST THE FILE, NOT OUT OF THE AIR, and the
+    /// first attempt at this is why the warning is here. 0x9E1/0x9E2 looked free
+    /// and are not: this file hands them to `_disputeAndOverturn` as the CLIENT
+    /// and EXECUTOR of a deal in two scenes, so the panel found itself voting on
+    /// its own case and `voteOnAppeal` answered `CannotVoteOnOwnDeal`. Measured,
+    /// not reasoned about -- two reds named it. 0xAF01/0xAF02 appear nowhere else
+    /// in this file; check again before changing them.
+    ///
+    /// ⚠️ SEATED IN `setUp` RATHER THAN ON FIRST USE, and that is also from a
+    /// measurement: `addArbiter` is refused with `SeatingHandedOver` once
+    /// governance is live, and four scenes hand the seating over BEFORE they
+    /// drive a mistake run. Seating lazily made those four red. The cost is two
+    /// extra seats in `arbiterList` for every scene in the file, which exactly
+    /// one assertion looks at -- see test_RemovalForCausePrunesArbiterList.
+    address constant PANEL_A = address(0xAF01);
+    address constant PANEL_B = address(0xAF02);
+
+    function _ensureAppealPanel() internal returns (address p1, address p2) {
+        p1 = PANEL_A;
+        p2 = PANEL_B;
+        _postRealBond(p1);
+        _postRealBond(p2);
+    }
+
+    /// The losing executor appeals and the panel overturns the ruling, which
+    /// books the judged arbiter a mistake on `DemotionPath.AppealVote` -- the one
+    /// surviving road to `Cause.OverturnedVerdicts`.
+    function _panelOverturns(address agreementAddr, address loser) internal {
+        (address p1, address p2) = _ensureAppealPanel();
+        require(
+            loser != p1 && loser != p2,
+            "rig: a panel seat is a party to this deal - pick other party addresses"
+        );
+
+        usdc.mint(loser, 1_000_000_000);
+        vm.prank(loser);
+        usdc.approve(address(diamond), type(uint256).max);
+        vm.prank(loser);
+        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agreementAddr);
+        // The seats open an hour after the appeal (24 September 2026).
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1);
+
+        vm.prank(p1);
+        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agreementAddr, true);
+        vm.prank(p2);
+        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agreementAddr, true);
+
+        // Two votes the same way are a formed panel and cannot tie, so this
+        // settles without waiting out the review window.
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agreementAddr);
     }
 
     function _setUniqueActiveUsers(uint256 n) internal {
@@ -386,7 +464,9 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(second);
-        assertEq(ArbiterVaultFacet(address(diamond)).getArbiters().length, 2);
+        // Three seats besides this scene's second arbiter: the base `arbiter` and
+        // the two appeal seats setUp now plants (see _ensureAppealPanel).
+        assertEq(ArbiterVaultFacet(address(diamond)).getArbiters().length, 4);
 
         _disputeAndOverturn(address(0x201), address(0x202));
         _disputeAndOverturn(address(0x203), address(0x204));
@@ -398,7 +478,14 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
 
         address[] memory list = ArbiterVaultFacet(address(diamond)).getArbiters();
-        assertEq(list.length, 1, "the removed one must disappear from arbiterList and not only from isArbiter");
+        assertEq(list.length, 3, "the removed one must disappear from arbiterList and not only from isArbiter");
+        // ⚠️ AND BY NAME, not only by the count. The number alone stopped being
+        // the whole check on 9 October 2026, when setUp began planting two appeal
+        // seats: a count can come out right while the wrong arbiter is the one
+        // that went.
+        for (uint256 i = 0; i < list.length; i++) {
+            assertTrue(list[i] != arbiter, "the removed arbiter is still in arbiterList");
+        }
         assertEq(list[0], second, "the arbiter left is the one who was not removed");
     }
 
@@ -663,6 +750,37 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
     }
 
+    /// The same for the PAUSE the accusation owes the accused (25 September 2026), and
+    /// the mirror behind it is write-only: nothing in the registry reads the pause back,
+    /// both readers are the execute doors in the other facet. A drift between the two
+    /// constants would therefore be invisible inside either file.
+    ///
+    /// ⚠️ SO THE EXPECTATION COMES FROM THE OTHER FACET ON PURPOSE. What is written is
+    /// put there by the registry out of `REMOVAL_DELAY_MIRROR`; what it is compared
+    /// against is published by the accountability facet out of `REMOVAL_DELAY`. Two
+    /// independent sources — move one and this goes red. Comparing the registry's
+    /// number with itself would agree at any value, which is the whole failure mode of
+    /// a mirror.
+    ///
+    /// ⚠️ AND THE OBSERVABLE DIFFERENCE IS THE VALUE IN STORAGE, not behaviour: while
+    /// the constants agree, a record with its own pause and a record with a zero behave
+    /// IDENTICALLY, because a zero falls into the fallback branch of that same constant.
+    /// The behavioural scenes for the READING end live on the light bench
+    /// (test/ArbiterRemovalForCause.t.sol, "the pause owed to the accused").
+    function test_TheChainFreezesTodaysPauseIntoTheAccusationItLays() public {
+        _threeOverturnsOnDistinctDisputes(arbiter);
+        (, , uint256 proposedAt, address by,) =
+            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
+        assertGt(proposedAt, 0, "setup: the chain has laid down an accusation");
+        assertEq(by, address(0), "setup: the accusation is nobody's, that is, the chain's");
+
+        assertEq(
+            _storedProposalDelay(arbiter),
+            ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay(),
+            "the chain must freeze into the record the same pause the human door lays down"
+        );
+    }
+
     /// The third slot of the `removalProposals[who]` record: `by` in the low twenty
     /// bytes, `ttl` in the next eight.
     function _proposalTtlSlot(address who) internal pure returns (bytes32) {
@@ -671,6 +789,13 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
     function _storedProposalTtl(address who) internal view returns (uint64) {
         return uint64(uint256(vm.load(address(diamond), _proposalTtlSlot(who))) >> 160);
+    }
+
+    /// `delay` shares that third slot too, in the four bytes left over after `by` (20)
+    /// and `ttl` (8) — the word is exactly full, measured against the compiler's own
+    /// layout (128 bytes for this struct both before and after the field was appended).
+    function _storedProposalDelay(address who) internal view returns (uint32) {
+        return uint32(uint256(vm.load(address(diamond), _proposalTtlSlot(who))) >> 224);
     }
 
     /// Puts a FOREIGN term into the record — the state a cut that changed the
@@ -1058,74 +1183,121 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
     }
 
-    /// A vindication by the panel is the fourth place where an accusation disappears,
-    /// and the original brief did not know it (it appeared later). The chain takes its
-    /// word back entirely: there is no proposal, the counter is zero, the suspension
-    /// is lifted — and there is no reply either, because there is nothing left to
-    /// answer.
-    function test_VindicationClosesTheAnswerToTheChainsAccusation() public {
-        address v1 = address(0x7E1);
-        address v2 = address(0x7E2);
-        address v3 = address(0x7E3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v3);
-
-        _disputeAndOverturn(address(0x9F1), address(0x9F2));
-        _disputeAndOverturn(address(0x9F3), address(0x9F4));
-        address agr = _disputeAndOverturn(address(0x9F5), address(0x9F6));
-
-        vm.prank(arbiter);
-        ArbiterAccountabilityFacet(address(diamond)).respondToRemoval(keccak256("my side"), "");
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalReply(arbiter), keccak256("my side"),
-            "setup: the reply to the chain's accusation landed"
-        );
-
-        usdc.mint(address(0x9F5), 100 * 10 ** 6);
-        vm.prank(address(0x9F5));
-        usdc.approve(address(diamond), 20 * 10 ** 6);
-        vm.prank(address(0x9F5));
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalReply(arbiter), bytes32(0),
-            "the reply was taken away together with the accusation the panel withdrew"
-        );
-        vm.prank(arbiter);
-        vm.expectRevert(ArbiterAccountabilityFacet.NothingToAnswer.selector);
-        ArbiterAccountabilityFacet(address(diamond)).respondToRemoval(keccak256("again"), "");
-    }
-
+    // ⚠️ `test_VindicationClosesTheAnswerToTheChainsAccusation` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- a VINDICATION scene. It needed the hand to
+    //   overturn the verdict FIRST and the panel to restore the arbiter's own ruling
+    //   afterwards, so that `v.overturned` was already true when the panel sat down.
+    //   That flag now has exactly one writer, inside `resolveAppeal`, read before its
+    //   own write, with one appeal per verdict -- and the branch that did the restoring
+    //   was deleted for that same reason.
+    //   ⚠️ FOUND BY MEASUREMENT, NOT BY READING. The scene compiles perfectly well
+    //   after the cut and fails at runtime with `AlreadyAppealed()`, because
+    //   `_disputeAndOverturn` now raises and settles the appeal itself and the scene
+    //   then tries to raise a second one on the same verdict. Had the suite not been
+    //   run, this would have looked done.
+    //   What it asserted: a vindication was the fourth place an accusation could
+    //   disappear, and the accused's right to answer closed with it.
+    //
+    // ⚠️ `test_AutoDemotionByOverturnRecordsItsOwnPath` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- it asserted the saved path code for the
+    //   OWNER'S OVERTURN road, AUTO_OVERTURN (241). Nothing can write
+    //   `DemotionPath.OwnerOverturn` any more: the enum member is kept because records
+    //   made before the cut carry it, but no new one can be produced.
+    //   ⚠️ THE LOCK IT BELONGED TO IS STILL WHOLE. This was one of four sibling scenes,
+    //   each pinning one road's code so that `path` has to arrive from storage rather
+    //   than be nailed to a value. The other three remain and cover every road that is
+    //   still reachable: test_AutoDemotionByTimeoutRecordsItsOwnPath (242),
+    //   test_AutoDemotionByAppealRecordsItsOwnPath (243) and
+    //   test_AutoDemotionByAbandonedClaimRecordsItsOwnPath (244). Three different
+    //   expected values still disagree with any single nailed one, which is the whole
+    //   job of the set.
+    //
+    // ⚠️ `test_PanelVindicationQuenchesTheChainAccusation` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- a VINDICATION scene. It needed the hand to
+    //   overturn the verdict FIRST and the panel to restore the arbiter's own ruling
+    //   afterwards, so that `v.overturned` was already true when the panel sat down.
+    //   That flag now has exactly one writer, inside `resolveAppeal`, read before its
+    //   own write, with one appeal per verdict -- and the branch that did the restoring
+    //   was deleted for that same reason.
+    //   ⚠️ FOUND BY MEASUREMENT, NOT BY READING. The scene compiles perfectly well
+    //   after the cut and fails at runtime with `AlreadyAppealed()`, because
+    //   `_disputeAndOverturn` now raises and settles the appeal itself and the scene
+    //   then tries to raise a second one on the same verdict. Had the suite not been
+    //   run, this would have looked done.
+    //   What it asserted: the panel clearing the arbiter also withdrew THE CHAIN'S OWN
+    //   accusation (ChainAccusationCleared), zeroed the streak and lifted the
+    //   suspension. All three were the vindication branch's work and all three went
+    //   with it.
+    //
+    // ⚠️ `test_PanelVindicationLeavesAHumanAccusationStanding` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- a VINDICATION scene. It needed the hand to
+    //   overturn the verdict FIRST and the panel to restore the arbiter's own ruling
+    //   afterwards, so that `v.overturned` was already true when the panel sat down.
+    //   That flag now has exactly one writer, inside `resolveAppeal`, read before its
+    //   own write, with one appeal per verdict -- and the branch that did the restoring
+    //   was deleted for that same reason.
+    //   ⚠️ FOUND BY MEASUREMENT, NOT BY READING. The scene compiles perfectly well
+    //   after the cut and fails at runtime with `AlreadyAppealed()`, because
+    //   `_disputeAndOverturn` now raises and settles the appeal itself and the scene
+    //   then tries to raise a second one on the same verdict. Had the suite not been
+    //   run, this would have looked done.
+    //   What it asserted, and it is the sharper half: the chain takes back only its OWN
+    //   word. A human's proposal against the same arbiter stood untouched through a
+    //   vindication. There is no vindication left to leave it standing through.
+    //
+    // ⚠️ `test_VindicationAnnouncesTheLiftedSuspension` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- a VINDICATION scene. It needed the hand to
+    //   overturn the verdict FIRST and the panel to restore the arbiter's own ruling
+    //   afterwards, so that `v.overturned` was already true when the panel sat down.
+    //   That flag now has exactly one writer, inside `resolveAppeal`, read before its
+    //   own write, with one appeal per verdict -- and the branch that did the restoring
+    //   was deleted for that same reason.
+    //   ⚠️ FOUND BY MEASUREMENT, NOT BY READING. The scene compiles perfectly well
+    //   after the cut and fails at runtime with `AlreadyAppealed()`, because
+    //   `_disputeAndOverturn` now raises and settles the appeal itself and the scene
+    //   then tries to raise a second one on the same verdict. Had the suite not been
+    //   run, this would have looked done.
+    //   ⚠️ THIS IS THE SCENE BEHIND THE `ArbiterSuspensionLifted` IMPORT. The registry
+    //   facet imported ArbiterAccountabilityFacet for that ONE event declaration,
+    //   because the vindication branch lifted a suspension and a lift that leaves no
+    //   log reads in the feed as a suspension that never ended. With the branch gone
+    //   the registry emits it nowhere, so solc drops it from that facet's ABI -- which
+    //   is why the entry had to leave REGISTRY in
+    //   script/check_subgraph_arbiter_events.py on the same day.
+    //
+    // ⚠️ `test_ThePanelStillDisarmsTheButtonAfterTheProofCheckIsGone` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- a VINDICATION scene. It needed the hand to
+    //   overturn the verdict FIRST and the panel to restore the arbiter's own ruling
+    //   afterwards, so that `v.overturned` was already true when the panel sat down.
+    //   That flag now has exactly one writer, inside `resolveAppeal`, read before its
+    //   own write, with one appeal per verdict -- and the branch that did the restoring
+    //   was deleted for that same reason.
+    //   ⚠️ FOUND BY MEASUREMENT, NOT BY READING. The scene compiles perfectly well
+    //   after the cut and fails at runtime with `AlreadyAppealed()`, because
+    //   `_disputeAndOverturn` now raises and settles the appeal itself and the scene
+    //   then tries to raise a second one on the same verdict. Had the suite not been
+    //   run, this would have looked done.
+    //   What it asserted: with the proof check removed from the removal door, the panel's
+    //   vindication was still what disarmed `executeChainRemoval` -- there was nothing
+    //   left to press it with.
+    //
+    // ⚠️ `test_ADeadChainAccusationDoesNotSwallowTheWholeStreak` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- a VINDICATION scene. It needed the hand to
+    //   overturn the verdict FIRST and the panel to restore the arbiter's own ruling
+    //   afterwards, so that `v.overturned` was already true when the panel sat down.
+    //   That flag now has exactly one writer, inside `resolveAppeal`, read before its
+    //   own write, with one appeal per verdict -- and the branch that did the restoring
+    //   was deleted for that same reason.
+    //   ⚠️ FOUND BY MEASUREMENT, NOT BY READING. The scene compiles perfectly well
+    //   after the cut and fails at runtime with `AlreadyAppealed()`, because
+    //   `_disputeAndOverturn` now raises and settles the appeal itself and the scene
+    //   then tries to raise a second one on the same verdict. Had the suite not been
+    //   run, this would have looked done.
+    //   What it asserted: a chain accusation that had gone stale did not take the whole
+    //   mistake streak with it when the panel vindicated -- ONE mistake came back off
+    //   the record, not the run. The subtraction it guarded is gone with the branch, so
+    //   there is no arithmetic left to get wrong.
+    //
     /// The second consequence: the same call silenced THE AUTOMATIC PATH.
     ///
     /// The automatic road sets the same suspension from the same declaration
@@ -1529,12 +1701,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
     /// A control that the test above distinguishes the reasons for a refusal: the same
     /// dispute, the same moment — but WITHOUT a removal the finalisation goes through.
-    /// Without this, "it reverts at 24 hours" could mean anything (FINALIZE_DELAY not
+    /// Without this, "it reverts at the window" could mean anything (FINALIZE_DELAY not
     /// passed, a broken mock) rather than "the suspension holds".
-    function test_WithoutRemovalTheSameVerdictFinalizesAtTwentyFourHours() public {
+    function test_WithoutRemovalTheSameVerdictFinalizesWhenTheWindowPasses() public {
         address agreementAddr = _disputeAndSubmit(address(0x605), address(0x606));
 
-        vm.warp(vm.getBlockTimestamp() + 24 hours);
+        vm.warp(vm.getBlockTimestamp() + 72 hours); // FINALIZE_DELAY, 24 -> 72 h on 9 Oct 2026
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
 
         assertTrue(
@@ -1927,53 +2099,48 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     //  test/Diamond.t.sol, where the appeal machinery is.
     // ============================================================
 
-    /// The price of unseating an arbiter must not equal one submitted verdict.
-    ///
-    /// `_disputeAndOverturn` is the file's own way in: it builds the dispute,
-    /// submits the verdict AND performs the first overturn. No second way of
-    /// building one is written here.
-    function test_OneVerdictCannotBeOverturnedThreeTimes() public {
-        address agreement = _disputeAndOverturn(address(0x661), address(0x662));
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "first overturn counts once"
-        );
-
-        vm.expectRevert(ArbiterRegistryFacet.AlreadyOverturned.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreement, false);
-
-        vm.expectRevert(ArbiterRegistryFacet.AlreadyOverturned.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreement, true);
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "one verdict, one mistake"
-        );
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
-            "still seated after one bad verdict"
-        );
-    }
-
-    /// Placement, half one: overturned AND finalized is a reachable state —
-    /// finalizeVerdict leaves `overturned` standing, it only adds `finalized`.
-    /// The refusal a person reads there must stay AlreadyFinalized: the verdict
-    /// is over, which is the larger fact. Lifting the new gate above the
-    /// finalized check swaps the reason and says the smaller one instead.
-    ///
-    /// ⚠️ vm.getBlockTimestamp(), not block.timestamp: under via_ir solc treats
-    /// TIMESTAMP as constant within a call.
-    function test_OverturnedThenFinalizedStillRefusesAsFinalized() public {
-        address agreement = _disputeAndOverturn(address(0x663), address(0x664));
-
-        vm.warp(vm.getBlockTimestamp() + 24 hours + 1); // FINALIZE_DELAY
-        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreement);
-
-        vm.expectRevert(ArbiterRegistryFacet.AlreadyFinalized.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreement, true);
-    }
-
+    // ⚠️ `test_OneVerdictCannotBeOverturnedThreeTimes` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF. Its whole subject was `AlreadyOverturned` refusing a
+    //   SECOND and THIRD press of `overturnVerdict` on one verdict -- the price of
+    //   unseating an arbiter must not be one submitted verdict and three calls in a
+    //   block. There is no press left to repeat.
+    //   ⚠️ THE PROPERTY IT PROTECTED IS NOW STRUCTURAL RATHER THAN GUARDED, which is
+    //   why this is not a hole: one verdict still earns at most one mistake, but now
+    //   because `resolveAppeal` refuses on `appealResolved` and `raiseAppeal` refuses
+    //   on `appealed` -- a verdict has exactly one appeal and the appeal settles once.
+    //   The error is kept as a declaration; nothing raises it.
+    //
+    // ⚠️ `test_OverturnedThenFinalizedStillRefusesAsFinalized` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF -- which of two refusals the hand got once the verdict
+    //   had been overturned AND finalized (`AlreadyFinalized`, not
+    //   `AlreadyOverturned`). Both errors are kept as declarations and no caller can
+    //   reach either.
+    //
+    // ⚠️ `test_TheChainsAccusationNamesNobodyOnTheOverturnPath` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- it asserted the chain's accusation is
+    //   laid in NOBODY's name on `DemotionPath.OwnerOverturn`, and that path has no
+    //   writer left. The enum member is kept (records written before the cut carry
+    //   it) but nothing can produce a new one.
+    //   ⚠️ THE PROPERTY IS STILL MEASURED, on the road that survived and by a scene
+    //   that was already here: test_TheChainsAccusationNamesNobodyOnTheAppealPath
+    //   asserts the same `by == address(0)` for `DemotionPath.AppealVote`, which
+    //   `_causeForPath` sends to the very same cause this one used. Nothing was lost
+    //   with this file; the road was.
+    //
+    // ⚠️ `test_TheChainsAccusationNamesNobodyEvenWhenTheDaoPressed` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- the DAO address pressing `overturnVerdict`
+    //   through `onlyOwnerOrDAO`. Neither the door nor the modifier exists.
+    //   ⚠️ WHAT THIS ONE WAS FOR, AND WHY ITS ABSENCE IS NOT THE SAME HOLE. It was
+    //   written because across the whole suite `owner == address(this)` and
+    //   `overturnVerdict` was never called under `vm.prank`, so substituting `by`
+    //   with `OwnershipLib.contractOwner()` gave ZERO red out of 840: the tests were
+    //   proving "the record names the owner" rather than "the record names whoever
+    //   pressed". That mutation cannot be made any more -- `_recordArbiterMistake`
+    //   takes `by` as `address(/* by */)` and ignores it, and every one of its three
+    //   remaining callers passes a literal `address(0)` because on none of them is
+    //   there a presser whose name would be the truth. There is no longer a wrong
+    //   name available to write.
+    //
     // ============================================================
     //  THE AUTOMATIC-REMOVAL RECORD NAMES ITS ORIGIN
     //
@@ -1987,118 +2154,6 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     //  THREE DIFFERENT disputes — the property of the scene did not change, only the
     //  price did.
     // ============================================================
-
-    /// Road one: the owner overturns a verdict.
-    ///
-    /// ⚠️ THE SCENE WAS REBUILT, and the property under test was inverted with it.
-    /// A third overturn used to REMOVE an arbiter, and `ArbiterDemoted` was bound to
-    /// NAME whoever pressed — the test guarded that the record would not lay the blame
-    /// on the owner when somebody else pressed. A third overturn no longer removes: it
-    /// suspends and opens an accusation IN THE CHAIN'S NAME, and it has no accuser at
-    /// all — the `by` field in the record is zero, and the event has no such field by
-    /// construction.
-    ///
-    /// The property became stronger rather than weaker: the old one rested on the
-    /// right address being put into the event (a substitution gave 0 red out of 840
-    /// until the DAO scene below was written), the present one on there being nowhere
-    /// to put it.
-    ///
-    /// ⚠️ Three DIFFERENT disputes: an overturned verdict refuses AlreadyOverturned.
-    function test_TheChainsAccusationNamesNobodyOnTheOverturnPath() public {
-        _disputeAndOverturn(address(0x651), address(0x652));
-        _disputeAndOverturn(address(0x653), address(0x654));
-
-        address agr = _disputeAndSubmit(address(0x655), address(0x656));
-
-        vm.expectEmit(true, true, true, true, address(diamond));
-        emit ArbiterRegistryFacet.RemovalProposedByChain(
-            arbiter,
-            uint8(ArbiterRegistryFacet.DemotionPath.OwnerOverturn),
-            agr,
-            vm.getBlockTimestamp()
-        );
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
-            "a third overturn no longer removes: it accuses"
-        );
-        (, , , address by, bool live) =
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
-        assertTrue(live, "the accusation is alive");
-        assertEq(by, address(0), "and nobody's: a human pressed, and the chain accuses");
-    }
-
-    /// The same road one, but IT IS NOT THE OWNER WHO PRESSES. Without this scene the
-    /// central property was guarded by nothing: across the whole suite owner ==
-    /// address(this), overturnVerdict was nowhere called under vm.prank, and
-    /// substituting `by` with OwnershipLib.contractOwner() gave ZERO red out of 840 —
-    /// the tests proved "the record names the owner" rather than "the record names
-    /// whoever pressed".
-    ///
-    /// The scene is a production one and not invented: onlyOwnerOrDAO admits the
-    /// governance address too, and setDAOAddress PLUS a confirmation by that address
-    /// itself is what seats it there (since 26 August 2026 a proposal alone is not
-    /// enough, and the scene proves that along the way: without the acceptDAOAddress
-    /// line below the press gets NotOwnerOrDAO).
-    ///
-    /// ⚠️ THERE IS DELIBERATELY NO `activateDAO()` HERE, and that is not forgetfulness.
-    /// The shared right begins with the APPOINTMENT of the address and not with the
-    /// activation of governance — the `onlyOwnerOrDAO` modifier does not ask about
-    /// activation at all. With an activation line the scene would stop checking that:
-    /// the measurement "gate the modifier's DAO branch on isDaoActive()" gave 0 red
-    /// out of 855, because in the single scene with a DAO governance was active as
-    /// well. Without the line the property is nailed by a test (the same measurement
-    /// gives 1 red, this test, with the cause confirmed by the trace:
-    /// `NotOwnerOrDAO()`), and any future attempt to gate the branch will require a
-    /// DELIBERATE decision rather than passing in silence.
-    ///
-    /// Whether it should be gated is not decided by the test — it only stops the
-    /// behaviour being changed unnoticed. The analysis of the ratchet itself (the owner
-    /// reappoints the address freely before isDaoActive() and no longer after) is
-    /// recorded separately.
-    function test_TheChainsAccusationNamesNobodyEvenWhenTheDaoPressed() public {
-        address dao = address(0x6D40);
-        ArbiterRegistryFacet(address(diamond)).setDAOAddress(dao);
-        vm.prank(dao);
-        ArbiterRegistryFacet(address(diamond)).acceptDAOAddress();
-        assertFalse(
-            ArbiterRegistryFacet(address(diamond)).isDaoActive(),
-            "setup: governance is APPOINTED and CONFIRMED but not activated, so the rights already exist"
-        );
-        assertTrue(dao != owner, "setup: the one pressing and the owner are DIFFERENT addresses");
-
-        // The owner presses the first two mistakes and governance the third.
-        //
-        // ⚠️ The scene was rebuilt together with its neighbour: what used to be guarded
-        // here was "the record names WHOEVER PRESSED and not the owner by default"
-        // (measured: 0 red out of 840 without this scene). Now the record names NOBODY,
-        // and this scene guards that "nobody" means exactly nobody — and not "whoever's
-        // address happened to be to hand". The presser is an address DIFFERENT from the
-        // owner; were anybody's name to appear in the accusation, it would be visible
-        // here.
-        //
-        // ⚠️ Three DIFFERENT disputes, see the scene above.
-        _disputeAndOverturn(address(0x65B), address(0x65C));
-        _disputeAndOverturn(address(0x65D), address(0x65E));
-
-        address agr = _disputeAndSubmit(address(0x65F), address(0x660));
-
-        vm.expectEmit(true, true, true, true, address(diamond));
-        emit ArbiterRegistryFacet.RemovalProposedByChain(
-            arbiter,
-            uint8(ArbiterRegistryFacet.DemotionPath.OwnerOverturn),
-            agr,
-            vm.getBlockTimestamp()
-        );
-        vm.prank(dao);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-
-        (, , , address by, ) =
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
-        assertEq(by, address(0), "governance pressed, and the accusations are nobody's");
-        assertTrue(by != dao, "and certainly not their name");
-    }
 
     /// A zero enum value is neither a road nor an accusation. A forgotten or new road
     /// gets a zero by default in Solidity; what is checked is that Unspecified and not
@@ -2300,42 +2355,6 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         assertEq(count3, 2, "a second removal: the counter is two");
         assertEq(lastAt3, vm.getBlockTimestamp(), "the moment was updated to the last one");
         assertEq(cause3, uint8(ArbiterAccountabilityFacet.Cause.Leak) + 1, "the cause was updated");
-    }
-
-    /// An automatic demotion is a removal too, and it is remembered too. It has no
-    /// cause: the chain removed the arbiter over a streak of mistakes and not over
-    /// anybody's accusation, and the code says so outright rather than pretending to be
-    /// cause number zero.
-    ///
-    /// But "there is no cause" does not yet mean "there is nothing to say". Road one:
-    /// an overturn by the owner. The code must differ from the codes of the other two
-    /// roads — otherwise the distinction, for which a separate event field was spent,
-    /// is lost in the ONLY place that gets read (nobody reads the logs).
-    function test_AutoDemotionByOverturnRecordsItsOwnPath() public {
-        _disputeAndOverturn(address(0x721), address(0x722));
-        _disputeAndOverturn(address(0x723), address(0x724));
-        _disputeAndOverturn(address(0x725), address(0x726));
-
-        // ⚠️ A third mistake accuses, and the common door removes two days later. The
-        // card must name the road all the same — that is what chainProposalPath exists
-        // for: the road is known at the moment of the mistake and recorded at the
-        // moment of the removal.
-        vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
-        vm.prank(STRANGER);
-        ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
-
-        assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
-
-        (, , , , , , , , , , , uint256 count, uint256 lastAt, uint8 cause)
-            = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
-        assertEq(count, 1, "the automatic path removed them, and the counter grew just as it does by hand");
-        assertEq(lastAt, vm.getBlockTimestamp(), "the moment of the automatic removal is recorded: the moment of THE REMOVAL, not of the mistake");
-        assertEq(cause, AUTO_OVERTURN,
-            "the card names the path: it was AN OVERTURN that removed them, not a timeout and not the votes");
-        assertTrue(cause != AUTO_TIMEOUT,
-            "and it must differ from a timeout");
-        assertTrue(cause != AUTO_APPEAL,
-            "and from the votes on an appeal");
     }
 
     /// Road two on the card: the agreement reported a timeout. The scene is the same as
@@ -3085,25 +3104,51 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         (, , , , bool live) = ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
         assertTrue(live, "three mistakes - the chain has accused");
 
-        // Collect the disputes off the logs the way a reader does: two kinds of
-        // event, and the arbiter is a topic in both.
+        // Collect the disputes off the logs the way a reader does.
+        //
+        // ⚠️ IT TAKES TWO LOGS ON THE APPEAL ROAD NOW, AND THAT IS THE WHOLE
+        // POINT OF THIS SCENE AFTER 9 OCTOBER 2026. It used to take one:
+        // `VerdictOverturned(agreement, arbiter, ...)` named the man in its own
+        // right, so one event answered both "which dispute" and "whose". That
+        // event went with the hand that emitted it, and NO log on the surviving
+        // appeal road names the judged arbiter at all — `AppealResolved` carries
+        // the APPELLANT, and `AppealVoteCast` carries the VOTER in a parameter
+        // that is actually called `arbiter`. Reading either as the judged man
+        // would name the wrong person with perfect confidence.
+        //
+        // So the join is explicit: `AppealResolved` gives the dispute, and that
+        // dispute's `VerdictSubmitted` gives whose verdict it was. This is the
+        // rule written down in script/arbiter-mistake-paths.allow under
+        // `ArbiterRegistryFacet.resolveAppeal`, and this scene is where it is
+        // actually walked.
         Vm.Log[] memory logs = vm.getRecordedLogs();
         uint256 found;
         bool sawTimedOut;
         for (uint256 i = 0; i < logs.length; i++) {
             if (logs[i].topics.length < 3) continue;
             bytes32 sig = logs[i].topics[0];
-            bool overturn = sig == ArbiterRegistryFacet.VerdictOverturned.selector;
-            bool timeout  = sig == ArbiterRegistryFacet.ArbiterTimeoutRecorded.selector;
-            if (!overturn && !timeout) continue;
 
-            // VerdictOverturned(agreement, arbiter, ...) puts the arbiter
-            // second; ArbiterTimeoutRecorded(arbiter, agreement) puts him first.
-            address who = address(uint160(uint256(overturn ? logs[i].topics[2] : logs[i].topics[1])));
-            if (who != arbiter) continue;
+            // Road one: the timeout names him first and the deal second.
+            if (sig == ArbiterRegistryFacet.ArbiterTimeoutRecorded.selector) {
+                if (address(uint160(uint256(logs[i].topics[1]))) != arbiter) continue;
+                found++;
+                if (address(uint160(uint256(logs[i].topics[2]))) == timedOut) sawTimedOut = true;
+                continue;
+            }
 
-            found++;
-            if (timeout && address(uint160(uint256(logs[i].topics[2]))) == timedOut) sawTimedOut = true;
+            // Road two: the panel's overturn. The deal comes from here, the man
+            // from the verdict of that same deal.
+            if (sig != ArbiterRegistryFacet.AppealResolved.selector) continue;
+            if (!abi.decode(logs[i].data, (bool))) continue;   // upheld, so nobody was found wrong
+            address deal = address(uint160(uint256(logs[i].topics[1])));
+
+            for (uint256 j = 0; j < logs.length; j++) {
+                if (logs[j].topics.length < 3) continue;
+                if (logs[j].topics[0] != ArbiterRegistryFacet.VerdictSubmitted.selector) continue;
+                if (address(uint160(uint256(logs[j].topics[1]))) != deal) continue;
+                if (address(uint160(uint256(logs[j].topics[2]))) == arbiter) found++;
+                break;
+            }
         }
 
         assertEq(found, 3, "all three disputes of the run must be readable from the logs");
@@ -3126,165 +3171,6 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         vm.prank(cli);
         Agreement(agr).raiseDispute();
         _claimDisputeAs(agr, arbiter);
-    }
-
-    /// ⚠️ A VINDICATION BY THE PANEL QUENCHES THE CHAIN'S ACCUSATION.
-    ///
-    /// Worked out in review, not assumed. Three mistakes → a suspension and an
-    /// accusation, the counter at 3. The panel vindicates the arbiter on one of the
-    /// disputes (resolveAppeal on top of a MANUAL overturn turns it back to the
-    /// arbiter's own verdict) → one is subtracted, 3 → 2. And MISTAKE_THRESHOLD equals
-    /// TWO — so the accusation would have stayed executable, and after 48 hours an
-    /// outsider would have removed a person the panel found to be right. And the door
-    /// is nobody's: there is nobody to hold to account.
-    function test_PanelVindicationQuenchesTheChainAccusation() public {
-        address v1 = address(0x7B1);
-        address v2 = address(0x7B2);
-        address v3 = address(0x7B3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v3);
-
-        // Two mistakes on two disputes, and a third on the dispute that is appealed.
-        _disputeAndOverturn(address(0x9D1), address(0x9D2));
-        _disputeAndOverturn(address(0x9D3), address(0x9D4));
-        address agr = _disputeAndOverturn(address(0x9D5), address(0x9D6));
-
-        assertTrue(
-            ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter),
-            "setup: the chain has accused"
-        );
-        assertTrue(ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter));
-
-        // The losing side appeals the MANUAL overturn. The panel votes to overturn —
-        // and restores the arbiter's own verdict.
-        // It is the LOSING side that appeals. _disputeAndOverturn submits a verdict in
-        // the client's favour and overturns it by hand in the executor's — so the
-        // client lost, and the appeal is theirs.
-        usdc.mint(address(0x9D5), 100 * 10 ** 6);
-        vm.prank(address(0x9D5));
-        usdc.approve(address(diamond), 20 * 10 ** 6);
-        vm.prank(address(0x9D5));
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-
-        vm.expectEmit(true, true, false, false, address(diamond));
-        emit ArbiterRegistryFacet.ChainAccusationCleared(arbiter, agr);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertFalse(
-            ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter),
-            "the chain's accusation is cleared: the chain took back its own word"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "and the counter is zeroed: otherwise one overturn would accuse again"
-        );
-        assertFalse(
-            ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter),
-            "and the suspension is lifted: a vindicated arbiter does not sit locked up"
-        );
-        assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
-
-        // And there is nothing left to press the button with.
-        vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
-        vm.prank(STRANGER);
-        vm.expectRevert(ArbiterAccountabilityFacet.NoLiveProposal.selector);
-        ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
-    }
-
-    /// The reverse half of the same trap: the panel does NOT quench A HUMAN accusation.
-    /// It said its word about one dispute and not about the collusion somebody else
-    /// alleged; otherwise every accused arbiter would clean their record with an appeal
-    /// on an unrelated verdict.
-    function test_PanelVindicationLeavesAHumanAccusationStanding() public {
-        address v1 = address(0x7C1);
-        address v2 = address(0x7C2);
-        address v3 = address(0x7C3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v3);
-
-        address agr = _disputeAndOverturn(address(0x9E1), address(0x9E2));
-
-        ArbiterAccountabilityFacet(address(diamond)).proposeRemoval(
-            arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST,
-            "three times took the disputes of one counterparty and three times ruled in their favour"
-        );
-        (, , uint256 before, address by0, ) =
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
-
-        usdc.mint(address(0x9E1), 100 * 10 ** 6);
-        vm.prank(address(0x9E1));
-        usdc.approve(address(diamond), 20 * 10 ** 6);
-        vm.prank(address(0x9E1));
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        (, , uint256 afterTs, address by1, bool live) =
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
-        assertTrue(live, "the human accusation is alive");
-        assertEq(afterTs, before, "its clock is untouched");
-        assertEq(by1, by0, "and so is its accuser");
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "the single mistake was taken off by the subtraction, but that is ALL that was done"
-        );
     }
 
     /// The chief does not silence the fast lever of the automatic road with ONE
@@ -3396,11 +3282,15 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         _threeOverturnsOnDistinctDisputes(arbiter);
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
 
+        // ⚠️ AppealVote, NOT OwnerOverturn, SINCE 9 OCTOBER 2026 — the run above
+        // is driven by the panel now that the hand is gone. The neighbour below
+        // still differs from this scene by its ROAD (a timeout), so a `path`
+        // nailed to one value would still go red in one of the two.
         vm.expectEmit(true, true, true, true, address(diamond));
         emit ArbiterRegistryFacet.ArbiterDemoted(
             arbiter,
             address(0),
-            ArbiterRegistryFacet.DemotionPath.OwnerOverturn,
+            ArbiterRegistryFacet.DemotionPath.AppealVote,
             address(0)
         );
         vm.prank(STRANGER);
@@ -3431,70 +3321,6 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
         vm.prank(STRANGER);
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
-    }
-
-    /// ⚠️ LIFTING A SUSPENSION IS ANNOUNCED. The vindication branch erased
-    /// `suspendedUntil` silently, and in the feed the suspension looked as if it had
-    /// never ended: every other end of it is visible — `liftSuspension` sends an event,
-    /// and the expiry of 72 hours is read from the term that has lain in the log since
-    /// the moment it was imposed.
-    ///
-    /// `by` is zero: it was THE PANEL that decided, and there is no hand here.
-    function test_VindicationAnnouncesTheLiftedSuspension() public {
-        address v1 = address(0xAC1);
-        address v2 = address(0xAC2);
-        address v3 = address(0xAC3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v3);
-
-        _disputeAndOverturn(address(0xAD1), address(0xAD2));
-        _disputeAndOverturn(address(0xAD3), address(0xAD4));
-        address agr = _disputeAndOverturn(address(0xAD5), address(0xAD6));
-        assertTrue(
-            ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter),
-            "setup: the suspension is standing"
-        );
-
-        usdc.mint(address(0xAD5), 100 * 10 ** 6);
-        vm.prank(address(0xAD5));
-        usdc.approve(address(diamond), 20 * 10 ** 6);
-        vm.prank(address(0xAD5));
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-
-        vm.expectEmit(true, true, false, true, address(diamond));
-        emit ArbiterAccountabilityFacet.ArbiterSuspensionLifted(arbiter, address(0));
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertFalse(ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter));
     }
 
     /// ⚠️ A STALE ACCUSATION LOCKS NOTHING.
@@ -3596,7 +3422,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // And they take a dispute and carry it through CLEANLY. finalizeVerdict zeroes
         // the judging-mistake counter — the very one the cause was proved with.
         address agr = _disputeAndSubmit(address(0xB01), address(0xB02));
-        vm.warp(vm.getBlockTimestamp() + 24 hours);
+        vm.warp(vm.getBlockTimestamp() + 72 hours); // FINALIZE_DELAY, 24 -> 72 h on 9 Oct 2026
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
@@ -3611,74 +3437,6 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         assertFalse(
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
             "you did it, you answer for it: good work afterwards does not cancel an accusation"
-        );
-    }
-
-    /// The second, and it matters more than the first: the change must not have turned
-    /// "a case does not expire by itself" into "a case cannot be cancelled by
-    /// anything". A vindication by the panel quenches the accusation entirely, and
-    /// there is nothing to press afterwards.
-    ///
-    /// It differs from test_PanelVindicationQuenchesTheChainAccusation in checking not
-    /// the state but the CONSEQUENCE for the button now that the re-checking of the
-    /// cause has been taken out of it: were the quenching to break, the button would
-    /// now fire on a vindicated person in silence.
-    function test_ThePanelStillDisarmsTheButtonAfterTheProofCheckIsGone() public {
-        address v1 = address(0xB11);
-        address v2 = address(0xB12);
-        address v3 = address(0xB13);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v3);
-
-        _disputeAndOverturn(address(0xB21), address(0xB22));
-        _disputeAndOverturn(address(0xB23), address(0xB24));
-        address agr = _disputeAndOverturn(address(0xB25), address(0xB26));
-        assertTrue(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter));
-
-        usdc.mint(address(0xB25), 100 * 10 ** 6);
-        vm.prank(address(0xB25));
-        usdc.approve(address(diamond), 20 * 10 ** 6);
-        vm.prank(address(0xB25));
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
-        vm.prank(STRANGER);
-        vm.expectRevert(ArbiterAccountabilityFacet.NoLiveProposal.selector);
-        ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
-
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
-            "the panel said they were right, and the button against them is gone"
         );
     }
 
@@ -3735,7 +3493,13 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
         (, , , , , , , , , , , , , uint8 cause) =
             ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
-        assertEq(cause, AUTO_OVERTURN, "the provenance is kept: it was THE CHAIN that removed them, not they themselves");
+        // ⚠️ AUTO_APPEAL, NOT AUTO_OVERTURN, SINCE 9 OCTOBER 2026. The run that
+        // reaches this removal is driven by `_disputeAndOverturn`, whose overturn
+        // is the panel's now that the hand is gone — so the path saved on the
+        // proposal is DemotionPath.AppealVote (243) rather than OwnerOverturn
+        // (241). The literal is retyped by hand, which is the only way a literal
+        // in this block may ever change; see the note on AUTO_OVERTURN.
+        assertEq(cause, AUTO_APPEAL, "the provenance is kept: it was THE CHAIN that removed them, not they themselves");
     }
 
     /// The reverse side of the same pair: A HUMAN accusation still goes through its own
@@ -3747,99 +3511,6 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
-    }
-
-    /// ⚠️ A DEAD ACCUSATION QUENCHES NOTHING. The vindication branch looked at
-    /// `proposedAt != 0` without `PROPOSAL_TTL` — the same defect as the one a line
-    /// below. The price: an accusation that had gone stale two weeks earlier and was
-    /// executable by nobody erased the counter ENTIRELY, against the "exactly one
-    /// mistake is taken off" rule seven lines above, demolished the record itself and
-    /// sent `ChainAccusationCleared` about something long dead.
-    ///
-    /// The scene is built so that the dead record STAYS dead and nobody covers it with
-    /// a live one: after it goes stale the counter is reset by a clean verdict, and the
-    /// next two mistakes do not reach the automatic threshold.
-    function test_ADeadChainAccusationDoesNotSwallowTheWholeStreak() public {
-        address v1 = address(0xC01);
-        address v2 = address(0xC02);
-        address v3 = address(0xC03);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
-        // arbiter DOES, so the seat is funded the moment it is given — with REAL
-        // money through the real door, because this rig refunds and forfeits bonds
-        // and a bond booked without the money behind it would have the diamond
-        // paying out what it never took.
-        _postRealBond(v3);
-
-        _threeOverturnsOnDistinctDisputes(arbiter);
-        (, , uint256 deadAt, , ) =
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
-        assertGt(deadAt, 0, "setup: the chain's accusation is laid down");
-
-        // Nobody pressed — the accusation died of old age, but THE RECORD REMAINED:
-        // a stale one does not erase itself.
-        vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getProposalTTL());
-        assertFalse(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter));
-
-        // A clean verdict zeroes the streak — the automatic threshold is now far off,
-        // and a new accusation by the chain will not land on top of the dead one.
-        address clean = _disputeAndSubmit(address(0xC21), address(0xC22));
-        vm.warp(vm.getBlockTimestamp() + 24 hours);
-        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(clean);
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
-
-        // Two manual mistakes: the streak equals two, the automatic threshold is not reached.
-        _disputeAndOverturn(address(0xC31), address(0xC32));
-        address agr = _disputeAndOverturn(address(0xC33), address(0xC34));
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 2,
-            "setup: two mistakes, and no new accusation from the chain"
-        );
-        assertFalse(ArbiterAccountabilityFacet(address(diamond)).hasLiveProposal(arbiter));
-
-        // The panel vindicates on the second — EXACTLY ONE is taken off.
-        usdc.mint(address(0xC33), 100 * 10 ** 6);
-        vm.prank(address(0xC33));
-        usdc.approve(address(diamond), 20 * 10 ** 6);
-        vm.prank(address(0xC33));
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "EXACTLY ONE mistake is taken off: a dead record has no right to clear anything"
-        );
-
-        (, , uint256 stillDeadAt, , ) =
-            ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
-        assertEq(
-            stillDeadAt, deadAt,
-            "and the vindication does not touch the dead record itself: there is nothing to clear"
-        );
     }
 
     // ============================================================

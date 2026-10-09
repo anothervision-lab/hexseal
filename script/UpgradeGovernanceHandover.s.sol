@@ -409,7 +409,7 @@ contract UpgradeGovernanceHandover is Script {
         bytes4[] memory addSels,
         bytes4[] memory accSels
     ) public view {
-        _assertSameSet(_concat(regSels, addSels), registryFacetAbi(), "ArbiterRegistryFacet");
+        _assertSameSetLessRemoved(_concat(regSels, addSels), registryFacetAbi(), "ArbiterRegistryFacet");
         _assertSameSet(accSels, artifactSelectors(ACCOUNTABILITY_ARTIFACT), "ArbiterAccountabilityFacet");
 
         // And the two registry groups must be disjoint, or one of the two
@@ -704,10 +704,10 @@ contract UpgradeGovernanceHandover is Script {
         // Verdict
         sels[9]  = ArbiterRegistryFacet.submitVerdict.selector;
         sels[10] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        sels[11] = ArbiterRegistryFacet.overturnVerdict.selector;
+        sels[11] = bytes4(0x42a71c6c) /* overturnVerdict(address,bool), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[12] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        sels[13] = ArbiterRegistryFacet.freezeVerdict.selector;
-        sels[14] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        sels[13] = bytes4(0x5533316c) /* freezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
+        sels[14] = bytes4(0x69315118) /* unfreezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[15] = ArbiterRegistryFacet.clearStuckVerdict.selector;
 
         // Appeal — `raiseAppeal` now writes APPEAL_DEPOSIT into the record and
@@ -852,6 +852,69 @@ contract UpgradeGovernanceHandover is Script {
     }
 
     // ════════════════════════════════════════════════════════════════════
+
+
+    /// ⚠️ THE THREE DOORS THIS FACET LOST AFTER THIS CUT WAS SIGNED
+    /// (9 October 2026): `overturnVerdict(address,bool)`, `freezeVerdict(address)`
+    /// and `unfreezeVerdict(address)`, the governance hand over a verdict.
+    ///
+    /// This script is the RECORD of a cut that went on chain, so its list is not
+    /// rewritten -- it says what was mounted that day and it still does. What
+    /// changed is the COMPILED facet underneath it, and the check below holds one
+    /// against the other.
+    ///
+    /// The exception is NAMED, not counted: the list may exceed the compiled
+    /// facet by EXACTLY these three selectors and by nothing else. A fourth door
+    /// leaving still reds, and so does one of these three coming back without
+    /// this exception going with it. The bytes are written out because there is
+    /// no `.selector` left to take -- the functions are not in this checkout.
+    function sinceRemovedFromRegistry() public pure returns (bytes4[3] memory s) {
+        s = [bytes4(0x42a71c6c), bytes4(0x5533316c), bytes4(0x69315118)];
+    }
+
+    /// `_assertSameSet` with that one exception allowed on the Replace/Add list.
+    function _assertSameSetLessRemoved(bytes4[] memory mine, bytes4[] memory theirs, string memory label)
+        internal
+        pure
+    {
+        bytes4[3] memory gone = sinceRemovedFromRegistry();
+        require(
+            mine.length == theirs.length + gone.length,
+            string.concat("pre-flight: ", label, " - this cut and the compiled facet disagree on how many functions it has, beyond the three doors removed on 9 October 2026")
+        );
+        for (uint256 i = 0; i < theirs.length; i++) {
+            bool found;
+            for (uint256 j = 0; j < mine.length; j++) {
+                if (theirs[i] == mine[j]) { found = true; break; }
+            }
+            require(found, string.concat("pre-flight: ", label, " implements a function this cut does not mount"));
+        }
+        for (uint256 i = 0; i < mine.length; i++) {
+            bool found;
+            for (uint256 j = 0; j < theirs.length; j++) {
+                if (mine[i] == theirs[j]) { found = true; break; }
+            }
+            if (!found) {
+                for (uint256 j = 0; j < gone.length; j++) {
+                    if (mine[i] == gone[j]) { found = true; break; }
+                }
+                require(
+                    found,
+                    string.concat("pre-flight: ", label, " - this cut mounts a selector the facet does not implement and that is not one of the three doors removed on 9 October 2026")
+                );
+            }
+        }
+        // And each of the three really is gone, so the exception cannot quietly
+        // outlive what it was written for.
+        for (uint256 i = 0; i < gone.length; i++) {
+            for (uint256 j = 0; j < theirs.length; j++) {
+                require(
+                    theirs[j] != gone[i],
+                    string.concat("pre-flight: ", label, " implements one of the three doors removed on 9 October 2026 again - delete this exception")
+                );
+            }
+        }
+    }
 
     function _assertSameSet(bytes4[] memory mine, bytes4[] memory theirs, string memory label) internal pure {
         require(

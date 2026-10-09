@@ -44,6 +44,22 @@ EXPECTED_FORGE_VER="1.8.1"      # what `forge --version` must report
 EXPECTED_SOLC="0.8.31"          # == the solc in the deployed bytecode
 EXPECTED_EVM="prague"           # == what the deployed bytecode was built under
 EXPECTED_ISOLATE="false"        # == the model the cap literals were derived under
+# EXPECTED_BYTECODE_HASH is the owner's decision of 8 October 2026, and it is in
+# this gate rather than only in a test because it is the cheap half of a pair.
+# With solc's default metadata hash the bytecode carries a digest of a JSON that
+# keys its sources BY PATH, so the same source built under two checkout roots
+# produces two different bytecodes and two different CREATE2 addresses -- which
+# is why test/AgreementRendererWiring.t.sol had been red in CI and green
+# locally. The public showcase exists so that a stranger can clone it and get
+# the same bytes; "none" is what makes that true by construction. A fixed-path
+# container was rejected: it keeps the explorer's "full match" badge at the
+# price of the goal, since reproducible only through us is not reproducible.
+#
+# ⚠️ THIS LINE IS THE WEAKER HALF AND SAYS SO. It guards the SETTING; a future
+# compiler that put the digest back while the line still stood would leave it
+# green. The property of the BYTES is guarded by
+# test/AgreementRendererWiring.t.sol, test_NoMetadataHashRidesInTheBytecodeAnyMore.
+EXPECTED_BYTECODE_HASH="none"   # == no metadata digest, so no build root, in the bytecode
 
 CI=".github/workflows/ci.yml"
 TOML="foundry.toml"
@@ -90,6 +106,7 @@ check_toml() {
 check_toml solc        "$EXPECTED_SOLC"
 check_toml evm_version "$EXPECTED_EVM"
 check_toml isolate     "$EXPECTED_ISOLATE"
+check_toml bytecode_hash "$EXPECTED_BYTECODE_HASH"
 
 # ---- 3. the forge on PATH is the pinned one --------------------------------
 # The half that CI cannot check for you. On 1 Sept 2026 this repository was
@@ -114,4 +131,4 @@ if [[ "$fail" -ne 0 ]]; then
   echo "Toolchain pin gate FAILED."
   exit 1
 fi
-echo "✅ toolchain pinned: forge ${EXPECTED_FORGE_VER}, solc ${EXPECTED_SOLC}, evm ${EXPECTED_EVM}, isolate ${EXPECTED_ISOLATE}"
+echo "✅ toolchain pinned: forge ${EXPECTED_FORGE_VER}, solc ${EXPECTED_SOLC}, evm ${EXPECTED_EVM}, isolate ${EXPECTED_ISOLATE}, bytecode_hash ${EXPECTED_BYTECODE_HASH}"

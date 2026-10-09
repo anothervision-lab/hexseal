@@ -178,6 +178,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
     function testUnclaimedTimeoutSplitsWhenBothShowedUpAndTakesNoFee() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client); a.raiseDispute();
         vm.prank(executor); a.respondToDispute();
         vm.warp(block.timestamp + DISPUTE_WINDOW + 1);
@@ -196,6 +197,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
     function testUnclaimedTimeoutGivesTheSilentPartyAQuarter() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client); a.raiseDispute();   // executor never responds
         vm.warp(block.timestamp + DISPUTE_WINDOW + 1);
 

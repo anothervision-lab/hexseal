@@ -282,6 +282,17 @@ contract DeployFullSelectorsTest is Test {
     // `actual` to appear in `expected` (phantom check) and every element of
     // `expected` to appear in `actual` (missing-selector check). Combined with
     // the length check this rejects duplicates masking a missing entry too.
+    // ⚠️ A NAMED EXCEPTION LIVED HERE FOR THE HOURS OF 9 OCTOBER 2026 BETWEEN THE
+    // DELETION OF THE VERDICT HAND AND THE CUT THAT SHIPPED IT, and it is gone
+    // because the disagreement it covered is gone. `overturnVerdict(address,bool)`,
+    // `freezeVerdict(address)` and `unfreezeVerdict(address)` left
+    // ArbiterRegistryFacet that morning while the chain still routed them, so
+    // `DeployFull` went on mounting them and `_assertSameSelectorSetLessRemoved`
+    // forgave exactly those three by name. script/UpgradeOctoberBatch.s.sol then
+    // took them off the diamond (block 47 872 983), `DeployFull` dropped them from
+    // its list in the same commit, and the script and the compiled facet agree at
+    // thirty with nothing to forgive. The plain set-equality below is the check
+    // again.
     function _assertSameSelectorSet(bytes4[] memory actual, bytes4[] memory expected, string memory label) internal pure {
         assertEq(actual.length, expected.length, string.concat(label, ": selector count mismatch"));
 
@@ -708,7 +719,50 @@ contract DeployFullSelectorsTest is Test {
         // signed and not a change already made: they are named in
         // DeployFullMatchesChain.t.sol `_pendingRemoval()`, whose arm reds the
         // day the census stops routing them.
-        assertEq(totalRouted, 260, "diamond should route exactly 260 selectors total");
+        //
+        // 260 -> 262 on 24 September 2026: the arbiter bank got a door out
+        // (mainnet item D2). `pushVaultSurplus` sends whatever the bank holds
+        // above its target to the foundation the treasury already pays — open to
+        // anybody, recipient read off the chain — and `getVaultSurplus` is the
+        // quote a keeper or a screen presses on, so neither carries its own copy
+        // of the subtraction. Both on TreasuryLinkFacet (9 -> 11), which is where
+        // the target they measure against is declared.
+        //
+        // ⚠️ NOT ON THE CHAIN. The chain routed 260 at block 47 221 981. The two
+        // above are named as pending in DeployFullMatchesChain.t.sol
+        // `_pendingCut()`, and this note must be corrected — not deleted — in the
+        // same commit as the cut that lands them.
+        //
+        // 262 -> 267 on 25 September 2026, mainnet item D3: the arbiter payroll
+        // pot's door out, five selectors on TreasuryLinkFacet (11 -> 16). The pot
+        // had taken a fifth of every treasury distribution since 4 September and
+        // had no outlet of any kind; these divide a CLOSED period's pot by the
+        // cases that stood in it, book one arbiter's share on a press by anybody,
+        // push what nobody claimed to the foundation once the claim window lapses,
+        // and answer the three reads a screen or a keeper needs.
+        //
+        // ⚠️ ALSO NOT ON THE CHAIN. All five are named as pending in
+        // DeployFullMatchesChain.t.sol `_pendingCut()` alongside the two above,
+        // and this note must be corrected — not deleted — in the same commit as
+        // the cut that lands them.
+        // 267 -> 264 ON 9 OCTOBER 2026, AND BOTH SIDES MOVED IN ONE TRANSACTION.
+        // The governance hand over a verdict — `overturnVerdict(address,bool)`,
+        // `freezeVerdict(address)` and `unfreezeVerdict(address)` — was deleted from
+        // ArbiterRegistryFacet (33 -> 30) and taken off the diamond by the `Remove`
+        // group of script/UpgradeOctoberBatch.s.sol at block 47 872 983. Measured at
+        // block 47 873 768: fourteen facets, 264 routed, `facetAddress` the zero
+        // address for all three, the arbiter registry holding thirty at
+        // 0x11DC81C6dFdB383EDadaFF166032DbB735371262.
+        //
+        // ⚠️ THE LIST FOLLOWED THE CHAIN AND THE SEVEN STANDS FOLLOWED THE LIST.
+        // For the hours between the deletion and the cut, `DeployFull` kept mounting
+        // the three by their bytes, because seven `*Upgrade` stands build their
+        // diamond from it and replay a signed cut whose `Replace` group names one of
+        // the three. Dropping them before the cut cost 161 tests their existence with
+        // the suite count unmoved; those stands — nine, measured, not the seven the
+        // note first guessed — now mount the three themselves, from their own census,
+        // through `ArbiterSplitRig._mountRemovedVerdictHandDoors`.
+        assertEq(totalRouted, 264, "diamond should route exactly 264 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

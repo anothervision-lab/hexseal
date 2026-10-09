@@ -54,19 +54,32 @@ pragma solidity ^0.8.20;
 // ArbiterRemovalForCause suite (not rediscovered here; the same method would give
 // the same number). The third test of that seam (the whole chain — a removal for
 // cause working against an appointed successor) lives in the
-// ArbiterRemovalForCauseIntegration suite: it needs removeArbiterForCause, and
-// that lives in ArbiterAccountabilityFacet, a different contract with a different
-// storage on this light bench.
+// ArbiterRemovalForCauseIntegration suite.
+//
+// ~~it needs removeArbiterForCause, and that lives in ArbiterAccountabilityFacet,
+// a different contract with a different storage on this light bench.~~ -- that
+// was true of the ONE-facet bench and stopped being true when this suite moved
+// onto ArbiterTwoFacetBench (16 September 2026), which mounts both arbiter facets
+// behind a single proxy. Struck through rather than deleted because it explains
+// why the integration scene lives where it does. Since 9 October 2026 this suite
+// does reach the accountability facet directly, for the one probe whose
+// `owner OR dao` door the cut removed -- see
+// test_ProposedSuccessorHasNoPowerUntilHeConfirms.
 
 import "forge-std/Test.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 
 contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadinessSeed {
     ArbiterRegistryFacet facet;
     ArbiterVaultFacet facetVault;
+    /// The third handle onto the SAME address. Taken since 9 October 2026: the
+    /// only `owner OR dao` door this suite used as a probe (`freezeVerdict`) is
+    /// gone, and the nearest surviving one lives on the accountability facet.
+    ArbiterAccountabilityFacet facetAcc;
 
     address owner;
 
@@ -91,7 +104,7 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
     /// behind one proxy, exactly as production does, and every `vm.store(address(
     /// facet), ...)` below keeps hitting the same slot it always did.
     function setUp() public {
-        (facet, , facetVault) = _deployArbiterBench();
+        (facet, facetAcc, facetVault) = _deployArbiterBench();
         owner = address(this);
         vm.store(address(facet), OWNER_SLOT, bytes32(uint256(uint160(owner))));
     }
@@ -234,19 +247,53 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
 
     // ---------- the two steps of handing over the DAO address ----------
 
-    /// One who has been named but has not confirmed holds NOTHING. This is checked
-    /// by selector and on a genuine owner-or-DAO door (`onlyOwnerOrDAO`): after the
-    /// confirmation the same call passes the role check and runs into the absence
-    /// of a verdict instead — that is, the refusal changed, and changed to
-    /// precisely the right one.
+    /// One who has been named but has not confirmed holds NOTHING, and once the
+    /// hand-over has gone through he does. Checked by selector on a real door, so
+    /// that "the rights have not moved" is a refusal somebody gets rather than a
+    /// getter agreeing with itself.
+    ///
+    /// ⚠️ THE PROBE CHANGED ON 9 OCTOBER 2026 AND SO DID ITS SHAPE -- said
+    /// plainly, because the second half of this scene no longer isolates what it
+    /// used to. The old probe was `freezeVerdict` under `onlyOwnerOrDAO`, and
+    /// that modifier admitted the owner ALWAYS and the `daoAddress` ALWAYS,
+    /// caring nothing for whether governance was switched on. That made it a
+    /// clean instrument for one question: does CONFIRMATION ALONE move the right?
+    ///
+    /// The cut removed the last door of that shape. Measured rather than assumed:
+    /// after it, nothing in `ArbiterRegistryFacet` raises `NotOwnerOrDAO` at all
+    /// (the error is kept as a declaration), and `setDAOAddress` is owner XOR dao
+    /// rather than owner OR dao -- and it is the function under test here, so it
+    /// cannot be its own probe.
+    ///
+    /// The nearest surviving door is `removeArbiterForCause`, whose authority
+    /// comes from `_removalAuthority`: the successor once
+    /// `_isDaoActive() && daoAddress != 0`, the owner until then. So the probe
+    /// now needs ACTIVATION as well as confirmation, and the scene is written to
+    /// say which step it is actually showing:
+    ///
+    ///   * BEFORE confirmation the successor is refused by the role check. This
+    ///     is the half the scene was named for and it is unchanged -- and it is
+    ///     genuinely a statement about confirmation, because `activateDAO()`
+    ///     refuses while `daoAddress` is zero, so no sequence reaches authority
+    ///     without confirming first.
+    ///   * AFTER the hand-over the same call clears the role check and falls
+    ///     through to `NotAnArbiter` -- the refusal changed, and changed to
+    ///     precisely the right one.
+    ///   * What the door can no longer separate is confirmation from activation.
+    ///     That gap is covered beside it, by state rather than by a refusal:
+    ///     `getDAOAddress()` is still zero before the confirmation and holds the
+    ///     successor after it, with the proposal spent.
     function test_ProposedSuccessorHasNoPowerUntilHeConfirms() public {
+        _setUniqueActiveUsers(facet.getDaoThreshold());
         facet.setDAOAddress(address(0xDA0));
         assertEq(facetVault.getPendingDAOAddress(), address(0xDA0), "the proposal is recorded");
         assertEq(facetVault.getDAOAddress(), address(0), "but the rights have not moved");
 
         vm.prank(address(0xDA0));
-        vm.expectRevert(ArbiterRegistryFacet.NotOwnerOrDAO.selector);
-        facet.freezeVerdict(address(0xDEA1));
+        vm.expectRevert(ArbiterAccountabilityFacet.NotOwner.selector);
+        facetAcc.removeArbiterForCause(
+            address(0xDEA1), ArbiterAccountabilityFacet.Cause.Collusion, bytes32(uint256(0xE1)), address(0), "named, not seated"
+        );
 
         vm.prank(address(0xDA0));
         facet.acceptDAOAddress();
@@ -254,9 +301,14 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
         assertEq(facetVault.getDAOAddress(), address(0xDA0), "the confirmation handed the right over");
         assertEq(facetVault.getPendingDAOAddress(), address(0), "the proposal is spent");
 
+        _seedHandoverLiveness(address(facet));
+        facet.activateDAO();
+
         vm.prank(address(0xDA0));
-        vm.expectRevert(ArbiterRegistryFacet.NoVerdict.selector);
-        facet.freezeVerdict(address(0xDEA1));
+        vm.expectRevert(ArbiterAccountabilityFacet.NotAnArbiter.selector);
+        facetAcc.removeArbiterForCause(
+            address(0xDEA1), ArbiterAccountabilityFacet.Cause.Collusion, bytes32(uint256(0xE1)), address(0), "named, not seated"
+        );
     }
 
     /// Somebody else's proposal cannot be confirmed — otherwise the second step

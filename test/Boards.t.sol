@@ -321,6 +321,51 @@ contract BoardsTest is BoardsFixture {
         assertEq(usdc.balanceOf(address(diamond)), 0);
     }
 
+    /// THIS TEST PINNED A DEFECT AND NOW PINS THE RULE. Closed 25 September
+    /// 2026: it was written deliberately red-in-waiting, holding today's wrong
+    /// 102_000_000, and the fix turned it over to the 104_000_000 that decision
+    /// 52 always asked for.
+    ///
+    /// The case is the other half of the one above, and the half that is NOT
+    /// clamped: the owner raises the floor to a value BELOW the fee already
+    /// held, so nothing saturates. The old code read the floor live at the
+    /// moment of the cancel and simply took more of the client's money than the
+    /// client had agreed to. `JobBoardStorage.jobFeeFloorAtPost` now remembers
+    /// the floor at posting and `FactoryStorage.agreedFeeFloor` resolves it.
+    ///
+    /// The client posted a $100 job at a $1 floor, $5 of fee was held, the floor
+    /// was then raised to $3. He agreed to lose $1, so $104 comes back and $1 —
+    /// not $3 — stays with the protocol.
+    function testCancelJob_FloorRaisedBelowTheHeldFee_TakesMoreThanWasAgreed() public {
+        uint256 amount = 100_000_000;   // $100
+        uint256 heldFee = 5_000_000;    // 5% of $100, above the $1 floor at mint
+        uint256 before = usdc.balanceOf(client);
+
+        vm.startPrank(client);
+        usdc.approve(address(diamond), type(uint256).max);
+        uint256 jobId = JobBoardFacet(address(diamond)).mintJob(
+            "Build a dApp", "Need a Solidity dev", amount, DEADLINE, TERMS, REGION
+        );
+        vm.stopPrank();
+
+        assertEq(usdc.balanceOf(client), before - amount - heldFee, "setup: $105 left the client");
+
+        // The owner raises the floor AFTER the mint, to a value BELOW the fee
+        // already held: $1 -> $3. Nothing clamps.
+        FactoryFacet(address(diamond)).setFeeFloor(3_000_000);
+
+        uint256 beforeCancel = usdc.balanceOf(client);
+        vm.prank(client);
+        JobBoardFacet(address(diamond)).cancelJob(jobId);
+
+        assertEq(
+            usdc.balanceOf(client) - beforeCancel,
+            104_000_000,
+            "decision 52: the floor agreed at posting was $1, so $1 burns and $104 comes back"
+        );
+        assertEq(usdc.balanceOf(feeRecipient), 1_000_000, "the agreed floor, not the raised one");
+    }
+
     // ============================================================
     //  JOB RECEIPT NFT TESTS
     // ============================================================
@@ -1061,6 +1106,26 @@ contract BoardsTest is BoardsFixture {
 
     /// Money must come out even of an unconfigured protocol: the order was posted
     /// BEFORE the cut, the seeding window is not closed yet, and the client cancels.
+    ///
+    /// ⚠️ THIS TEST'S NUMBERS CHANGED ON 25 SEPTEMBER 2026, and the change is a
+    /// decision rather than a repair, so it is written down here. Two rules meet
+    /// in this scene and they disagree:
+    ///
+    ///   - the rule this test was written for: money must not be trapped by an
+    ///     unconfigured protocol;
+    ///   - decision 52: the client posted under a $1 floor and agreed to forfeit
+    ///     it, and un-configuring the fee model afterwards is not a change to
+    ///     HIS terms.
+    ///
+    /// Before the fix, `cancelJob` read the floor live, found the zero left by
+    /// `_unconfigureFeeModel`, and refunded the fee in full — the client was
+    /// handed back a dollar he had agreed to lose, because of an admin action he
+    /// had nothing to do with. Decision 52 wins: the agreed $1 still burns.
+    ///
+    /// The invariant the test exists to defend is UNTOUCHED and is now asserted
+    /// explicitly rather than implied by the totals: nothing is trapped, the
+    /// diamond still empties to zero, and the client still gets his whole order
+    /// amount back. Only the dollar he signed up to lose stays lost.
     function testUnconfigured_CancelJobStillReturnsEverything() public {
         (DiamondProxy fresh, ) = _deployBoardsDiamond();
 
@@ -1079,10 +1144,16 @@ contract BoardsTest is BoardsFixture {
         vm.prank(client);
         JobBoardFacet(address(fresh)).cancelJob(jobId);
 
-        // There is no floor — nothing to burn, everything comes back: amount and fee alike.
-        assertEq(usdc.balanceOf(client), clientBefore + AMOUNT + JOB_FEE);
-        assertEq(usdc.balanceOf(feeRecipient), feeBefore);
-        assertEq(usdc.balanceOf(address(fresh)), 0);
+        // The live floor is zero, but the floor this job was POSTED under was $1 —
+        // that is the one that governs. The order amount and the fee above the
+        // agreed floor come back; the agreed floor itself burns.
+        assertEq(usdc.balanceOf(client), clientBefore + AMOUNT + (JOB_FEE - JOB_FLOOR));
+        assertEq(usdc.balanceOf(feeRecipient), feeBefore + JOB_FLOOR);
+
+        // The point of the test, unchanged: nothing is stuck in an unconfigured
+        // protocol. The diamond empties, and the client is whole on his order.
+        assertEq(usdc.balanceOf(address(fresh)), 0, "an unconfigured protocol must not trap money");
+        assertGe(usdc.balanceOf(client), clientBefore + AMOUNT, "the order amount always comes back");
     }
 
     // ============================================================

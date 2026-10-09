@@ -1285,6 +1285,16 @@ contract ServiceBoardTest is BoardsFixture {
 
     /// Money must come out even of an unconfigured protocol: the request was filed
     /// BEFORE the cut, the seeding window is not closed yet, and the client cancels.
+    ///
+    /// ⚠️ NUMBERS CHANGED 25 SEPTEMBER 2026 — the service-board mirror of the
+    /// same collision recorded on `testUnconfigured_CancelJobStillReturnsEverything`
+    /// in Boards.t.sol, and resolved the same way. The client filed the request
+    /// under a $1 floor and agreed to forfeit it; un-configuring the fee model is
+    /// an admin action, not a change to his terms, so decision 52 governs and the
+    /// agreed $1 still burns where the old live read refunded it.
+    ///
+    /// What the test exists to defend is unchanged and now asserted outright:
+    /// nothing is trapped, and the client is whole on his order amount.
     function testUnconfigured_CancelRequestStillReturnsEverything() public {
         (DiamondProxy fresh, ) = _deployBoardsDiamond();
 
@@ -1310,9 +1320,12 @@ contract ServiceBoardTest is BoardsFixture {
         vm.prank(client);
         ServiceBoardFacet(address(fresh)).cancelRequest(requestId);
 
-        // There is no floor — nothing to burn, everything comes back: amount and fee alike.
-        assertEq(usdc.balanceOf(client), clientBefore + AMOUNT + JOB_FEE);
-        assertEq(usdc.balanceOf(feeRecipient), feeBefore);
-        assertEq(usdc.balanceOf(address(fresh)), 0);
+        // The live floor is zero, but the floor this request was SENT under was $1.
+        assertEq(usdc.balanceOf(client), clientBefore + AMOUNT + (JOB_FEE - JOB_FLOOR));
+        assertEq(usdc.balanceOf(feeRecipient), feeBefore + JOB_FLOOR);
+
+        // The point of the test, unchanged.
+        assertEq(usdc.balanceOf(address(fresh)), 0, "an unconfigured protocol must not trap money");
+        assertGe(usdc.balanceOf(client), clientBefore + AMOUNT, "the order amount always comes back");
     }
 }

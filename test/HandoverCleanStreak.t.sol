@@ -121,7 +121,7 @@ contract HandoverCleanStreakTest is Test {
     /// which is the rule for an expectation: a test that asked the contract
     /// what its own delay is would wait however long the contract felt like.
     uint256 constant ARBITER_BOND  = 50 * 10 ** 6;
-    uint256 constant FINALIZE_WAIT = 24 hours + 1;
+    uint256 constant FINALIZE_WAIT = 72 hours + 1;
 
     /// APPEAL_DEPOSIT_CAP, written out for the same reason as the two above:
     /// what the appellant is minted has to cover the deposit whatever the price
@@ -335,42 +335,51 @@ contract HandoverCleanStreakTest is Test {
 
     // ---------- 2. the hand that leaves no other trace ----------
 
-    /// ⚠️ THE SCENE THE WHOLE FILE EXISTS FOR. The owner freezes the verdict
-    /// and lets it go again; the verdict stands, the arbiter was not proved
-    /// wrong, `cleanVerdicts` grows — and the handover's streak must NOT,
-    /// because somebody had to step in. `v.frozen` is erased by the unfreeze,
-    /// so `govTouchedDispute` is the only record left that it ever happened.
-    function test_AFrozenAndUnfrozenDisputeBreaksTheStreak() public {
-        _cleanDispute(JUDGE_A);
-        assertEq(_reading().cleanStreak, 1, "the bench did not get its first clean dispute");
-
-        address a = _disputedDeal();
-        _claimBy(a, JUDGE_B);
-        _submit(a, JUDGE_B);
-
-        ArbiterRegistryFacet(address(diamond)).freezeVerdict(a);
-        ArbiterRegistryFacet(address(diamond)).unfreezeVerdict(a);
-        assertFalse(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(a).frozen,
-            "the bench did not actually unfreeze the verdict"
-        );
-
-        _finalize(a);
-
-        HandoverLib.Readiness memory r = _reading();
-        assertEq(r.cleanStreak, 0, "a dispute the owner froze counted as clean");
-        // The verdict itself stood, so the arbiter's own record DID grow. The
-        // two counters disagreeing here is the whole difference between them;
-        // if this line ever fails, the two have been collapsed into one.
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getCleanVerdicts(JUDGE_B), 1,
-            "the arbiter was punished for the owner's press"
-        );
-        assertEq(r.distinctCleanArbiters, 1, "a touched dispute counted its judge as proven");
-        assertEq(r.cleanDisputesTotal, 1, "a touched dispute reached the lifetime total");
-    }
-
+    // ⚠️ `test_AFrozenAndUnfrozenDisputeBreaksTheStreak` IS GONE (9 October 2026).
+    //   THE WRITER IT LOCKED IS GONE. Its subject was the mark that `freezeVerdict`
+    //   set: the owner froze a verdict and let it go, `v.frozen` was erased by the
+    //   unfreeze, and `govTouchedDispute` was the only record that a hand had ever
+    //   been there. Both doors were removed on 9 October 2026 and with them two of
+    //   the mark's three writers.
+    //   ⚠️ THE PROPERTY IS STILL LOCKED, by the writer that survived. The mark now
+    //   has exactly one: `releaseDisputeClaim` when the presser is not the holding
+    //   arbiter (`if (caller != current) d.govTouchedDispute[agreement] = true`).
+    //   test_TheOwnerTakingACaseOffAJudgeBreaksTheStreak asserts the same thing this
+    //   did -- a touched dispute does not feed the run while it does feed the
+    //   arbiter's own `cleanVerdicts` -- and its mirror,
+    //   test_AJudgeLettingGoOfHisOwnCaseDoesNotBreakTheStreak, still keeps the
+    //   over-correction out. What is gone is the second ROAD to the mark, not the
+    //   rule about it.
+    //
+    // ⚠️ `test_AnOverturnByTheHandBreaksTheStreak` IS GONE (9 October 2026).
+    //   THE WRITER IT LOCKED IS GONE, and its own docstring says exactly what that
+    //   costs: "What it locks: the mark written by `overturnVerdict`. Remove that one
+    //   assignment and the hand's press becomes indistinguishable from the panel's."
+    //   The assignment went with the door on 9 October 2026.
+    //   ⚠️ AND THE DISTINCTION IT GUARDED NO LONGER HAS TWO SIDES. The scene existed
+    //   because "an overturned verdict" was two different things -- the hand's, which
+    //   broke the run, and the panel's, which leaves it standing. There is only the
+    //   panel's now, so there is nothing left to tell apart, and the behaviour of the
+    //   one that remains is asserted by scene 5 (the corps overturning a verdict of
+    //   its own leaves the run where it is). Should a hand-pressed overturn ever come
+    //   back, this scene has to come back with it -- the mark would otherwise be
+    //   unwritten and the two would be indistinguishable again.
+    //
     /// And the run has to be earned again from zero, not resumed.
+    ///
+    /// ⚠️ THE HAND IN THIS SCENE IS THE RELEASE NOW, NOT THE FREEZE (9 October
+    /// 2026). The three middle lines used to be `freezeVerdict` /
+    /// `unfreezeVerdict`, and `govTouchedDispute` — the mark this whole file is
+    /// about — had three writers. Two of them went with the two doors, so the
+    /// mark now has exactly ONE writer left: `releaseDisputeClaim`, when somebody
+    /// other than the holding arbiter presses it.
+    ///
+    /// What this scene is FOR is unchanged and is not about any particular hand:
+    /// the run must be earned again FROM ZERO rather than resumed. So it takes
+    /// the surviving writer, which is the same one
+    /// test_TheOwnerTakingACaseOffAJudgeBreaksTheStreak uses, and the two scenes
+    /// stay different in what they assert — that one that the mark lands, this one
+    /// that the run does not pick up where it left off.
     function test_TheStreakStartsAgainFromZeroAfterAHand() public {
         _cleanDispute(JUDGE_A);
         _cleanDispute(JUDGE_A);
@@ -378,9 +387,11 @@ contract HandoverCleanStreakTest is Test {
 
         address a = _disputedDeal();
         _claimBy(a, JUDGE_A);
-        _submit(a, JUDGE_A);
-        ArbiterRegistryFacet(address(diamond)).freezeVerdict(a);
-        ArbiterRegistryFacet(address(diamond)).unfreezeVerdict(a);
+        // The owner takes the case off him — not the arbiter standing down, which
+        // is ordinary protocol life and leaves the run alone.
+        ArbiterRegistryFacet(address(diamond)).releaseDisputeClaim(a);
+        _claimBy(a, JUDGE_B);
+        _submit(a, JUDGE_B);
         _finalize(a);
         assertEq(_reading().cleanStreak, 0, "the hand did not throw the run away");
 
@@ -431,36 +442,6 @@ contract HandoverCleanStreakTest is Test {
     }
 
     // ---------- 4. the verdict the OWNER'S HAND did not let stand ----------
-
-    /// ⚠️ RENAMED FROM `test_AnOverturnedVerdictBreaksTheStreak` ON
-    /// 20 SEPTEMBER 2026, and the old name is written out here so that a search
-    /// for it lands on the reason. The assertions have not moved: this scene
-    /// presses `overturnVerdict`, which is `onlyOwnerOrDAO`, so it always was a
-    /// scene about the HAND. What changed that day is that "an overturned
-    /// verdict" stopped being one thing — the panel may overturn one too, and
-    /// that outcome leaves the run alone (scene 5). A name that says "an
-    /// overturned verdict breaks the streak" is now false about half the
-    /// overturns there are.
-    ///
-    /// What it locks: the mark written by `overturnVerdict`. Remove that one
-    /// assignment and the hand's press becomes indistinguishable from the
-    /// panel's — the run would stand at 1 instead of dropping to 0, and this
-    /// scene is the only one that would say so.
-    function test_AnOverturnByTheHandBreaksTheStreak() public {
-        _cleanDispute(JUDGE_A);
-        assertEq(_reading().cleanStreak, 1, "the bench did not get its first clean dispute");
-
-        address a = _disputedDeal();
-        _claimBy(a, JUDGE_B);
-        _submit(a, JUDGE_B);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(a, false);
-        _finalize(a);
-
-        HandoverLib.Readiness memory r = _reading();
-        assertEq(r.cleanStreak, 0, "a verdict the owner overturned counted as clean");
-        assertEq(r.distinctCleanArbiters, 1, "the overturned judge was counted as proven");
-        assertEq(r.cleanDisputesTotal, 1, "an overturned verdict reached the lifetime total");
-    }
 
     // ---------- 5. the verdict THE CORPS ITSELF did not let stand ----------
 

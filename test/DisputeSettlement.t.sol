@@ -147,7 +147,7 @@ contract DisputeSettlementTest is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
 
-        bytes4[] memory arbSels = new bytes4[](19);
+        bytes4[] memory arbSels = new bytes4[](16);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -161,12 +161,9 @@ contract DisputeSettlementTest is Test {
         arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
         arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
         bytes4[] memory arbSelsVault = new bytes4[](23);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
@@ -205,8 +202,15 @@ contract DisputeSettlementTest is Test {
         // goes straight from ArbiterRegistryFacet into the shared namespaced
         // storage, and this selector is here purely so a test can read it through
         // the diamond.
-        bytes4[] memory repSels  = new bytes4[](1);
+        // notifyExecutorFault and getCleanStreak are mounted since 25 September
+        // 2026: the unjudged timeout now records the executor's fault when
+        // nothing was handed in, and a swallowed `try` on an unmounted selector
+        // would have made that mark untestable here -- the harness would have
+        // measured silence and called it agreement.
+        bytes4[] memory repSels  = new bytes4[](3);
         repSels[0] = ReputationFacet.getUnresolvedDisputes.selector;
+        repSels[1] = ReputationFacet.notifyExecutorFault.selector;
+        repSels[2] = ReputationFacet.getCleanStreak.selector;
 
         bytes4[] memory cutSels   = new bytes4[](1);
         cutSels[0] = DiamondCutFacet.diamondCut.selector;
@@ -272,6 +276,16 @@ contract DisputeSettlementTest is Test {
         return a;
     }
 
+    /// The executor hands the work in. Every scene below whose subject is the
+    /// SPLIT rather than delivery needs this since 25 September 2026: the
+    /// unclaimed-timeout branch now pays the executor nothing at all without a
+    /// markDone on the record, so an attendance test that skips the hand-in
+    /// stopped being a test about attendance.
+    function _handIn(Agreement a) internal {
+        vm.prank(executor);
+        a.markDone();
+    }
+
     /// Drives an agreement to DISPUTED and genuinely claims it as arbiter through
     /// commit-reveal — claimDispute() requires a prior commitDisputeClaim() and at
     /// least one block between the commit and the claim (CommitmentTooEarly
@@ -307,7 +321,7 @@ contract DisputeSettlementTest is Test {
     function _submitAndFinalize(Agreement a, bool clientWins) internal {
         vm.prank(arbiterAddr);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), clientWins);
-        vm.warp(block.timestamp + 24 hours + 1); // FINALIZE_DELAY (a private constant of the facet)
+        vm.warp(block.timestamp + 72 hours + 1); // FINALIZE_DELAY (a private constant of the facet)
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
     }
 
@@ -551,32 +565,482 @@ contract DisputeSettlementTest is Test {
     //  triggerArbiterTimeout() — the pot in half if nobody took the dispute
     // ============================================================
 
-    /// Nobody took the dispute, so the pot is split in half. Otherwise a small deal
-    /// would be a free lottery for the client: no arbiter will take one on for
-    /// $1.20, a timeout would return everything to the client, and the work would
-    /// come free.
-    function testTimeoutWithoutClaimSplitsThePot() public {
+    /// Nobody took the dispute on AND nothing was ever handed in: the whole escrow
+    /// goes home to the client, whoever turned up.
+    ///
+    /// ⚠️ THIS TEST IS THE ONE THE FIX WAS MEASURED BY, and until 25 September 2026
+    /// it stood here green under the name `testTimeoutWithoutClaimSplitsThePot`,
+    /// asserting `100_000_000` to each side on exactly this setup — an executor who
+    /// activated the deal, never pressed markDone, answered the dispute, and walked
+    /// off with half. That was the junk-dispute payoff in one line of arithmetic; the
+    /// old body is what item 157 of OPEN-ITEMS called a free way to be paid for doing
+    /// nothing. The name changed with the expectation on purpose: a test called
+    /// "SplitsThePot" that asserts a full refund is a trap for the next reader.
+    ///
+    /// The scene the old name described is still measured, one hand-in richer:
+    /// testTimeoutSplitsInHalfWhenBothResponded.
+    function testTimeoutWithoutAHandInRefundsTheClientInFull() public {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
         vm.prank(client);
         a.raiseDispute();
-        // The other side responded: halves now mean "both showed up".
+        // The other side turned up — and turning up is no longer worth anything on
+        // its own. This is the whole point: attendance cannot manufacture money out
+        // of work that was never handed in.
         vm.prank(executor);
         a.respondToDispute();
         assertEq(a.arbiter(), address(0), "setup: nobody claimed");
+        assertEq(a.markedDoneAt(), 0, "setup: nothing was ever handed in");
 
-        vm.warp(block.timestamp + a.DISPUTE_WINDOW() + 1);
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
 
         uint256 cBefore = usdc.balanceOf(client);
         uint256 eBefore = usdc.balanceOf(executor);
 
+        // Both events, and the money statement keeps the name every reader already
+        // understands — otherwise the deal shows "in dispute" for ever in the app,
+        // the card and the subgraph.
+        vm.expectEmit(true, false, false, true, address(a));
+        emit Agreement.TimedOut(client, 200_000_000);
+        vm.expectEmit(true, false, false, false, address(a));
+        emit Agreement.DisputeNothingHandedIn(executor);
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore,   100_000_000, "half to client");
-        assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "half to executor");
+        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000, "the whole escrow home");
+        assertEq(usdc.balanceOf(executor) - eBefore, 0,           "nothing for work never handed in");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
+    }
+
+    /// THE MIRROR THE FIX EXISTS FOR: the executor raises the empty dispute himself,
+    /// the client never answers, and four days later the executor presses the timeout
+    /// with his own hand. Before 25 September 2026 that paid him three quarters of
+    /// the pot — 150 USDC of 200 — for having delivered nothing and pressed two free
+    /// buttons. It is the cheapest attack the escrow had, and it now pays zero.
+    function testTheExecutorsOwnEmptyDisputeEarnsHimNothing() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        vm.prank(executor);
+        a.raiseDispute();
+        assertEq(a.markedDoneAt(), 0, "setup: he never handed anything in");
+        assertTrue(a.executorResponded(), "setup: raising it counts as turning up");
+        assertFalse(a.clientResponded(),  "setup: the client stayed silent");
+
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+
+        uint256 cBefore = usdc.balanceOf(client);
+        uint256 eBefore = usdc.balanceOf(executor);
+
+        vm.prank(executor);
+        a.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor) - eBefore, 0,           "the griefer gets nothing");
+        assertEq(usdc.balanceOf(client)   - cBefore, 200_000_000, "and the client is whole");
+        assertEq(a.undeliveredPayout(), 0, "not even booked as a debt to him");
+    }
+
+    /// A junk dispute is still FREE to open — that is measured here rather than
+    /// assumed, because "the payoff is gone" and "the entrance now costs something"
+    /// are two different statements and only the first one is true.
+    function testAnEmptyDisputeIsStillFreeToOpenAndNowPaysNothing() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+
+        uint256 walletBefore = usdc.balanceOf(executor);
+        vm.prank(executor);
+        a.raiseDispute();
+        assertEq(usdc.balanceOf(executor), walletBefore, "opening a dispute moves no USDC - unchanged");
+
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+        vm.prank(executor);
+        a.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor), walletBefore, "and it earns him nothing either");
+    }
+
+    /// THE BORDER OF "HANDED IN", top side: markDone is refused after the deadline
+    /// plus its grace, so the last instant at which delivery can be claimed at all
+    /// is `activatedAt + deadlineDays + DEADLINE_GRACE` exactly. A hand-in on that
+    /// very second counts, and the pot splits.
+    function testAHandInOnTheLastSecondOfTheGraceStillCountsAsDelivery() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+
+        uint256 border = a.activatedAt() + 7 days + a.DEADLINE_GRACE();
+        vm.warp(border);
+        vm.prank(executor);
+        a.markDone();
+        assertEq(a.markedDoneAt(), border, "the hand-in is stamped on the border second");
+
+        vm.prank(client);
+        a.raiseDispute();
+        vm.prank(executor);
+        a.respondToDispute();
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+
+        uint256 cBefore = usdc.balanceOf(client);
+        uint256 eBefore = usdc.balanceOf(executor);
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "a border hand-in is a hand-in");
+        assertEq(usdc.balanceOf(client)   - cBefore, 100_000_000, "half each");
+    }
+
+    /// THE BORDER, one second past it: markDone is refused BY NAME, and so is the
+    /// dispute — past the grace the deal has exactly one door left and it pays the
+    /// client in full. So there is no window in which "too late to hand in" and
+    /// "still in time to argue about it" overlap: the split branch cannot be reached
+    /// with a late hand-in at all.
+    function testASecondPastTheGraceThereIsNoHandInAndNoDisputeEither() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+
+        vm.warp(a.activatedAt() + 7 days + a.DEADLINE_GRACE() + 1);
+
+        vm.prank(executor);
+        vm.expectRevert(Agreement.DeadlinePassed.selector);
+        a.markDone();
+
+        vm.prank(client);
+        vm.expectRevert(Agreement.DeadlinePassed.selector);
+        a.raiseDispute();
+
+        uint256 cBefore = usdc.balanceOf(client);
+        vm.prank(client);
+        a.triggerDeadlineTimeout();
+        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000, "the one door left pays the client");
+    }
+
+    // ============================================================
+    //  markDone() during a dispute nobody has taken on
+    // ============================================================
+
+    /// THE HOLE THE 25 SEPTEMBER FIX OPENED, AND THE LOCK THAT CLOSES IT.
+    ///
+    /// Until the hand-in decided the unjudged timeout, a client who disputed
+    /// BEFORE the hand-in took the whole pot back: `markDone` refused a disputed
+    /// deal outright (`AlreadyDisputed`), so the executor could not put delivery
+    /// on the record at all, and the timeout read "nothing handed in" and sent
+    /// every cent home. Measured on this very scene: 200 USDC of 200 to the
+    /// client, nothing to the executor, with his deadline still four days away.
+    /// Before the fix this test reddens on the `markDone` line itself.
+    ///
+    /// The owner's rule read "no hand-in AND THE DEADLINE PASSED -> all to the
+    /// client", and the second half is what protects the executor. It cannot be
+    /// asked of `_disputedAt` though: `raiseDispute` already refuses a
+    /// hand-in-less dispute once the grace is over, so "the window was over when
+    /// the dispute was opened" is a contradiction and the branch would be dead
+    /// (measured: asking it reddens testTheExecutorsOwnEmptyDisputeEarnsHimNothing
+    /// with 150000000 != 0, which is the junk-dispute payoff restored).
+    ///
+    /// So the shape is the other one: give the executor his action back instead
+    /// of paying him for losing it. The dispute no longer bars the hand-in while
+    /// nobody is judging, and the timeout then splits because there IS delivery
+    /// on the record. The floor under a junk dispute stays exactly where the
+    /// 25 September fix put it -- a permanent on-chain claim of delivery.
+    function testAnEarlyClientDisputeDoesNotLockTheExecutorOutOfHandingIn() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+
+        // Day one of a seven-day deal: the client goes to dispute before any
+        // delivery, which used to be the whole attack.
+        vm.prank(client);
+        a.raiseDispute();
+        assertEq(a.arbiter(), address(0), "setup: nobody has taken it on");
+
+        // THE LINE THIS TEST EXISTS FOR. It reverted AlreadyDisputed before the
+        // fix, and with it the executor's only way to prove delivery on chain.
+        vm.prank(executor);
+        a.markDone();
+        assertTrue(a.markedDoneAt() != 0, "the hand-in is on the record");
+        assertEq(uint8(a.status()), uint8(Agreement.Status.DISPUTED),
+                 "and the deal is still in dispute, not back in delivery");
+
+        vm.prank(executor);
+        a.respondToDispute();
+
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+
+        uint256 cBefore = usdc.balanceOf(client);
+        uint256 eBefore = usdc.balanceOf(executor);
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "half to the executor, not nothing");
+        assertEq(usdc.balanceOf(client)   - cBefore, 100_000_000, "half to the client, not everything");
+        assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
+    }
+
+    /// THE FENCE, and without it this fix is worse than the hole it closes: a
+    /// hand-in during a dispute an arbiter is ALREADY JUDGING would let the
+    /// executor edit the record the verdict is being formed on, after the
+    /// arbiter has read it. So the door is open only while `arbiter == 0` --
+    /// while there is nobody whose judgement could be undercut.
+    function testAHandInIsRefusedOnceAnArbiterHasTakenTheDisputeOn() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        vm.prank(client);
+        a.raiseDispute();
+
+        _claimByArbiter(a);
+        assertTrue(a.arbiter() != address(0), "setup: the dispute is being judged");
+
+        vm.prank(executor);
+        vm.expectRevert(Agreement.AlreadyDisputed.selector);
+        a.markDone();
+        assertEq(a.markedDoneAt(), 0, "the record the arbiter reads is untouched");
+    }
+
+    /// THE BORDER IS THE DELIVERY WINDOW AND NOTHING ELSE. An open dispute does
+    /// not extend it and does not shorten it: on the last second of
+    /// `activatedAt + deadlineDays + DEADLINE_GRACE` the hand-in still counts,
+    /// one second later it is `DeadlinePassed` -- the same border, to the second,
+    /// that a deal without a dispute has.
+    function testAHandInDuringAnOpenDisputeStopsAtTheSameGraceBorder() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        vm.prank(client);
+        a.raiseDispute();
+
+        uint256 border = a.activatedAt() + 7 days + a.DEADLINE_GRACE();
+
+        // One second past it: refused by name, dispute or no dispute.
+        vm.warp(border + 1);
+        vm.prank(executor);
+        vm.expectRevert(Agreement.DeadlinePassed.selector);
+        a.markDone();
+
+        // And on the border second itself it lands.
+        vm.warp(border);
+        vm.prank(executor);
+        a.markDone();
+        assertEq(a.markedDoneAt(), border, "the hand-in is stamped on the border second");
+    }
+
+    // ============================================================
+    //  The mark on an executor who delivered nothing
+    // ============================================================
+
+    /// Field offset of `cleanStreak` inside ReputationStorage.Data, counted from
+    /// the namespace position -- the same rig CleanStreakSpeaks.t.sol uses. A
+    /// streak cannot be earned cheaply in this harness (it needs settled deals
+    /// whose counterparty already holds XP), and the point here is what the
+    /// timeout DOES to a streak, not how one is built.
+    uint256 constant SLOT_CLEAN_STREAK = 9;
+
+    function _seedStreak(address who, uint256 streak) internal {
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(who, uint256(ReputationStorage.POSITION) + SLOT_CLEAN_STREAK)),
+            bytes32(streak)
+        );
+        assertEq(ReputationFacet(address(diamond)).getCleanStreak(who), streak,
+                 "rig: seeding the streak hit the wrong slot");
+    }
+
+    /// TOOK THE DEAL ON AND NOTHING FOLLOWED -- and now it shows in the record.
+    /// The two other roads to that same ending (`triggerDeadlineTimeout` and the
+    /// refusal before the start) have always called `notifyExecutorFault`; the
+    /// unjudged dispute was the one way to reach it with a clean sheet, which
+    /// made the free dispute a way to launder a no-show as well as a way to be
+    /// paid for one.
+    function testAnUnjudgedTimeoutWithNoHandInMarksTheExecutorsRecord() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        _seedStreak(executor, 5);
+
+        vm.prank(client);
+        a.raiseDispute();
+        vm.prank(executor);
+        a.respondToDispute();
+        assertEq(a.markedDoneAt(), 0, "setup: nothing was ever handed in");
+
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+
+        assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 0,
+                 "the clean streak is broken: 5 -> 0");
+    }
+
+    /// AND NOT WHEN THE WORK WAS HANDED IN. A dispute over delivered work is an
+    /// argument about quality that nobody judged; marking the executor at fault
+    /// there would be a verdict handed down by a clock. His streak survives the
+    /// split untouched.
+    function testAnUnjudgedTimeoutAfterAHandInLeavesTheRecordAlone() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        _seedStreak(executor, 5);
+
+        _handIn(a);
+        vm.prank(client);
+        a.raiseDispute();
+        vm.prank(executor);
+        a.respondToDispute();
+
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+        uint256 eBefore = usdc.balanceOf(executor);
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "setup: this really was the split");
+        assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 5,
+                 "a quality argument nobody judged is not a fault: 5 stays 5");
+    }
+
+    /// THE MARK MUST NEVER COST THE MONEY. The reputation write is broken in the
+    /// harness the only way a chain could break it -- the selector is taken off
+    /// the diamond, so the clone's `try` finds the fallback and reverts inside
+    /// it. The timeout must still pay, and must not revert.
+    function testABrokenFaultWriteDoesNotHoldUpTheTimeoutsMoney() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        _seedStreak(executor, 5);
+
+        vm.prank(client);
+        a.raiseDispute();
+
+        _removeSelectorFromDiamond(ReputationFacet.notifyExecutorFault.selector);
+
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+        uint256 cBefore = usdc.balanceOf(client);
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000, "the money arrives regardless");
+        assertEq(usdc.balanceOf(address(a)), 0, "and the clone is emptied");
+        assertEq(uint8(a.status()), uint8(Agreement.Status.REFUNDED), "the deal is closed, not stuck");
+        assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 5,
+                 "proof the write really did fail -- the streak is untouched at 5");
+    }
+
+    /// THE MIRROR, BOTH WAYS IN ONE PLACE, because the hole existed precisely
+    /// because only one direction had ever been played through.
+    ///
+    /// The client disputes early: the executor hands in, takes his half, and his
+    /// record is NOT marked -- he did the thing that was asked of him.
+    /// The executor disputes with empty hands: he gets nothing AND his record is
+    /// marked. Same branch, same timeout, opposite endings.
+    function testTheTwoDirectionsOfAnUnjudgedDisputeEndDifferently() public {
+        // --- the client raised it before any delivery ---
+        Agreement byClient = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        byClient.activate();
+        _seedStreak(executor, 5);
+        vm.prank(client);
+        byClient.raiseDispute();
+        vm.prank(executor);
+        byClient.markDone();          // the door form B gives back
+        vm.prank(executor);
+        byClient.respondToDispute();
+        vm.warp(vm.getBlockTimestamp() + byClient.DISPUTE_WINDOW() + 1);
+        uint256 eBefore = usdc.balanceOf(executor);
+        vm.prank(client);
+        byClient.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "he delivered, so he is paid his half");
+        assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 5,
+                 "and he is not marked for having been dragged into a dispute");
+
+        // --- the executor raised it with empty hands ---
+        Agreement byExecutor = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        byExecutor.activate();
+        vm.prank(executor);
+        byExecutor.raiseDispute();
+        vm.warp(vm.getBlockTimestamp() + byExecutor.DISPUTE_WINDOW() + 1);
+        uint256 eBefore2 = usdc.balanceOf(executor);
+        vm.prank(executor);
+        byExecutor.triggerArbiterTimeout();
+
+        assertEq(usdc.balanceOf(executor) - eBefore2, 0, "nothing for empty hands");
+        assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 0,
+                 "and the record says so: 5 -> 0");
+    }
+
+    /// TWO PROCESSES AT ONCE: the claim and the timeout can never both succeed,
+    /// because their windows do not overlap by one second. On `disputedAt +
+    /// DISPUTE_WINDOW` the claim is still lawful and the timeout refuses
+    /// WindowNotPassed; a second later it is the other way round. Measured in ONE
+    /// block, since that is the case the arithmetic would have to survive.
+    function testTheClaimAndTheTimeoutCannotBothWinInOneBlock() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        vm.prank(client);
+        a.raiseDispute();
+
+        vm.warp(a.disputedAt() + a.DISPUTE_WINDOW());
+
+        // Same block, the timeout first: refused.
+        vm.prank(client);
+        vm.expectRevert(Agreement.WindowNotPassed.selector);
+        a.triggerArbiterTimeout();
+
+        // Same block, the claim: lawful.
+        _claimByArbiter(a);
+        assertTrue(a.arbiter() != address(0), "the boundary second belongs to the claim");
+
+        // And now the timeout takes the arbiter-fault road, not the split: the pot
+        // cannot leave twice, and a claimed dispute never reads delivery at all.
+        vm.warp(vm.getBlockTimestamp() + 1);
+        uint256 cBefore = usdc.balanceOf(client);
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000, "whole pot to the client, once");
+
+        vm.prank(client);
+        vm.expectRevert(Agreement.AlreadyFinalized.selector);
+        a.triggerArbiterTimeout();
+        assertEq(usdc.balanceOf(address(a)), 0, "and the clone stays empty");
+    }
+
+    /// The pot cannot go out twice on the delivery road either.
+    function testTheRefundForANonDeliveryHappensOnlyOnce() public {
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        vm.prank(executor);
+        a.activate();
+        vm.prank(client);
+        a.raiseDispute();
+        vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
+
+        vm.prank(client);
+        a.triggerArbiterTimeout();
+
+        uint256 cBefore = usdc.balanceOf(client);
+        vm.prank(client);
+        vm.expectRevert(Agreement.AlreadyFinalized.selector);
+        a.triggerArbiterTimeout();
+        assertEq(usdc.balanceOf(client), cBefore, "a second press pays nothing");
+    }
+
+    /// JUNK ON THE SEAM: `_markedDoneAt == 0` means "never handed in", so the one
+    /// input that could lie to the new branch is a hand-in stamped at zero. It
+    /// cannot be reached, and the refusal has a NAME rather than a wrong split: at
+    /// epoch zero the escrow cannot even be activated, because `fundedAt` uses the
+    /// same sentinel and is checked first. Nothing in the contract takes a timestamp
+    /// from a caller, so there is no second way in.
+    function testAtEpochZeroTheDealRefusesByNameInsteadOfLosingItsHandIn() public {
+        vm.warp(0);
+        Agreement a = Agreement(_createFundedAgreement(200_000_000));
+        assertEq(a.fundedAt(), 0, "the sentinel and the real stamp collide at epoch zero");
+        assertEq(uint8(a.status()), uint8(Agreement.Status.CREATED), "so the deal reads as unfunded");
+
+        vm.prank(executor);
+        vm.expectRevert(Agreement.NotFunded.selector);
+        a.activate();
     }
 
     /// An arbiter took it on and did not finish — the earlier behaviour: everything
@@ -623,6 +1087,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(33));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -652,8 +1117,14 @@ contract DisputeSettlementTest is Test {
         vm.startPrank(client);
         usdc.approve(address(a), 50_000_000 + a.quoteExtraFee(50_000_000));
         a.proposeExtra(50_000_000, "extra work");
-        a.raiseDispute();
         vm.stopPrank();
+        // The hand-in sits between the top-up and the dispute on purpose:
+        // proposeExtra refuses a marked-done deal (AlreadyMarkedDone), and
+        // without a hand-in the timeout would pay the executor nothing at all
+        // and this scene would stop being about the pending top-up.
+        _handIn(a);
+        vm.prank(client);
+        a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
         vm.prank(executor);
         a.respondToDispute();
@@ -686,6 +1157,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
         vm.warp(block.timestamp + a.DISPUTE_WINDOW() + 1);
@@ -739,6 +1211,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -867,6 +1340,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -1071,6 +1545,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -1094,6 +1569,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1116,6 +1592,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1139,6 +1616,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(7));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1167,6 +1645,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1195,6 +1674,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1223,6 +1703,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1246,6 +1727,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1266,6 +1748,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_001));
         vm.prank(executor);
         a.activate();
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -1397,6 +1880,10 @@ contract DisputeSettlementTest is Test {
         a = Agreement(_createFundedAgreement(dealAmount));
         vm.prank(executor);
         a.activate();
+        // Handed in before the dispute, so the scenes built on this fixture stay
+        // scenes about the top-up and the split rather than about delivery: with
+        // no markDone the unclaimed timeout now pays the executor nothing.
+        _handIn(a);
         vm.prank(client);
         a.raiseDispute();
     }
@@ -1421,6 +1908,364 @@ contract DisputeSettlementTest is Test {
         vm.prank(address(0xBEEF));
         vm.expectRevert(ArbiterRegistryFacet.NotParty.selector);
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
+    }
+
+    /// ⚠️ THIS WAS A PIN ON A DEFECT AND IS NOW A LOCK ON THE FIX. It was
+    /// written on 24 September 2026 as
+    /// `testAFrozenVerdictHoldsTheTopUpAYearLater` — green, recording that a
+    /// freeze had NO deadline: a brake and a suspension let go by themselves
+    /// after 72 hours, a frozen verdict never did, and the arbiter's top-up sits
+    /// on the DIAMOND rather than inside the deal's escrow, so the only way out
+    /// of it was a second press by the same hand.
+    ///
+    /// It went red on 25 September when the freeze got a clock — `[FAIL: next
+    /// call did not revert as expected]`, on the `finalizeVerdict` below — which
+    /// was the handshake it was written for. Rewritten here to the behaviour that
+    /// replaced it, keeping the year: a year is not a boundary of anything in the
+    /// code, it is simply longer than any deadline anyone would choose, so it is
+    /// the honest place to ask "is there still a way out at all".
+    ///
+    /// The tight boundary lives in
+    /// testTheFreezeLapsesAfterSeventyTwoHoursAndTheTopUpReachesTheArbiter and
+    /// testTheFreezeStillHoldsOneSecondBeforeItsWindowRuns below; this one asks
+    /// the blunt question the mainnet list asked.
+    function testAFrozenVerdictNoLongerHoldsTheTopUpAYearLater() public {
+        Agreement a = _disputedAgreement(100_000_000);
+
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        assertGt(need, 0, "setup: this pot needs a top-up to reach the arbiter floor");
+        usdc.mint(client, need);
+        vm.startPrank(client);
+        usdc.approve(address(diamond), need);
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
+        vm.stopPrank();
+        uint256 bounty = ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a));
+        assertEq(bounty, need, "setup: the top-up is booked on the diamond");
+
+        _claimByArbiter(a);
+        vm.prank(arbiterAddr);
+        ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), true);
+
+        _freezeAsAHandDidBeforeTheCut(a);
+        vm.warp(vm.getBlockTimestamp() + 365 days);
+
+        // 1. ⚠️ THE PARTIES' OWN TIMEOUT STILL REFUSES, AND NOT BECAUSE OF THE
+        // FREEZE. `Agreement._verdictInFlight()` asks the diamond
+        // `hasSubmittedVerdict` and knows nothing about `frozen`, so this door was
+        // never the freeze's to open and is untouched by the clock. Asserted here
+        // rather than deleted: the 17 September wording of D6 blamed the freeze
+        // for this refusal, the mechanism turned out to be a different one, and a
+        // test is the only place that can keep saying so.
+        vm.prank(client);
+        vm.expectRevert(Agreement.VerdictInFlight.selector);
+        a.triggerArbiterTimeout();
+
+        // 2. The way out that DOES open: execution, by anybody, with nobody's
+        // second press.
+        uint256 rewardBefore = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr);
+        vm.prank(address(0xBEEF));
+        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
+
+        // 3. So the top-up moved, and it moved to the arbiter who did the work.
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)),
+            0,
+            "the top-up no longer sits on the diamond for ever"
+        );
+        assertGe(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr) - rewardBefore,
+            bounty,
+            "and a year later it reached the arbiter"
+        );
+
+        // 4. The flag still records that the press happened — the clock decides
+        // whether it still stops anything, and the history is not rewritten.
+        assertTrue(
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(address(a)).frozen,
+            "the press is still on the record"
+        );
+    }
+
+    // ============================================================
+    //  D6 — THE FREEZE HAS A CLOCK (owner's decision, 24 September 2026)
+    // ============================================================
+    //
+    // ⚠️ EVERY WARP BELOW IS MEASURED FROM `vm.getBlockTimestamp()` AND NEVER
+    // FROM A CACHED `block.timestamp`. Under via_ir the compiler hoists
+    // `block.timestamp` out of a frame, so a value read before the previous warp
+    // is not the clock the diamond will see: the test would then be warping to a
+    // moment it has already passed and asserting about a window it never entered.
+    //
+    // The number the scenes below are pinned against is FREEZE_WINDOW, a private
+    // constant of the facet (72 hours). It is written out here on purpose rather
+    // than read through a getter: the whole point of the fix was that
+    // `ArbiterRegistryFacet` is a named Replace group in signed cut scripts and
+    // must not gain an external function, so there IS nothing to read it through.
+    // That makes these literals the human-fixed side of the seam — if the
+    // constant moves, these go red, which is the correct direction.
+
+    /// Set the scene D6 is about: a disputed deal, a top-up paid in by the client
+    /// The base of this deal's `PendingVerdict` record. `pendingVerdicts` is
+    /// field 6 of ArbiterRegistryStorage.Data; the offsets inside the record are
+    /// pinned independently in test/Diamond.t.sol.
+    function _verdictRecordBase(Agreement a) internal pure returns (uint256) {
+        return uint256(keccak256(abi.encode(address(a), uint256(ArbiterRegistryStorage.POSITION) + 6)));
+    }
+
+    /// Puts a verdict into the state A HAND left behind: `frozen` set and
+    /// `frozenAt` carrying the moment of the press.
+    ///
+    /// ⚠️ WHY A SLOT WRITE AND NOT A CALL (9 October 2026). `freezeVerdict` is
+    /// gone, and `frozenAt` now has NO writer anywhere in the facet -- measured,
+    /// not assumed. `raiseAppeal` still sets `frozen`, but it sets `appealed` in
+    /// the same breath and `_freezeHolds` then answers from the APPEAL's clock
+    /// (`appealDeadline`) rather than from FREEZE_WINDOW, so it cannot build the
+    /// state these scenes are about at all.
+    ///
+    /// ⚠️ THE STATE IS REAL AND THAT IS THE WHOLE REASON THESE SCENES SURVIVE
+    /// THE CUT. Verdicts a hand froze before 9 October are on chain with exactly
+    /// these two fields set, unfinalized, and `FREEZE_WINDOW` plus `_freezeHolds`
+    /// were deliberately KEPT for them: the clock is the only thing that ever
+    /// lets them go now that `unfreezeVerdict` is gone too. Delete these scenes
+    /// and nothing watches the only exit somebody's escrow has.
+    ///
+    /// ⚠️ THE OFFSETS ARE WITNESSED, NOT TRUSTED -- the same rig, and the same
+    /// reason for it, as testAFreezeFromBeforeTheFieldExistedLapsesFromTheSubmission
+    /// below: the flag word is read and OR-ed rather than overwritten, so a
+    /// drifted offset cannot quietly clear a neighbour, and the getter is then
+    /// asked whether both fields actually landed.
+    function _freezeAsAHandDidBeforeTheCut(Agreement a) internal {
+        uint256 base = _verdictRecordBase(a);
+        bytes32 flagSlot  = bytes32(base + 2);
+        bytes32 clockSlot = bytes32(base + 7);
+
+        vm.store(address(diamond), flagSlot, vm.load(address(diamond), flagSlot) | bytes32(uint256(1)));
+        vm.store(address(diamond), clockSlot, bytes32(vm.getBlockTimestamp()));
+
+        ArbiterRegistryStorage.PendingVerdict memory v =
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(address(a));
+        assertTrue(v.frozen, "the frozen offset missed - this helper is poking an unrelated slot");
+        assertEq(v.frozenAt, vm.getBlockTimestamp(), "the frozenAt offset missed - likewise");
+        assertFalse(v.finalized, "the write landed on a neighbour (finalized)");
+        assertFalse(v.appealed, "the write landed on a neighbour (appealed)");
+        assertGt(v.submittedAt, 0, "the record itself was not found");
+    }
+
+    /// Sets `overturned` the way a panel that voted to overturn would leave it.
+    ///
+    /// ⚠️ UNLIKE THE FREEZE ABOVE, THIS STATE IS REACHABLE BY A CALL, and the
+    /// shortcut is taken for a stand reason rather than a protocol one: this
+    /// bench mounts a hand-picked selector list that carries no appeal doors at
+    /// all, and seating a bonded panel plus funding an appellant would move the
+    /// deposit, the case bond and the bank through every balance identity this
+    /// file asserts -- turning a scene about where a TOP-UP goes into a scene
+    /// about appeal economics, which test/AppealEconomics.t.sol already is.
+    ///
+    /// What is being measured here is `finalizeVerdict`'s routing of the money on
+    /// a verdict that did not stand, and that reads the bit and nothing about how
+    /// the bit was set.
+    function _markOverturnedAsThePanelWould(Agreement a) internal {
+        bytes32 flagSlot = bytes32(_verdictRecordBase(a) + 2);
+        // `overturned` is the THIRD bool of the packed word: frozen, finalized,
+        // overturned.
+        vm.store(address(diamond), flagSlot, vm.load(address(diamond), flagSlot) | bytes32(uint256(1) << 16));
+
+        ArbiterRegistryStorage.PendingVerdict memory v =
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(address(a));
+        assertTrue(v.overturned, "the overturned offset missed - this helper is poking an unrelated slot");
+        assertFalse(v.finalized, "the write landed on a neighbour (finalized)");
+        assertFalse(v.frozen, "the write landed on a neighbour (frozen)");
+    }
+
+    /// and booked on the DIAMOND, an arbiter's verdict, and then the owner's
+    /// freeze. Returns the top-up so each scene can follow that exact money.
+    function _frozenVerdictWithTopUp() internal returns (Agreement a, uint256 bounty) {
+        a = _disputedAgreement(100_000_000);
+
+        uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        assertGt(need, 0, "setup: this pot needs a top-up to reach the arbiter floor");
+        usdc.mint(client, need);
+        vm.startPrank(client);
+        usdc.approve(address(diamond), need);
+        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
+        vm.stopPrank();
+        bounty = ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a));
+        assertEq(bounty, need, "setup: the top-up is booked on the diamond");
+
+        _claimByArbiter(a);
+        vm.prank(arbiterAddr);
+        ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), true);
+
+        // ⚠️ THE PRESS IS A SLOT WRITE NOW — see _freezeAsAHandDidBeforeTheCut,
+        // which also carries the witness that used to stand here.
+        _freezeAsAHandDidBeforeTheCut(a);
+    }
+
+    /// ⚠️ THE DESIGNATED LOCK FOR D6, and the scene the whole item exists for:
+    /// the owner froze a verdict and never came back, and seventy-two hours later
+    /// the arbiter's top-up finds its way out WITHOUT a second press by anybody.
+    ///
+    /// "Where it went" is asserted all the way to the man's own balance and not
+    /// merely to a credit line: a claimable that cannot be claimed would be the
+    /// same dead end wearing a different name.
+    ///
+    /// Exactly `FREEZE_WINDOW`, not a second more — the boundary belongs to the
+    /// lapse (`_freezeHolds` compares with `<`), and its other side is pinned by
+    /// testTheFreezeStillHoldsOneSecondBeforeItsWindowRuns below.
+    function testTheFreezeLapsesAfterSeventyTwoHoursAndTheTopUpReachesTheArbiter() public {
+        (Agreement a, uint256 bounty) = _frozenVerdictWithTopUp();
+
+        vm.warp(vm.getBlockTimestamp() + 72 hours);
+
+        uint256 rewardBefore = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr);
+        // Anybody may press it — there is no privileged caller here, which is the
+        // half that makes this a way out rather than a second lever.
+        vm.prank(address(0xBEEF));
+        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
+
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)),
+            0,
+            "the top-up has left the holding pen on the diamond"
+        );
+        assertGe(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr) - rewardBefore,
+            bounty,
+            "and it was credited to the arbiter who did the work"
+        );
+        assertTrue(
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(address(a)).finalized,
+            "the verdict stood, because nobody came back to overturn it"
+        );
+
+        // All the way to the money. This is "where exactly it went".
+        uint256 owed = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr);
+        uint256 walletBefore = usdc.balanceOf(arbiterAddr);
+        vm.prank(arbiterAddr);
+        ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
+        assertEq(
+            usdc.balanceOf(arbiterAddr) - walletBefore,
+            owed,
+            "and the arbiter could take it out in USDC"
+        );
+    }
+
+    /// ⚠️ WITHOUT THIS SCENE THE DEADLINE IS NOT PROVEN — only "it lets go
+    /// eventually" is. A lapse that fired immediately would satisfy the scene
+    /// above and destroy the lever the owner keeps.
+    function testInsideTheFreezeWindowTheTopUpIsStillHeld() public {
+        (Agreement a, uint256 bounty) = _frozenVerdictWithTopUp();
+
+        vm.warp(vm.getBlockTimestamp() + 71 hours);
+
+        vm.expectRevert(ArbiterRegistryFacet.VerdictFrozenError.selector);
+        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)),
+            bounty,
+            "the top-up has not moved inside the window"
+        );
+    }
+
+    /// The exact second the window ends, from the side that still holds. Together
+    /// with the lapse scene this pins the boundary rather than the neighbourhood.
+    function testTheFreezeStillHoldsOneSecondBeforeItsWindowRuns() public {
+        (Agreement a, ) = _frozenVerdictWithTopUp();
+
+        vm.warp(vm.getBlockTimestamp() + 72 hours - 1);
+
+        vm.expectRevert(ArbiterRegistryFacet.VerdictFrozenError.selector);
+        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
+    }
+
+    // ⚠️ `testTheOwnersDecisionInsideTheWindowIsStillHis` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF. Its subject, in its own words, was that "the owner's own
+    //   decision inside the window is still his": the clock insures against the one
+    //   case he named -- nobody came back to decide -- and must not take the decision
+    //   away from him when he DOES come back. He came back by pressing
+    //   `overturnVerdict`, which also cleared `frozen` itself, so the clock was never
+    //   consulted. With no hand there is nobody to come back, and nothing to keep the
+    //   decision for.
+    //   ⚠️ WHERE THE MONEY HALF STILL LIVES: that an overturned verdict routes the
+    //   top-up back to the payer as a claimable and pays the arbiter nothing is
+    //   asserted by testOverturnedVerdictRefundsBountyToPayer, in this file, which was
+    //   rewritten rather than removed.
+    //
+    // ⚠️ `testTheOwnersUnfreezeInsideTheWindowOpensItAtOnce` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF -- `unfreezeVerdict` inside the window opening the way at
+    //   once instead of waiting out a clock. There is nothing left to lift by hand:
+    //   the only hand-pressed freeze is gone, and the freeze an APPEAL raises is
+    //   cleared by `resolveAppeal`, which anybody may call once the window closes.
+    //   A legacy freeze still on chain now leaves only by the clock, and THAT is what
+    //   the surviving scenes in this section measure.
+    //
+    // ⚠️ `testARepressedFreezeGetsAFreshWindow` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF -- a SECOND press restarting the window.
+    //   ⚠️ AND ITS DISAPPEARANCE IS A GOOD THING, WHICH IS WORTH WRITING DOWN RATHER
+    //   THAN ONLY NOTING THE LOSS. This scene existed to say out loud what it called
+    //   "the honest limit of D6": a hand that pressed freeze every three days could
+    //   hold a verdict -- and somebody's escrow -- INDEFINITELY, and that was the
+    //   lever working as designed rather than the clock failing. The press is gone, so
+    //   the indefinite hold is gone with it. No verdict can be re-frozen by anybody,
+    //   and every freeze still standing on chain has exactly one window left to run.
+    //   There is therefore no fresh window to test, and nothing to guard against: the
+    //   state the scene warned about can no longer be entered.
+    //
+    /// ⚠️ THE MIGRATION SEAM: a verdict frozen BEFORE `frozenAt` existed reads a
+    /// zero there, and a zero must not mean "frozen for ever" — that would leave
+    /// the defect alive for exactly the verdicts already caught by it.
+    /// `_freezeHolds` falls back to `submittedAt`, the earliest moment the press
+    /// can have happened.
+    ///
+    /// ⚠️ THE SLOT IS WITNESSED BEFORE IT IS USED, and the first attempt at this
+    /// test is why the warning is here. It found the slot by recording what
+    /// `freezeVerdict` writes and picking the one whose value equalled the press's
+    /// timestamp — and under forge's default clock `block.timestamp` is 1, which is
+    /// also the packed value of the word holding `frozen` alone. The search matched
+    /// the flag instead of the clock, zeroed the flag, and the test's own setup
+    /// assertion caught it. A marker written through the offset and read back
+    /// through the real getter cannot go wrong that way: if the offset drifts, the
+    /// witness below fails rather than some unrelated slot being poked.
+    function testAFreezeFromBeforeTheFieldExistedLapsesFromTheSubmission() public {
+        (Agreement a, uint256 bounty) = _frozenVerdictWithTopUp();
+
+        // `pendingVerdicts` is field 6 of ArbiterRegistryStorage.Data, and
+        // `frozenAt` is the eighth slot of the record — appended at the end,
+        // one past `appealDeposit`. Both offsets are pinned independently in
+        // test/Diamond.t.sol.
+        bytes32 recordBase = keccak256(
+            abi.encode(address(a), uint256(ArbiterRegistryStorage.POSITION) + 6)
+        );
+        bytes32 clockSlot = bytes32(uint256(recordBase) + 7);
+
+        // The witness: a marker nobody else could have put there.
+        vm.store(address(diamond), clockSlot, bytes32(uint256(0xC10C)));
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(address(a)).frozenAt,
+            0xC10C,
+            "the frozenAt offset missed - this test would be poking an unrelated slot"
+        );
+
+        vm.store(address(diamond), clockSlot, bytes32(0));
+        ArbiterRegistryStorage.PendingVerdict memory v0 =
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(address(a));
+        assertTrue(v0.frozen, "setup: it still reads as frozen");
+        assertEq(v0.frozenAt, 0, "setup: and as a press from before the field existed");
+
+        // `submittedAt` is the fallback, and it is at or before the press — so the
+        // window has already run by the time we are 72 hours past the submission.
+        vm.warp(v0.submittedAt + 72 hours);
+        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)),
+            0,
+            "a legacy freeze lapses too, measured from the submission"
+        );
+        assertGe(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
+            bounty,
+            "and the top-up reached the arbiter"
+        );
     }
 
     function testFundDisputeTwiceReverts() public {
@@ -1645,10 +2490,14 @@ contract DisputeSettlementTest is Test {
         vm.prank(arbiterAddr);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), true);
 
-        // The owner (== address(this) in this setup) overturns the verdict before finalisation.
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(address(a), false);
+        // ⚠️ THE VERDICT IS MARKED OVERTURNED THE WAY A PANEL LEAVES IT (9 October
+        // 2026). This line was the owner's `overturnVerdict`; the door is gone and
+        // the panel is the only writer left. See
+        // _markOverturnedAsThePanelWould for why the bit is set directly on this
+        // particular bench rather than by seating one.
+        _markOverturnedAsThePanelWould(a);
 
-        vm.warp(block.timestamp + 24 hours + 1); // FINALIZE_DELAY
+        vm.warp(block.timestamp + 72 hours + 1); // FINALIZE_DELAY
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
 
         assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(client), need, "bounty went to the payer as claimable");
@@ -1878,6 +2727,12 @@ contract DisputeSettlementTest is Test {
         a = Agreement(addr);
         vm.prank(peer);
         a.activate();
+        // The peer hands the work in before the dispute: this fixture's scenes are
+        // about who PAYS through the forwarder, and an unclaimed timeout without a
+        // hand-in would hand the whole pot to the payer and hide the top-up refund
+        // it is actually measuring.
+        vm.prank(peer);
+        a.markDone();
         vm.prank(payer);
         a.raiseDispute();
     }

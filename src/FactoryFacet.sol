@@ -187,6 +187,50 @@ library FactoryStorage {
         if (fee < floor_) fee = floor_;
     }
 
+    /// @notice The fee floor a listing was POSTED under — decision 52, "what a
+    ///         person signed up for is what will be".
+    ///
+    /// @dev WHY THIS EXISTS AND WHY IT IS ONE FUNCTION. The boards used to read
+    ///      `fs.feeFloor` live at the moment they settled a cancel, a reject or
+    ///      a supersede. That is a different number from the one the client
+    ///      agreed to when he paid: raise the floor from $1 to $3 under a live
+    ///      $100 job and the cancel kept $3 of his money where he had signed up
+    ///      to lose $1. Lower it, and he was handed back money he had agreed to
+    ///      forfeit — the same rule broken in his favour, which the rule also
+    ///      forbids. So each board now stores the floor beside the fee it held,
+    ///      and settles against the stored one. Four call sites share this
+    ///      resolver for the same reason `quote` above is shared: two copies of
+    ///      "which floor governs this listing" is how one door starts
+    ///      disagreeing with the next.
+    ///
+    ///      ZERO MEANS "POSTED BEFORE THIS UPGRADE", NEVER "THE FLOOR WAS ZERO".
+    ///      That is not a convention, it is enforced three times over, and the
+    ///      whole migration rests on it:
+    ///        - `quote` above reverts `FeeNotConfigured` while the floor is zero,
+    ///          so no job and no request can be created under a zero floor;
+    ///        - `setFeeFloor` rejects zero;
+    ///        - `initFeeModel` rejects zero, and runs once.
+    ///      A listing that exists therefore had a non-zero floor, and a zero in
+    ///      the stored field can only be a slot that was never written — every
+    ///      job and request posted before the cut. Those fall back to the live
+    ///      read, which is exactly the behaviour they have had all along: the
+    ///      defect is not fixed retroactively for them, and it is not made worse
+    ///      either. A sentinel for "unwritten" would buy nothing here and would
+    ///      cost a real value out of the number's range.
+    ///
+    ///      No clamping happens here. The caller still takes
+    ///      `min(feeHeld, floor)`, so a stored floor larger than the fee held —
+    ///      or larger than today's floor — burns what was held and no more,
+    ///      returns a verdict rather than reverting, and cannot underflow.
+    function agreedFeeFloor(Layout storage fs, uint256 storedFloor)
+        internal
+        view
+        returns (uint256)
+    {
+        if (storedFloor == 0) return fs.feeFloor;
+        return storedFloor;
+    }
+
     /// @notice Hand `amount` of already-custodied fee to `feeRecipient`, and if
     ///         it will not take it, owe it instead. The single implementation
     ///         of that rule — JobBoardFacet and ServiceBoardFacet both call

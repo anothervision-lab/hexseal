@@ -114,6 +114,20 @@ library ServiceBoardStorage {
         // for both of them, and each side has its own way out — the client
         // cancels, the executor rejects.
         mapping(address => uint256) incomingRequestCount;
+        // ---- appended 25 September 2026: decision 52, "what a person signed
+        //      up for is what will be" ----
+        //
+        // The fee floor in force at the moment this request was SENT, stored
+        // beside `requestFeeHeld` above and written by both request doors. All
+        // three ways a pending request can end without a deal — the executor
+        // rejects, the client cancels, or an accepted sibling supersedes it —
+        // settle against this and not against the floor as it stands when the
+        // button is pressed.
+        //
+        // Zero means "sent before the cut", never "the floor was zero": see
+        // `FactoryStorage.agreedFeeFloor`, which owns that rule for all four
+        // call sites and states what enforces it.
+        mapping(uint256 => uint256) requestFeeFloorAtRequest;
     }
 
     function store() internal pure returns (Layout storage s) {
@@ -501,6 +515,9 @@ contract ServiceBoardFacet {
         _safeTransferFrom(fs.usdc, client, address(this), amount + fee);
         s.requestFunds[requestId]   = amount;
         s.requestFeeHeld[requestId] = fee;
+        // Decision 52: the floor this client agreed to, remembered beside the
+        // fee. Reject, cancel and supersede all settle against this one.
+        s.requestFeeFloorAtRequest[requestId] = fs.feeFloor;
         s.pendingRequestCount[client]++;
         s.incomingRequestCount[svc.executor]++;
 
@@ -568,6 +585,8 @@ contract ServiceBoardFacet {
         _safeTransferFrom(fs.usdc, client, address(this), amount + fee);
         st.requestFunds[requestId]   = amount;
         st.requestFeeHeld[requestId] = fee;
+        // Decision 52 — see the note on the field.
+        st.requestFeeFloorAtRequest[requestId] = fs.feeFloor;
         st.pendingRequestCount[client]++;
         st.incomingRequestCount[svc.executor]++;
 
@@ -671,7 +690,12 @@ contract ServiceBoardFacet {
 
             uint256 siblingFee = s.requestFeeHeld[siblingId];
             s.requestFeeHeld[siblingId] = 0;
-            uint256 siblingFloor = fs.feeFloor;
+            // The floor the SIBLING was sent under. Nobody pressed anything
+            // about this request — it is being closed on its owner's behalf —
+            // which makes settling it by today's floor the least defensible of
+            // the four: the client did not even choose the moment.
+            uint256 siblingFloor =
+                FactoryStorage.agreedFeeFloor(fs, s.requestFeeFloorAtRequest[siblingId]);
             uint256 siblingBurned = siblingFee < siblingFloor ? siblingFee : siblingFloor;
 
             uint256 siblingTotal = siblingRefund + (siblingFee - siblingBurned);
@@ -705,7 +729,10 @@ contract ServiceBoardFacet {
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         uint256 feeHeld = s.requestFeeHeld[requestId];
         s.requestFeeHeld[requestId] = 0;
-        uint256 floor_ = fs.feeFloor;
+        // The floor this request was SENT under, not the one standing now —
+        // decision 52. Zero falls back to the live floor and means "sent before
+        // this cut"; see FactoryStorage.agreedFeeFloor.
+        uint256 floor_ = FactoryStorage.agreedFeeFloor(fs, s.requestFeeFloorAtRequest[requestId]);
         uint256 burned = feeHeld < floor_ ? feeHeld : floor_;
 
         // The client first, the fee recipient second, and the second can no
@@ -739,7 +766,10 @@ contract ServiceBoardFacet {
         FactoryStorage.Layout storage fs = FactoryStorage.store();
         uint256 feeHeld = s.requestFeeHeld[requestId];
         s.requestFeeHeld[requestId] = 0;
-        uint256 floor_ = fs.feeFloor;
+        // The floor this request was SENT under, not the one standing now —
+        // decision 52. Zero falls back to the live floor and means "sent before
+        // this cut"; see FactoryStorage.agreedFeeFloor.
+        uint256 floor_ = FactoryStorage.agreedFeeFloor(fs, s.requestFeeFloorAtRequest[requestId]);
         uint256 burned = feeHeld < floor_ ? feeHeld : floor_;
 
         // The client first, the fee recipient second, and the second can no

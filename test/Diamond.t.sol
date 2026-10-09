@@ -201,7 +201,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         ownerSelectors[3] = OwnershipFacet.pendingOwner.selector;
 
         // ArbiterRegistryFacet selectors
-        bytes4[] memory arbiterSelectors = new bytes4[](24);
+        bytes4[] memory arbiterSelectors = new bytes4[](21);
         arbiterSelectors[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbiterSelectors[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbiterSelectors[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -215,17 +215,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         arbiterSelectors[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
         arbiterSelectors[11] = ArbiterRegistryFacet.submitVerdict.selector;
         arbiterSelectors[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbiterSelectors[13] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbiterSelectors[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbiterSelectors[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbiterSelectors[16] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbiterSelectors[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbiterSelectors[18] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbiterSelectors[19] = ArbiterRegistryFacet.resignAsArbiter.selector;
-        arbiterSelectors[20] = ArbiterRegistryFacet.raiseAppeal.selector;
-        arbiterSelectors[21] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        arbiterSelectors[22] = ArbiterRegistryFacet.resolveAppeal.selector;
-        arbiterSelectors[23] = ArbiterRegistryFacet.acceptDAOAddress.selector;
+        arbiterSelectors[13] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbiterSelectors[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbiterSelectors[15] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        arbiterSelectors[16] = ArbiterRegistryFacet.resignAsArbiter.selector;
+        arbiterSelectors[17] = ArbiterRegistryFacet.raiseAppeal.selector;
+        arbiterSelectors[18] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        arbiterSelectors[19] = ArbiterRegistryFacet.resolveAppeal.selector;
+        arbiterSelectors[20] = ArbiterRegistryFacet.acceptDAOAddress.selector;
         bytes4[] memory arbiterSelectorsVault = new bytes4[](20);
         arbiterSelectorsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbiterSelectorsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
@@ -341,13 +338,69 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
 
+    /// The appeal panel, registered at most once however often this is called.
+    ///
+    /// ⚠️ IDEMPOTENT ON PURPOSE, and `_addAppealQuorumArbiters` is not.
+    /// That one takes the same three fixed addresses (0x30/0x31/0x32) and calls
+    /// `addArbiter` unconditionally, so a second call reverts. It is fine where
+    /// it is -- once per test -- but `_disputeAndOverturn` below is called ONCE
+    /// PER MISTAKE, up to six times in one scene, and now needs a panel every
+    /// time. Hence the registration check; the purse is topped up on every call
+    /// because minting and approving again is harmless and six appeals are
+    /// genuinely paid for.
+    function _ensureAppealPanel() internal returns (address a2, address a3, address a4) {
+        a2 = address(0x30);
+        a3 = address(0x31);
+        a4 = address(0x32);
+        if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(a2)) {
+            ArbiterRegistryFacet(address(diamond)).addArbiter(a2);
+        }
+        if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(a3)) {
+            ArbiterRegistryFacet(address(diamond)).addArbiter(a3);
+        }
+        if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(a4)) {
+            ArbiterRegistryFacet(address(diamond)).addArbiter(a4);
+        }
+        _bondSeat(a2);
+        _bondSeat(a3);
+        _bondSeat(a4);
+    }
+
     // Full deploy -> fund -> activate -> dispute -> claim -> submit -> overturn cycle against a
     // single fresh counterparty pair, for arbiter-mistake-streak tests. Kept as its own
     // function (called explicitly per-mistake rather than from a `for` loop) — looping this
     // sequence directly inside one test function was observed to make later vm.roll calls not
     // take effect under this repo's via_ir compilation; calling a helper repeatedly does not
     // have that problem.
+    //
+    // ⚠️ THE OVERTURN IS THE PANEL'S NOW, NOT A HAND'S (9 October 2026). The last
+    // line used to be `overturnVerdict(agreementAddr, false)` — one call by the
+    // owner. That door is gone, and with it the ONLY other way to reach
+    // `DemotionPath.OwnerOverturn`. The replacement has to be the appeal,
+    // because of what `_recordArbiterMistake` does with the path: the cumulative
+    // `overturnedVerdicts` counter is an ALLOW-list of `OwnerOverturn` and
+    // `AppealVote`, so a TIMEOUT — which is cheaper and would have served the
+    // streak perfectly — books a mistake and leaves that counter alone. One
+    // scene here reads the counter and demands six
+    // (test_AlternatingMistakesLeaveTheStreakAtZeroAndTheTotalAtSix), so the
+    // timeout shortcut would have made it green at zero against six expected,
+    // or quietly changed what the scene measures.
+    //
+    // The outcome is the same as the hand produced: the arbiter rules for the
+    // client, the LOSING EXECUTOR appeals (`raiseAppeal` admits only the losing
+    // party, by `_msgSender()`), two of three vote to overturn, and
+    // `resolveAppeal` flips `clientWins` to false and books the mistake.
     function _disputeAndOverturn(address cli, address exec, address arbiterAddr) internal returns (address agreementAddr) {
+        (address a2, address a3, address a4) = _ensureAppealPanel();
+        require(
+            arbiterAddr != a2 && arbiterAddr != a3 && arbiterAddr != a4,
+            "the ruling arbiter is sitting on his own appeal panel - pick another address"
+        );
+        require(
+            exec != a2 && exec != a3 && exec != a4 && cli != a2 && cli != a3 && cli != a4,
+            "a panel seat is a party to this deal - voteOnAppeal would refuse it"
+        );
+
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
         usdc.approve(address(diamond), 10 * 10**6);
@@ -369,7 +422,16 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(arbiterAddr);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(agreementAddr, true);
 
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreementAddr, false);
+        // The losing side pays for the appeal it is about to win.
+        _bondSeat(exec);
+        vm.prank(exec);
+        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agreementAddr);
+        // The seats open an hour after the appeal (24 September 2026).
+        vm.warp(vm.getBlockTimestamp() + 1 hours + 1);
+        _voteOverturn(agreementAddr, a2, a3, a4);
+        // 2-1 is a formed panel and not a tie, so it settles without waiting
+        // out the review window.
+        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agreementAddr);
     }
 
     // Fresh deploy -> fund -> activate -> dispute -> claim -> submitVerdict cycle, stopping
@@ -417,7 +479,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     function _resolveDispute(address agreementAddr, bool clientWins) internal {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(agreementAddr, clientWins);
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
     }
 
@@ -1242,6 +1304,11 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     /// The two halves the old scene measured still hold in order: the chain's
     /// accusation touches no money, and neither does the removal.
     function testDemotionForfeitsNothingBecauseTheSeatCostsNothing() public {
+        // ⚠️ THE PANEL IS SEATED BEFORE THE HANDOVER, AND IT HAS TO BE (9 October
+        // 2026). The mistake run below reaches its overturns through the appeal
+        // panel now, and `addArbiter` answers `SeatingHandedOver` once governance
+        // is live — measured: this scene was the one red in this file that said so.
+        _ensureAppealPanel();
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45200));
         _growXP(candidate, true, 3000, 45700);
@@ -1251,11 +1318,23 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // case's bond.
         _bondSeat(candidate);
 
-        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
-
         _disputeAndOverturn(address(uint160(45800)), address(uint160(45900)), candidate);
         _disputeAndOverturn(address(uint160(45801)), address(uint160(45901)), candidate);
         _disputeAndOverturn(address(uint160(45802)), address(uint160(45902)), candidate);
+
+        // ⚠️ THE BANK IS READ AFTER THE MISTAKE RUN, NOT BEFORE IT (9 October
+        // 2026), and the move is the whole point rather than a convenience. This
+        // scene asks ONE question — does a REMOVAL forfeit money — and since the
+        // overturns are the appeal panel's, each of them now puts an indivisible
+        // remainder of the appellant's deposit into the bank on purpose
+        // (`resolveAppeal`: deposit / votes, the remainder to the bank). Measured:
+        // three rounds left 6 base units there, and with the baseline taken before
+        // the run this test failed reading "the bank did not grow: 6 != 0" — it was
+        // blaming the removal for the appeal's arithmetic.
+        //
+        // Taken here, the comparison spans exactly the removal and nothing else,
+        // which is what it was always meant to measure.
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
         // ⚠️ THE BOND BURNS ON REMOVAL, NOT ON ACCUSATION. Until the pause is over
         // the person is still an arbiter and the money is still theirs — an
@@ -1465,7 +1544,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _claimDisputeAs(agreementAddr, candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(agreementAddr, true);
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getOpenClaimCount(candidate), 0);
@@ -1481,28 +1560,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         ArbiterRegistryFacet(address(diamond)).addArbiter(recoveringArbiter);
         _bondSeat(recoveringArbiter);
 
-        // One overturn — mistake streak becomes 1.
-        address cli1 = address(uint160(44100));
-        usdc.mint(cli1, 1_000_000 * 10**6);
-        vm.prank(cli1);
-        usdc.approve(address(diamond), 10 * 10**6);
-        address exec1 = address(uint160(44200));
-        vm.prank(address(diamond));
-        address agreement1 = FactoryFacet(address(diamond)).deployAgreement(
-            cli1, exec1, recoveringArbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
-        );
-        vm.prank(cli1);
-        usdc.approve(agreement1, AMOUNT);
-        vm.prank(cli1);
-        Agreement(agreement1).fund();
-        vm.prank(exec1);
-        Agreement(agreement1).activate();
-        vm.prank(cli1);
-        Agreement(agreement1).raiseDispute();
-        _claimDisputeAs(agreement1, recoveringArbiter);
-        vm.prank(recoveringArbiter);
-        ArbiterRegistryFacet(address(diamond)).submitVerdict(agreement1, true);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreement1, false);
+        // One overturned verdict — mistake streak becomes 1.
+        //
+        // ⚠️ THE HAND'S PRESS IS GONE (9 October 2026), so the overturn is the
+        // PANEL'S, and the sequence is no longer spelled out here: the shared
+        // `_disputeAndOverturn` builds the same deal and ends with
+        // `resolveAppeal` booking the mistake. This scene's subject is the RESET
+        // asserted below, never how the mistake was earned, so it takes the
+        // helper rather than carrying its own copy of the appeal plumbing.
+        _disputeAndOverturn(address(uint160(44100)), address(uint160(44200)), recoveringArbiter);
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(recoveringArbiter), 1);
 
         // A correctly finalized verdict resets the streak back to 0.
@@ -1526,7 +1592,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _claimDisputeAs(agreement2, recoveringArbiter);
         vm.prank(recoveringArbiter);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(agreement2, true);
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreement2);
 
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(recoveringArbiter), 0);
@@ -2116,7 +2182,13 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         
         vm.prank(executor);
         Agreement(agreementAddr).activate();
-        
+
+        // The work is handed in first: since 25 September 2026 the unclaimed-timeout
+        // branch reads delivery before attendance, and without a markDone the whole
+        // escrow goes back to the client (DisputeSettlement holds that scene).
+        vm.prank(executor);
+        Agreement(agreementAddr).markDone();
+
         vm.prank(client);
         Agreement(agreementAddr).raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -2676,7 +2748,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         Agreement(agr).triggerArbiterTimeout();
 
         // And finalization still succeeds — the removed execution-time check isn't missed.
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(uint8(Agreement(agr).status()), uint8(Agreement.Status.RESOLVED));
     }
@@ -2766,7 +2838,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(usdc.balanceOf(address(diamond)), diamondBalBefore + 20 * 10**6);
 
         // Frozen — finalizeVerdict can't proceed until the appeal resolves.
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         vm.expectRevert(ArbiterRegistryFacet.VerdictFrozenError.selector);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
     }
@@ -2808,7 +2880,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(executor);
         usdc.approve(address(diamond), 20 * 10**6);
 
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         vm.prank(executor);
         vm.expectRevert(ArbiterRegistryFacet.AppealWindowClosed.selector);
         ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
@@ -2842,12 +2914,56 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
 
+    /// Puts a verdict into the state a HAND left behind: `frozen = true` with no
+    /// appeal attached to it.
+    ///
+    /// ⚠️ WHY `vm.store` AND NOT A CALL. `freezeVerdict` is gone (9 October
+    /// 2026) and nothing writes `frozen` any more except `raiseAppeal` -- which
+    /// sets `appealed` in the same breath, so it cannot build "frozen, never
+    /// appealed" at all. The state is still REAL: verdicts a hand froze before
+    /// the cut are on chain with exactly these bits, and `FREEZE_WINDOW` plus
+    /// `_freezeHolds` were deliberately kept for them. So this is a legacy
+    /// state, reached the only way left.
+    ///
+    /// ⚠️ THE OFFSET IS WITNESSED, NOT TRUSTED. `pendingVerdicts` is field 6 of
+    /// ArbiterRegistryStorage.Data and `frozen` is the lowest byte of the
+    /// record's THIRD slot, packed with five more bools and `appellant`. The
+    /// word is read and OR-ed rather than overwritten, so a drifted offset
+    /// cannot silently clear a neighbour; the getter is then asked whether the
+    /// bit actually landed, and the neighbours are asked whether they stayed
+    /// put. The same rig, and the same reason for it, as
+    /// testAFreezeFromBeforeTheFieldExistedLapsesFromTheSubmission in
+    /// test/DisputeSettlement.t.sol.
+    function _freezeAsAHandDidBeforeTheCut(address agr) internal {
+        bytes32 flagSlot = bytes32(
+            uint256(keccak256(abi.encode(agr, uint256(ArbiterRegistryStorage.POSITION) + 6))) + 2
+        );
+        bytes32 word = vm.load(address(diamond), flagSlot);
+        vm.store(address(diamond), flagSlot, word | bytes32(uint256(1)));
+
+        ArbiterRegistryStorage.PendingVerdict memory w =
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
+        assertTrue(w.frozen, "the frozen offset missed - this helper is poking an unrelated slot");
+        assertFalse(w.finalized, "the write landed on a neighbour (finalized)");
+        assertFalse(w.appealed, "the write landed on a neighbour (appealed)");
+        assertGt(w.submittedAt, 0, "the record itself was not found");
+    }
+
+    /// ⚠️ THE DOOR THIS WAS NAMED AFTER IS GONE, THE CHECK IT GUARDS IS NOT.
+    /// `freezeVerdict` was removed on 9 October 2026, and the obvious reading is
+    /// that this scene went with it. It did not: `raiseAppeal` still carries
+    /// `if (v.frozen) revert VerdictFrozenError()`, and that line stays
+    /// REACHABLE for every verdict a hand froze before the cut and that is still
+    /// sitting on chain unfinalized. Delete the scene and the last thing
+    /// standing over that line goes quiet, for a state the chain really holds.
+    /// So the freeze is built where it now comes from -- the past -- and the
+    /// refusal is asserted exactly as before.
     function testRaiseAppeal_RevertsIfOwnerFrozeBeforeAnyAppeal() public {
         _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
 
-        // Owner/DAO freezes the verdict (e.g. pending investigation) before anyone appeals.
-        ArbiterRegistryFacet(address(diamond)).freezeVerdict(agr);
+        // A verdict frozen by a hand before the cut, still waiting (see the helper).
+        _freezeAsAHandDidBeforeTheCut(agr);
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
@@ -2998,7 +3114,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1);
 
         // Verdict flipped — finalizing now pays the executor, not the client.
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(usdc.balanceOf(executor), executorBalBefore - 20 * 10**6 + 20 * 10**6 + AMOUNT);
     }
@@ -3055,7 +3171,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(usdc.balanceOf(executor), balAfterPaying, "deposit should not have landed");
 
         // The bug would be here: the verdict is unfrozen and the escrow pays out.
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(
             usdc.balanceOf(executor),
@@ -3282,6 +3398,39 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
 
+    /// ⚠️ THE APPEND IS MEASURED HERE, NOT CLAIMED IN A COMMENT. `frozenAt` was
+    /// appended to `PendingVerdict` on 25 September 2026 (D6, the freeze gets a
+    /// deadline), and "appended strictly at the end, nothing above it moved" is
+    /// worth exactly as much as a check of where it landed.
+    ///
+    /// `appealDeposit` fills slot 6 of the record whole, so there were ZERO free
+    /// bytes at the tail to pack into and the new field opens slot 7 — one cold
+    /// SSTORE on a freeze, which only the owner or the DAO can press. The six free
+    /// bytes that do exist inside slot 2 (six bools beside `appellant`) are
+    /// unreachable to an append: solc packs in declaration order, and reaching
+    /// them would mean moving a field, which is the one thing a live layout
+    /// forbids.
+    ///
+    /// Both offsets are poked through the real getter in the same test, so a drift
+    /// that moved one of them shows up as a disagreement rather than as a pass.
+    function test_TheFreezeClockLandsOnTheSlotAfterTheAppealDeposit() public {
+        address agr = address(0xA6E);
+        bytes32 base = keccak256(
+            abi.encode(
+                agr,
+                uint256(0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00) + 6
+            )
+        );
+
+        vm.store(address(diamond), bytes32(uint256(base) + 6), bytes32(uint256(111)));
+        vm.store(address(diamond), bytes32(uint256(base) + 7), bytes32(uint256(222)));
+
+        ArbiterRegistryStorage.PendingVerdict memory v =
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
+        assertEq(v.appealDeposit, 111, "appealDeposit moved off slot 6 - the layout drifted");
+        assertEq(v.frozenAt, 222, "frozenAt is not on slot 7 - it was not appended at the end");
+    }
+
     /// An appeal REMEMBERS what was paid in. Without that line in raiseAppeal all
     /// three scenes below would read a zero and take the fallback branch — that is,
     /// they would stay silent about precisely what they were written for.
@@ -3436,365 +3585,103 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     //  it would cost a second irreversible transaction.
     // ============================================================
 
-    /// THE DESIGNATED SCENE: the hand presses the value the arbiter already
-    /// ruled, and the chain refuses.
-    function test_AnOverturnIntoTheSameOutcomeIsRefused() public {
-        address agr = _disputeToVerdict(client, executor, true); // arbiter: client wins
-
-        vm.expectRevert(ArbiterRegistryFacet.VerdictUnchanged.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, true);
-
-        // Nothing was paid for the refused press: no mistake, no flag, no
-        // slash. Asserted rather than assumed — a revert that had already
-        // written state would be the same defect one layer down.
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "a press that changed nothing must cost nothing"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 0,
-            "and it must not count as an overturned verdict either"
-        );
-        assertFalse(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).overturned,
-            "and the flag every reader trusts must stay false"
-        );
-    }
-
-    /// THE COUNTER-SCENE, and it matters more than the first: a REAL overturn
-    /// still goes through, and a panel vindicating the arbiter after it still
-    /// works. A guard written as "refuse the hand" rather than "refuse an empty
-    /// press" would pass the scene above and quietly kill the owner's door and
-    /// the only check on it.
-    function test_ARealOverturnStillPassesAndVindicationStillWorks() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-        address agr = _disputeToVerdict(client, executor, true); // arbiter: client wins
-
-        // The real press: the OTHER value. Books the one mistake and the one
-        // overturn, exactly as before the guard.
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "a real overturn still books its mistake"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 1,
-            "and still counts as an overturned verdict"
-        );
-
-        // And the panel can still take it back. The hand flipped clientWins to
-        // false, so the client is the loser and the one who may appeal.
-        usdc.mint(client, 100 * 10**6);
-        vm.prank(client);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
-            "the panel restored the arbiter's own ruling, as it could before"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "and the vindication still reaches the streak"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 0,
-            "and the overturn count"
-        );
-    }
-
-    /// The premise the guard exists to make true, stated as a scene rather than
-    /// as a comment: after the hand has pressed, a panel that flips the outcome
-    /// is necessarily restoring the ARBITER'S ruling. Before the guard this was
-    /// merely usually so, and the exception was the laundering route.
-    ///
-    /// What this pins that the two above do not: it walks the laundering path
-    /// itself as far as the chain now allows, and stops at the first step.
-    function test_TheLaunderingRouteIsClosedAtItsFirstStep() public {
-        _addAppealQuorumArbiters();
-        address agr = _disputeToVerdict(client, executor, false); // arbiter: executor wins
-
-        // Step one of the route: an empty press, to arm `overturned` without
-        // moving the outcome. There is no step two.
-        vm.expectRevert(ArbiterRegistryFacet.VerdictUnchanged.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-
-        assertFalse(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).overturned,
-            "the flag stays false, so a later panel vote cannot be read as an acquittal"
-        );
-        assertFalse(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
-            "and the arbiter's ruling stands untouched"
-        );
-    }
-
-    // Task 11, 18 August 2026: the vote may still overturn a verdict, but a hand
-    // on top of it may not. resolveAppeal sets `overturned` too, so the hand is
-    // refused — it would otherwise have booked a SECOND mistake against the
-    // same verdict, which is what it used to do. One verdict earns AT MOST one
-    // judicial mistake, whoever books it.
+    // ⚠️ THIRTEEN LOCKS STOOD HERE AND ARE GONE (9 October 2026), together with
+    // the three doors they were about: `overturnVerdict`, `freezeVerdict` and
+    // `unfreezeVerdict`.
     //
-    // ⚠️ "At most", not "one", and resolveAppeal's own booking is not a fixed
-    // property of the function — both depend on the ORDER:
+    // Each one is named below with the reason THERE IS NO INPUT LEFT FOR IT, because
+    // a deleted lock without that reason beside it is a hole hidden by tidying. Two
+    // kinds of reason appear, and they are not the same strength:
     //
-    //   panel only (this scene)  — resolveAppeal books the one mistake;
-    //   hand, then panel         — resolveAppeal books NOTHING and takes the
-    //                              hand's booking back, so the verdict ends up
-    //                              having earned zero. That scene is
-    //                              test_PanelVindicatingTheArbiterClearsHisMistake.
-    function test_HandCannotDoubleCountAfterAppealOverturned() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-        address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
-
-        usdc.mint(executor, 100 * 10**6);
-        vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
-
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "the vote booked the one mistake this verdict earns"
-        );
-
-        vm.expectRevert(ArbiterRegistryFacet.AlreadyOverturned.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, true);
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "the hand added nothing on top"
-        );
-    }
-
-    // Placement, half two: an appeal raised ON TOP of a hand overturn is
-    // reachable — overturnVerdict clears `frozen`, so raiseAppeal passes and
-    // leaves appealed=true, appealResolved=false with overturned already true.
-    // The refusal there must stay AppealInProgress: a vote is running and that
-    // is the larger fact. Lifting the new gate above the appeal check swaps the
-    // reason a person reads.
-    function test_OverturnedWithAppealInFlightStillRefusesAsAppealInProgress() public {
-        _addAppealQuorumArbiters(); // quorum only — no vote is cast here
-        address agr = _disputeToVerdict(client, executor, true); // client wins
-
-        // Hand overturn flips clientWins to false: the CLIENT is now the loser
-        // and the one who may appeal.
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-
-        usdc.mint(client, 100 * 10**6);
-        vm.prank(client);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.expectRevert(ArbiterRegistryFacet.AppealInProgress.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, true);
-    }
-
-    // Found on review of the one-mistake-per-verdict gate, 18 August 2026. It
-    // closed the hand
-    // pressing twice; it did not close the OTHER way to book two mistakes
-    // against one verdict, and that way runs through an honest panel.
+    //   * ABOUT THE DOOR ITSELF -- the scene's whole subject was a call to a function
+    //     that no longer exists. Nothing can reach it, so nothing can regress.
+    //   * STATE UNREACHABLE BY CONSTRUCTION -- the scene needed `v.overturned` to be
+    //     TRUE BEFORE `resolveAppeal` ran. That flag now has exactly one writer and it
+    //     is inside `resolveAppeal` itself, read before its own write, with one appeal
+    //     per verdict. The state cannot be built any more. This reason is mechanical
+    //     rather than remembered: test/ArbiterOverturnedHasOneWriter.t.sol counts the
+    //     writers and goes red if a second one appears -- and if one ever does, these
+    //     scenes have to come back, which is what that lock's failure message says.
     //
-    //   arbiter rules clientWins=true
-    //   → owner's hand overturns to false            (mistake 1, XP slashed)
-    //   → raiseAppeal still passes: the hand cleared `frozen`, and the appeal
-    //     window runs from the VERDICT, not from the overturn
-    //   → the panel votes to overturn, flipping back to true
+    // ⚠️ WHAT WAS **NOT** DELETED, so the distinction is on the record: one lock in
+    // this file that looked like it was about the door is still here and was REWRITTEN
+    // instead -- testRaiseAppeal_RevertsIfOwnerFrozeBeforeAnyAppeal. Its check
+    // (`if (v.frozen) revert VerdictFrozenError()` in `raiseAppeal`) stays reachable
+    // for verdicts a hand froze BEFORE this cut and that are still on chain, so the
+    // scene builds that state with `vm.store` rather than through the gone door.
     //
-    // The panel has just said the ARBITER was right and the owner was wrong —
-    // and the old code thanked him with a second mistake, a second XP slash,
-    // and a permanent record reading DemotionPath.AppealVote: the chain
-    // asserting "the panel found him wrong" exactly where it found the
-    // opposite. Measured consequence: two disputes unseated an arbiter instead
-    // of three, and no collusion was needed — a correct panel decision handed
-    // the owner the second mistake for free.
+    // ⚠️ `test_AnOverturnIntoTheSameOutcomeIsRefused` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF. The whole scene was `overturnVerdict(agr, <the
+    //   outcome it already has>)` answering `VerdictUnchanged`. The error is kept
+    //   (nothing in the facet raises it any more) but no caller can reach it.
     //
-    // Raising an appeal after a hand overturn must stay open: it is the only
-    // check on the owner there is. So the second booking is what goes.
-    function test_PanelVindicatingTheArbiterClearsHisMistake() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-        address agr = _disputeToVerdict(client, executor, true); // arbiter: client wins
-
-        // ⚠️ SEED XP FIRST, and this line is not decoration. _slashArbiterXP
-        // floors at zero and this arbiter starts at zero, so without a balance
-        // the "no second slash" assertion at the end compares 0 to 0 and guards
-        // nothing at all. Measured: with the slash hoisted out of the guard but
-        // the mistake booking left inside it, the whole suite gave ZERO red
-        // until this line existed — a dead assertion that looked alive.
-        vm.store(address(diamond), keccak256(abi.encode(arbiter, uint256(REP_BASE))), bytes32(uint256(1000)));
-        assertEq(ReputationFacet(address(diamond)).getXP(arbiter), 1000, "setup: XP seeded");
-
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1,
-            "the hand booked the one mistake this verdict earns"
-        );
-        uint256 xpAfterHand = ReputationFacet(address(diamond)).getXP(arbiter);
-        assertEq(xpAfterHand, 800, "setup: the hand's slash must be visible, 1000 - OVERTURN_XP_SLASH");
-
-        // The hand flipped clientWins to false, so the CLIENT is the loser now
-        // and the one who may appeal.
-        usdc.mint(client, 100 * 10**6);
-        vm.prank(client);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(client);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
-
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        // The panel restored the arbiter's own ruling — proof the vote went
-        // AGAINST the owner, not against the arbiter.
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
-            "scene is not the one: the panel must have restored the arbiter's ruling"
-        );
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "the panel said there was no judicial mistake, so no mark may stand"
-        );
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
-            "and he keeps his seat"
-        );
-
-        // The counter comes back; the points do not. _slashArbiterXP floors at
-        // zero and never records how much it took, so adding the constant back
-        // would invent points for an arbiter slashed into the floor. What did
-        // change: the slash is ONE instead of two — the second left together
-        // with the booking.
-        //
-        // ⚠️ He keeps his seat HERE because he never lost it — this is his
-        // first mistake. Vindication does not GIVE a seat back: had the
-        // withdrawn booking been his third, the demotion fired inside
-        // _recordArbiterMistake and none of it is walked back. That case is
-        // test_VindicationAfterDemotionDoesNotUnderflowTheStreak, and the
-        // assertion above is about this scene, not a general rule.
-        assertEq(
-            ReputationFacet(address(diamond)).getXP(arbiter), xpAfterHand,
-            "XP is deliberately not restored, but neither is it slashed twice"
-        );
-    }
-
-    /// The underflow the subtraction has to survive, and it is a real path
-    /// rather than a defensive shrug. If the hand overturn that booked the
-    /// mistake was the arbiter's THIRD, _recordArbiterMistake has already reset
-    /// the streak to zero and demoted him — and raiseAppeal never asks whether
-    /// the arbiter is still seated, so the appeal proceeds and lands on a
-    /// counter that has nothing left to subtract.
-    ///
-    /// ⚠️ Named rather than fixed: vindication returns the COUNTER, not the
-    /// seat. A demoted arbiter stays demoted here even though the panel has
-    /// just contradicted the mistake that unseated him. Re-seating is a
-    /// different decision from arithmetic on a counter, and it is not this
-    /// line's to make.
-    function test_VindicationAfterDemotionDoesNotUnderflowTheStreak() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-
-        // Two mistakes on two other disputes bring him to the threshold's edge.
-        _disputeAndOverturn(address(0x7201), address(0x7202), arbiter);
-        _disputeAndOverturn(address(0x7203), address(0x7204), arbiter);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 2,
-            "setup: two mistakes booked"
-        );
-
-        // Third dispute, third mistake.
-        //
-        // ⚠️ THE SCENE WAS REBUILT WHEN THE AUTOMATIC UNSEATING WAS LED INTO THE
-        // COMMON REMOVAL DOOR (18 August 2026), AND THE STATE IT
-        // NEEDS IS NOW REACHED ONE STEP LATER. The threshold used to reset the
-        // streak and unseat the man in this very call; it now suspends him and
-        // lays an accusation in the chain's own name, deliberately KEEPING the
-        // counter. Not because the button needs it — the button reads
-        // the RECORD and opens at streak 0 — but because the row of mistakes
-        // did not end just by being noticed, and the manual door still proves
-        // its cause by that number.
-        //
-        // The property under test is unchanged and still reachable: it is the
-        // REMOVAL that zeroes the streak (_performRemoval), so pressing the
-        // button produces exactly the state the underflow needs — a booked hand
-        // overturn with nothing left in the counter to take back.
-        address agr = _disputeToVerdict(address(0x7205), address(0x7206), true);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 3,
-            "setup: the threshold keeps the streak; being noticed did not end the row"
-        );
-
-        // ⚠️ THE APPEAL IS RAISED BEFORE THE BUTTON, AND IT HAS TO BE. Its
-        // window is FINALIZE_DELAY — 24 hours from the VERDICT — while the
-        // pause before removal is 48. So "removed, then appealed" is not a
-        // reachable order at all; the only way into the state under test is
-        // "appealed, then removed, then the panel finishes". Worth stating,
-        // because the naive reading of the rebuilt removal path suggests otherwise.
-        //
-        // The hand flipped clientWins to false, so the client is the loser.
-        address cli = address(0x7205);
-        usdc.mint(cli, 100 * 10**6);
-        vm.prank(cli);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(cli);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
-        vm.prank(address(0x7299));
-        ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "setup: the removal spent the evidence it was built on"
-        );
-        assertFalse(
-            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
-            "setup: the chain's own accusation, executed, unseated him"
-        );
-
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-
-        // Must not revert on an arithmetic underflow.
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0,
-            "nothing left to take back, and nothing wrapped around"
-        );
-    }
-
+    // ⚠️ `test_ARealOverturnStillPassesAndVindicationStillWorks` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION. It needed the hand to overturn first and
+    //   the panel to restore the arbiter's ruling afterwards. The vindication
+    //   branch of `resolveAppeal` that it exercised was deleted with the hand for
+    //   this same reason, so the scene is now asserting the behaviour of code that
+    //   is not there.
+    //
+    // ⚠️ `test_TheLaunderingRouteIsClosedAtItsFirstStep` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF, and its premise is now vacuous. It walked the
+    //   laundering route -- an empty press to arm `overturned` without moving the
+    //   outcome -- and stopped at step one. With no hand there is no step zero
+    //   either: the property it protected ("after the hand pressed, a panel that
+    //   flips the outcome is necessarily restoring the arbiter's ruling") is a
+    //   statement about a hand that does not exist.
+    //
+    // ⚠️ `test_HandCannotDoubleCountAfterAppealOverturned` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF for the half it was named after -- the hand pressing
+    //   ON TOP of a panel overturn and being refused.
+    //   ⚠️ ITS SURVIVING HALF IS STILL COVERED, checked rather than assumed: the
+    //   assertion that a panel-only overturn books exactly ONE mistake is made by
+    //   testResolveAppeal_OverturnFlipsVerdictAndPenalizesArbiter, still in this
+    //   file (`getArbiterMistakeStreak(arbiter) == 1` after resolveAppeal). The
+    //   half that goes is only the hand's.
+    //
+    // ⚠️ `test_OverturnedWithAppealInFlightStillRefusesAsAppealInProgress` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF. It asserted which of two refusals `overturnVerdict`
+    //   gives when an appeal is running (`AppealInProgress`, not
+    //   `AlreadyOverturned`). Both errors are kept as declarations; nothing in the
+    //   facet raises `AppealInProgress` any more, because the only function that
+    //   did was this door.
+    //
+    // ⚠️ `test_PanelVindicatingTheArbiterClearsHisMistake` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- hand overturns (mistake one), losing
+    //   side appeals, panel flips back, the booking is taken off him. Step one is
+    //   gone, so steps two to four cannot be entered.
+    //
+    // ⚠️ `test_VindicationAfterDemotionDoesNotUnderflowTheStreak` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION. It drove the streak to the demotion
+    //   threshold and then vindicated, to prove the subtraction could not wrap
+    //   below zero. The subtraction itself is gone with the branch; there is no
+    //   arithmetic left to underflow.
+    //
+    // ⚠️ `test_PanelVindicationTakesBackOneOverturn` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- the same sequence, asserting that ONE
+    //   overturn came back off `overturnedVerdicts` and not the whole count.
+    //
+    // ⚠️ `test_VindicationCannotUnderflowTheOverturnCount` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION -- the `overturnedVerdicts` twin of the
+    //   streak underflow scene above, and gone for the same reason.
+    //
+    // ⚠️ `testOverturnVerdictWorksWithNobodyToHearAnAppeal` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF. It pinned that the hand could still press when the
+    //   corps was too small to hear an appeal. There is no hand to press.
+    //
+    // ⚠️ `testOverturnVerdict_RevertsDuringActiveAppeal` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF -- the same refusal as the scene above, reached by
+    //   the older and plainer route.
+    //
+    // ⚠️ `testUnfreezeVerdict_RevertsDuringActiveAppeal` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF -- `unfreezeVerdict` refusing while an appeal runs.
+    //
+    // ⚠️ `testUnfreezeVerdict_WorksWithNoAppealInProgress` IS GONE (9 October 2026).
+    //   ABOUT THE DOOR ITSELF -- the freeze/release pair pressed by hand.
+    //   ⚠️ NOT the same thing as the freeze an APPEAL raises, which is alive and
+    //   tested elsewhere: `raiseAppeal` still sets `v.frozen` and `resolveAppeal`
+    //   still clears it, so the appeal's own hold has its own scenes.
+    //
     // ============================================================
     //  ITEM 101 — THE OTHER HALF OF THE FRACTION (21 August 2026)
     //
@@ -3817,7 +3704,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     /// silently no-op under this repo's via_ir build.
     function _disputeAndFinalizeClean(address cli, address exc) internal {
         address agr = _disputeToVerdict(cli, exc, true);
-        vm.warp(vm.getBlockTimestamp() + 24 hours + 1);
+        vm.warp(vm.getBlockTimestamp() + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
     }
 
@@ -3921,121 +3808,6 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
 
-    /// A PANEL THAT VINDICATES TAKES ONE BACK. The arbiter rules, the hand
-    /// overturns him (+1), the loser appeals, the panel flips the ruling back
-    /// to the ARBITER'S OWN — so in the end his verdict stands, and a mark
-    /// against him for this dispute would be the record lying. Same argument
-    /// that made the streak give one back when that rule was first written.
-    function test_PanelVindicationTakesBackOneOverturn() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-
-        // One overturn on ANOTHER dispute first: it must survive untouched.
-        // Subtracting the whole count here would erase mistakes the panel said
-        // nothing about.
-        _disputeAndOverturn(address(0x7501), address(0x7502), arbiter);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 1,
-            "setup: one overturn on an unrelated dispute"
-        );
-
-        address agr = _disputeToVerdict(address(0x7503), address(0x7504), true);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 2,
-            "setup: the hand booked the second"
-        );
-
-        // The hand flipped clientWins to false, so the client is the loser and
-        // the one who may appeal.
-        address cli = address(0x7503);
-        usdc.mint(cli, 100 * 10**6);
-        vm.prank(cli);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(cli);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertTrue(
-            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins,
-            "scene is not the one: the panel must have restored the arbiter's ruling"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 1,
-            "ONE taken back, and only one: the other dispute is still his"
-        );
-    }
-
-    /// The floor under that subtraction. ⚠️ CORRECTED IN REVIEW ROUND 1: the
-    /// first version of this docstring called the path "live", and it is not.
-    /// After the cut every +1 has a strictly earlier +1 behind it, and nothing
-    /// zeroes the field. The migration window — overturned before the cut,
-    /// appealed after — needs raiseAppeal, which needs four arbiters, and the
-    /// chain has one.
-    ///
-    /// The scene stays anyway, and not out of habit: without the guard 0 − 1
-    /// wraps to 2²⁵⁶−1 and stands in a permanent record as this arbiter's
-    /// overturn count. A cheap check against an expensive lie.
-    ///
-    /// Seeded with vm.store because that history cannot be replayed on a fresh
-    /// stand — the increment is in the same transaction as the overturn.
-    function test_VindicationCannotUnderflowTheOverturnCount() public {
-        (address a2, address a3, address a4) = _addAppealQuorumArbiters();
-
-        address agr = _disputeToVerdict(address(0x7601), address(0x7602), true);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-
-        // Wind the counter back to the state a pre-cut overturn leaves: the
-        // hand's booking never happened, because the field did not exist.
-        vm.store(
-            address(diamond),
-            keccak256(abi.encode(arbiter, uint256(ARB_STORAGE_BASE) + SLOT_OVERTURNED_VERDICTS)),
-            bytes32(uint256(0))
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 0,
-            "setup: nothing in the counter, exactly as on the day of the cut"
-        );
-
-        address cli = address(0x7601);
-        usdc.mint(cli, 100 * 10**6);
-        vm.prank(cli);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(cli);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-
-        // Must not revert on an arithmetic underflow.
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
-
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter), 0,
-            "nothing left to take back, and nothing wrapped around"
-        );
-        // Said as its own assertion rather than left to the reader of a zero:
-        // the failure this guards is not a revert, it is a plausible-looking
-        // enormous number in a permanent record.
-        assertLt(
-            ArbiterAccountabilityFacet(address(diamond)).getOverturnedVerdicts(arbiter),
-            type(uint256).max,
-            "an unguarded subtraction would have wrapped, not reverted"
-        );
-    }
-
     /// ⚠️ REWRITTEN ON PURPOSE, 17 September 2026 (the owner's appeal
     /// economics). Until then this was `testResolveAppeal_UpholdForfeitsDepositNoPenalty`
     /// and asserted "the vault grows by the whole $20". Now the deposit pays the
@@ -4072,7 +3844,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization.
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(uint8(Agreement(agr).status()), uint8(Agreement.Status.RESOLVED));
     }
@@ -4127,7 +3899,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization, not the executor.
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
         assertEq(uint8(Agreement(agr).status()), uint8(Agreement.Status.RESOLVED));
     }
@@ -4216,92 +3988,6 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         vm.expectRevert(ArbiterRegistryFacet.AppealAlreadyResolved.selector);
         ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr); // second call must revert
-    }
-
-    /// The owner's own safety valve is untouched by the appeal flow, measured
-    /// on a corps that holds nobody who could review anything.
-    ///
-    /// ⚠️ NO APPEAL IS RAISED HERE ANY MORE (23 September 2026). It used to be
-    /// refused at the door, and the refusal was what made the rest of this
-    /// scene readable: nothing had been taken, so the balance at the end was
-    /// the mint plus the payout. Raising one now would freeze the verdict and
-    /// lock the deposit for four days, which is a different scene. What this
-    /// one holds is the valve.
-    function testOverturnVerdictWorksWithNobodyToHearAnAppeal() public {
-        // setUp() registers only the default `arbiter` — no extra arbiters here.
-        address agr = _disputeToVerdict(client, executor, true);
-
-        usdc.mint(executor, 100 * 10**6);
-        vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
-
-        // The pre-existing owner/DAO safety valve is untouched.
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1);
-
-        vm.warp(block.timestamp + 24 hours + 1);
-        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
-        // Nothing was ever pulled from the executor — he keeps the full 100 USDC
-        // mint, plus the payout.
-        assertEq(usdc.balanceOf(executor), 100 * 10**6 + AMOUNT);
-    }
-
-    // Final-review Finding A: owner's overturnVerdict() and unfreezeVerdict() must not be
-    // usable while an appeal is actively in progress (appealed=true, appealResolved=false) —
-    // otherwise overturnVerdict could double-slash the same arbiter on top of resolveAppeal,
-    // and unfreezeVerdict could let finalizeVerdict bypass the in-flight vote entirely.
-    //
-    // ⚠️ HALF OF THAT RATIONALE HAS SINCE MOVED (18 August 2026, on review of the
-    // one-mistake-per-verdict gate).
-    // The double-slash is now impossible with or without this guard: a hand press would
-    // set `overturned`, and resolveAppeal then books nothing and takes the press's booking
-    // back. What still rests on this guard is the OTHER half — a hand must not pre-empt a
-    // vote that is running. The guard is kept for that, and the test below is unchanged.
-    function testOverturnVerdict_RevertsDuringActiveAppeal() public {
-        _addAppealQuorumArbiters();
-        address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
-
-        usdc.mint(executor, 100 * 10**6);
-        vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        vm.expectRevert(ArbiterRegistryFacet.AppealInProgress.selector);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agr, false);
-    }
-
-    function testUnfreezeVerdict_RevertsDuringActiveAppeal() public {
-        _addAppealQuorumArbiters();
-        address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
-
-        usdc.mint(executor, 100 * 10**6);
-        vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
-        vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
-        vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-
-        // Owner (test contract) attempts to unfreeze mid-appeal — must revert, not bypass
-        // the in-progress vote.
-        vm.expectRevert(ArbiterRegistryFacet.AppealInProgress.selector);
-        ArbiterRegistryFacet(address(diamond)).unfreezeVerdict(agr);
-    }
-
-    // Sanity check: unfreezeVerdict() still works fine outside of any appeal (the guard only
-    // fires when appealed && !appealResolved — freezeVerdict()'s own standalone use, with no
-    // appeal ever raised, must be unaffected).
-    function testUnfreezeVerdict_WorksWithNoAppealInProgress() public {
-        address agr = _disputeToVerdict(client, executor, true);
-
-        ArbiterRegistryFacet(address(diamond)).freezeVerdict(agr);
-        ArbiterRegistryStorage.PendingVerdict memory frozen = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
-        assertTrue(frozen.frozen);
-
-        ArbiterRegistryFacet(address(diamond)).unfreezeVerdict(agr);
-        ArbiterRegistryStorage.PendingVerdict memory unfrozen = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
-        assertFalse(unfrozen.frozen);
     }
 
     /// The bond behind a hand-given seat (8 September 2026).

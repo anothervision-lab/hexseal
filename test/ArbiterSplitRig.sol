@@ -159,6 +159,17 @@ abstract contract ArbiterSplitRig {
     /// about a diamond that does not exist.
     ///
     /// The caller must be the diamond's owner.
+    /// ⚠️ AND THE THREE DOORS DeployFull STOPPED MOUNTING ON 9 OCTOBER 2026 HAVE TO
+    /// COME ALONG, or this helper leaves the old registry address standing for them
+    /// and the facet count moves by one. Measured: without them, nine `*Upgrade`
+    /// stands red in `setUp` with "the conformed rig has a different number of facets
+    /// than the live chain had", and 161 tests stop existing while the SUITE COUNT
+    /// does not move.
+    ///
+    /// They land on `registryImpl` through the dispatcher's default route, which does
+    /// not implement them, so a call reverts in its fallback — honest, and the same
+    /// reasoning as `_mountRemovedVerdictHandDoors` below: what these stands need is
+    /// the ROUTING TABLE in the chain's shape, not a working verdict hand.
     function _mountArbiterAsOneHost(address diamond) internal returns (address host) {
         DeployFull deployFull = new DeployFull();
         bytes4[] memory regSels = deployFull.arbiterRegistryFacetSelectors();
@@ -170,7 +181,9 @@ abstract contract ArbiterSplitRig {
             )
         );
 
-        bytes4[] memory mounted = _splitRigMountedOnly(diamond, _splitRigConcat(regSels, vaultSels));
+        bytes4[] memory mounted = _splitRigMountedOnly(
+            diamond, _splitRigConcat(_splitRigConcat(regSels, vaultSels), verdictHandDoors())
+        );
         if (mounted.length == 0) return host;
 
         IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](1);
@@ -256,6 +269,80 @@ abstract contract ArbiterSplitRig {
         if (host == address(0)) return 0;
 
         bytes4[] memory scratch = new bytes4[](3);
+        for (uint256 i = 0; i < gone.length; i++) {
+            if (IDiamondLoupe(diamond).facetAddress(gone[i]) != address(0)) continue;
+            bool inCensus;
+            for (uint256 j = 0; j < census.length; j++) {
+                if (census[j] == gone[i]) { inCensus = true; break; }
+            }
+            if (inCensus) scratch[mounted++] = gone[i];
+        }
+        if (mounted == 0) return 0;
+
+        bytes4[] memory add = new bytes4[](mounted);
+        for (uint256 i = 0; i < mounted; i++) add[i] = scratch[i];
+
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](1);
+        cut[0] = IDiamondCut.FacetCut(host, IDiamondCut.FacetCutAction.Add, add);
+        _vm.prank(_splitRigOwner(diamond));
+        IDiamondCut(diamond).diamondCut(cut, address(0), "");
+    }
+
+    /// THE THREE DOORS OF THE GOVERNANCE HAND OVER A VERDICT, by their bytes.
+    ///
+    /// `overturnVerdict(address,bool)` 0x42a71c6c, `freezeVerdict(address)`
+    /// 0x5533316c and `unfreezeVerdict(address)` 0x69315118. Literals, hand-computed
+    /// with `cast sig`: there is nothing left in the tree to take them from, and that
+    /// is the point.
+    function verdictHandDoors() internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](3);
+        s[0] = bytes4(0x42a71c6c);
+        s[1] = bytes4(0x5533316c);
+        s[2] = bytes4(0x69315118);
+    }
+
+    /// THE THREE DOORS THIS CHECKOUT NO LONGER BUILDS AND THE CHAIN NO LONGER
+    /// ROUTES, put back so a rig can still be the diamond its census describes.
+    ///
+    /// On 9 October 2026 the governance hand over a verdict left
+    /// ArbiterRegistryFacet, and the `Remove` group of
+    /// script/UpgradeOctoberBatch.s.sol took the same three off Base Sepolia the same
+    /// day (block 47 872 983). script/DeployFull.s.sol follows the chain, so it stops
+    /// mounting them — but every census read BEFORE that cut holds all three, and a
+    /// stand rehearsing a past cut has to mount them itself. `_conformToCensus` says
+    /// so in the very message that sends a reader here.
+    ///
+    /// ⚠️ WORSE THAN A MISSING DOOR: the signed cuts these stands replay name the
+    /// three in a `Replace` group, and `Replace` reverts on a selector the diamond
+    /// does not route — taking the whole cut and the stand's `setUp` with it.
+    /// Measured: nine suites collapsing to one synthetic failure each, 161 tests
+    /// gone, and the SUITE COUNT unmoved through all of it.
+    ///
+    /// ⚠️ THEY ARE MOUNTED ON THE ARBITER REGISTRY THAT IS ALREADY THERE, not on a
+    /// stub, for the arithmetic reason `_mountRemovedApplicationDoors` gives above: a
+    /// fresh address would break the facet-count check before it reached the thing
+    /// under test. The facet does not implement the three, so pressing one lands in
+    /// its fallback and reverts — which is honest, because no stand here presses a
+    /// door that was removed; what they need is the ROUTING TABLE's shape.
+    ///
+    /// Only what the census actually holds and the rig does not already route is
+    /// added, so this is a no-op on a census read after the cut. The caller must be
+    /// able to prank the diamond's owner.
+    function _mountRemovedVerdictHandDoors(address diamond, bytes4[] memory census)
+        internal
+        returns (uint256 mounted)
+    {
+        bytes4[] memory gone = verdictHandDoors();
+
+        // `finalizeVerdict(address)` 0x49b6a9a5, a selector of the same facet that no
+        // cut has ever moved — it is in every committed census, checked. Asking the
+        // loupe where it lives is how the host is found, rather than by deploying
+        // one: the three belong beside their neighbours, on whatever address this rig
+        // put them.
+        address host = IDiamondLoupe(diamond).facetAddress(bytes4(0x49b6a9a5));
+        if (host == address(0)) return 0;
+
+        bytes4[] memory scratch = new bytes4[](gone.length);
         for (uint256 i = 0; i < gone.length; i++) {
             if (IDiamondLoupe(diamond).facetAddress(gone[i]) != address(0)) continue;
             bool inCensus;

@@ -148,6 +148,31 @@ library JobBoardStorage {
         // somebody withdraws and applies for the same job again, and it is what
         // `pruneClosedApplications` repairs when it removes an entry.
         mapping(address => mapping(uint256 => uint256)) appliedJobSlot;
+        // ---- appended 25 September 2026: decision 52, "what a person signed
+        //      up for is what will be" ----
+        //
+        // The fee floor in force at the moment this job was POSTED, stored
+        // beside `jobFeeHeld` above and written by the same two minters. The
+        // cancel settles against this and not against `FactoryStorage.feeFloor`
+        // as it stood when the cancel was pressed: measured 24 September 2026,
+        // raising the floor from $1 to $3 under a live $100 job made the cancel
+        // keep $3 where the client had agreed to lose $1.
+        //
+        // ZERO IS NOT "THE FLOOR WAS ZERO" — it cannot be, because
+        // `FactoryStorage.quote` refuses to price anything while the floor is
+        // zero and both writers of the floor refuse zero. Zero here means only
+        // "this job was posted before the cut", and
+        // `FactoryStorage.agreedFeeFloor` reads it as the live floor, which is
+        // the behaviour those jobs already have. Falling back cannot underflow
+        // and cannot lie to any rule, so nothing breaks without a back-fill.
+        //
+        // Whether the cut SHOULD carry one is the owner's call and is not
+        // settled here. Measured on Base Sepolia 25 September 2026: exactly two
+        // jobs are OPEN (ids 2 and 11) and no request is PENDING, and the floor
+        // has read 1000000 at every sampled block since it was seeded — so for
+        // both of them the fallback and a back-fill give the same number today.
+        // They diverge only if the floor is raised before the cut lands.
+        mapping(uint256 => uint256) jobFeeFloorAtPost;
     }
 
     function store() internal pure returns (Layout storage s) {
@@ -443,6 +468,10 @@ contract JobBoardFacet {
         _safeTransferFrom(fs.usdc, client, address(this), total);
         jbs.jobFunds[jobId]   = amount;
         jbs.jobFeeHeld[jobId] = fee;
+        // Decision 52: the floor this client agreed to, remembered next to the
+        // fee it is part of. `cancelJob` settles against this, not against the
+        // floor as it stands then.
+        jbs.jobFeeFloorAtPost[jobId] = fs.feeFloor;
 
         // --- Auto-mint job receipt NFT (non-blocking) ---
         try IJobReceiptMint(address(this)).mintJobReceipt(client, jobId, amount, deadlineDays, region, title) {} catch {}
@@ -505,6 +534,8 @@ contract JobBoardFacet {
         _safeTransferFrom(fs.usdc, client, address(this), amount + fee);
         s.jobFunds[jobId]   = amount;
         s.jobFeeHeld[jobId] = fee;
+        // Decision 52 — see the note on the field.
+        s.jobFeeFloorAtPost[jobId] = fs.feeFloor;
 
         // --- Auto-mint job receipt NFT (non-blocking) ---
         try IJobReceiptMint(address(this)).mintJobReceipt(client, jobId, amount, deadlineDays, region, title) {} catch {}
@@ -686,7 +717,11 @@ contract JobBoardFacet {
         // There was no deal — the percentage is refunded, the floor stays with the protocol.
         uint256 feeHeld = s.jobFeeHeld[jobId];
         s.jobFeeHeld[jobId] = 0;
-        uint256 floor_ = fs.feeFloor;
+        // The floor THIS JOB WAS POSTED UNDER, not the one standing now. Moving
+        // the floor afterwards does not move the terms of a job already on the
+        // board — in either direction. Zero falls back to the live floor and
+        // means "posted before this cut"; it cannot mean a zero floor.
+        uint256 floor_ = FactoryStorage.agreedFeeFloor(fs, s.jobFeeFloorAtPost[jobId]);
         uint256 burned = feeHeld < floor_ ? feeHeld : floor_;
 
         // The client first, the fee recipient second, and the second can no

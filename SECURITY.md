@@ -6,11 +6,17 @@
 - The USDC is test USDC. There is no real money in this system.
 - There has been **no external audit**.
 - There is **no bug bounty and no reward** of any kind.
-- The protocol is not fully autonomous. One key can replace any facet, can overturn a
-  dispute verdict before it is finalized, and can freeze or unfreeze one. Those powers are
-  documented in [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md), together with the
-  event that ends each of them. A report that the owner key can upgrade the contracts is
-  not a finding; it is the documented design.
+- The protocol is not fully autonomous. One key can replace any facet, and that power
+  subsumes every guarantee below it. ~~It can also overturn a dispute verdict before it is
+  finalized, and freeze or unfreeze one~~ — **removed from the protocol on 9 October 2026.**
+  Those three doors are mounted on nothing: `facetAddress()` on the live diamond answers the
+  zero address for `overturnVerdict`, `freezeVerdict` and `unfreezeVerdict` alike, and the
+  commands to check that are in [`CHANGELOG.md`](CHANGELOG.md). No key decides a dispute now —
+  a verdict is overturned only by a panel of three arbiters voting on an appeal. What the
+  owner key can and cannot still do is listed in
+  [`docs/DECENTRALIZATION.md`](docs/DECENTRALIZATION.md), together with the event that ends
+  each power. A report that the owner key can upgrade the contracts is not a finding; it is
+  the documented design.
 
 ## Reporting
 

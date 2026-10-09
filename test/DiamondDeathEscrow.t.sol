@@ -260,7 +260,9 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
     // bargain — a LIVE diamond still blocks the hatch.
 
     function _runArbiterTimeoutUnclaimed(Kill mode) internal returns (bool ok) {
-        Agreement a = _activated();
+        // _markedDone, not _activated: the hatch is what this measures, and an
+        // unclaimed timeout with no hand-in returns the whole pot to the client.
+        Agreement a = _markedDone();
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -360,7 +362,9 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
     // Before the fix the second half read assertFalse — that was the hole.
 
     function _assertHatchIsTheOnlyDoorAndItOpens(Kill mode) internal {
-        Agreement a = _activated();
+        // _markedDone, not _activated: the hatch is what this measures, and an
+        // unclaimed timeout with no hand-in returns the whole pot to the client.
+        Agreement a = _markedDone();
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -413,7 +417,9 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
     /// no longer a trap, and this measures exactly that: raise it mid-outage,
     /// then walk back out with the money.
     function _assertDisputeRaisedMidOutageStillHasAWayOut(Kill mode) internal {
-        Agreement a = _activated();
+        // Handed in before the outage: this scene is about getting back out of a
+        // dispute raised while the diamond is deaf, not about delivery.
+        Agreement a = _markedDone();
         _kill(mode);
         _assertDiamondReallyDeaf(mode);
 
@@ -737,7 +743,9 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
     /// would be handed 63/64 of the transaction and nothing would be left to
     /// pay anyone.
     function testGasBurningVerdictFacetCannotBlockTheHatch() public {
-        Agreement a = _activated();
+        // _markedDone, not _activated: the hatch is what this measures, and an
+        // unclaimed timeout with no hand-in returns the whole pot to the client.
+        Agreement a = _markedDone();
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);

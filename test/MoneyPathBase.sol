@@ -110,7 +110,9 @@ abstract contract MoneyPathBase is Test {
     uint256 constant AUTO_APPROVE_WINDOW = 2 days;
     uint256 constant DISPUTE_WINDOW      = 4 days;
     uint256 constant DEADLINE_GRACE      = 1 days;
-    uint256 constant FINALIZE_DELAY      = 24 hours;
+    uint256 constant FINALIZE_DELAY      = 72 hours;  // 24 -> 72 h on 9 Oct 2026, following FINALIZE_DELAY in the facet.
+    // Typed out by hand rather than imported, deliberately: a test that asked
+    // the contract what its own window is would be green at any window.
 
     string constant TERMS = "terms";
 
@@ -226,7 +228,7 @@ abstract contract MoneyPathBase is Test {
         receiptSels[2] = JobReceiptFacet.isJobReceiptBurned.selector;
         receiptSels[3] = JobReceiptFacet.getTokenIdByJobId.selector;
 
-        bytes4[] memory arbSels = new bytes4[](11);
+        bytes4[] memory arbSels = new bytes4[](10);
         arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
@@ -234,10 +236,9 @@ abstract contract MoneyPathBase is Test {
         arbSels[4] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[5] = ArbiterRegistryFacet.finalizeVerdict.selector;
         arbSels[6] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbSels[7] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[8] = ArbiterRegistryFacet.raiseAppeal.selector;
-        arbSels[9] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        arbSels[10] = ArbiterRegistryFacet.resolveAppeal.selector;
+        arbSels[7] = ArbiterRegistryFacet.raiseAppeal.selector;
+        arbSels[8] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        arbSels[9] = ArbiterRegistryFacet.resolveAppeal.selector;
         bytes4[] memory arbSelsVault = new bytes4[](28);
         arbSelsVault[0] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.getDisputeClaimer.selector;
@@ -631,6 +632,16 @@ abstract contract MoneyPathBase is Test {
     function _activate(Agreement a) internal {
         vm.prank(executor);
         a.activate();
+    }
+
+    /// The executor hands the work in. Every scene below whose subject is the
+    /// SPLIT rather than delivery needs this since 25 September 2026: the
+    /// unclaimed-timeout branch now pays the executor nothing at all without a
+    /// markDone on the record, so an attendance test that skips the hand-in
+    /// stopped being a test about attendance.
+    function _handIn(Agreement a) internal {
+        vm.prank(executor);
+        a.markDone();
     }
 
     function _claimByArbiter(Agreement a) internal {

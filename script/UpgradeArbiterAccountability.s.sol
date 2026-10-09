@@ -703,10 +703,10 @@ contract UpgradeArbiterAccountability is Script {
         // The verdict
         sels[9]  = ArbiterRegistryFacet.submitVerdict.selector;
         sels[10] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        sels[11] = ArbiterRegistryFacet.overturnVerdict.selector;
+        sels[11] = bytes4(0x42a71c6c) /* overturnVerdict(address,bool), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[12] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        sels[13] = ArbiterRegistryFacet.freezeVerdict.selector;
-        sels[14] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        sels[13] = bytes4(0x5533316c) /* freezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
+        sels[14] = bytes4(0x69315118) /* unfreezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[15] = ArbiterRegistryFacet.clearStuckVerdict.selector;
 
         // The appeal

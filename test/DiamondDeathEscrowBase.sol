@@ -274,7 +274,7 @@ abstract contract DiamondDeathEscrowBase is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
 
-        bytes4[] memory arbSels = new bytes4[](19);
+        bytes4[] memory arbSels = new bytes4[](16);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -288,12 +288,9 @@ abstract contract DiamondDeathEscrowBase is Test {
         arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
         arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
 
         bytes4[] memory accSels = new bytes4[](3);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterDeals.selector;

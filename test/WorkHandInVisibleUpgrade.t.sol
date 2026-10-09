@@ -457,6 +457,10 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
         // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
         // applications facet that is already here rather than on a stub.
         _mountRemovedApplicationDoors(address(d), census);
+        // And the three doors of the governance hand over a verdict, which left the
+        // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
+        // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
+        _mountRemovedVerdictHandDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

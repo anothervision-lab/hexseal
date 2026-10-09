@@ -166,10 +166,25 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // it is compared with keeps growing. See `_grownAfterThisCut`.
         upgrade.assertReplaceListCovers(upgrade.replaceSelectors(), _compiledAsThisCutSawIt());
         assertEq(
-            upgrade.artifactSelectors().length,
+            upgrade.artifactSelectors().length + _shrunkAfterThisCut().length,
             ARBITER_SELECTORS + _grownAfterThisCut().length,
-            "the compiled ArbiterRegistryFacet exposes a different number of functions than this cut mounts plus what is queued behind it"
+            "the compiled ArbiterRegistryFacet exposes a different number of functions than this cut mounts plus what is queued behind it, less what has left it"
         );
+    }
+
+    /// ⚠️ WHAT THE PAIR **LOST** AFTER THIS CUT WAS SIGNED (9 October 2026), by
+    /// SIGNATURE TEXT for the same reason the growth list uses it: the three doors
+    /// of the governance hand over a verdict are not in this checkout, so there is
+    /// no `.selector` to take, and a hand-typed signature keeps the four bytes
+    /// checkable by a reader. Verified offline with `cast sig`:
+    /// 0x42a71c6c / 0x5533316c / 0x69315118.
+    ///
+    /// Named rather than counted: a FOURTH door leaving still reds here.
+    function _shrunkAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](3);
+        sels[0] = bytes4(keccak256("overturnVerdict(address,bool)"));
+        sels[1] = bytes4(keccak256("freezeVerdict(address)"));
+        sels[2] = bytes4(keccak256("unfreezeVerdict(address)"));
     }
 
     /// ⚠️ WHAT THE PAIR GREW **AFTER** THIS CUT WAS SIGNED — by SIGNATURE TEXT,
@@ -695,7 +710,18 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
             // The pair: this cut mounted ONE facet, and that facet is two files
             // since the 16 September 2026 split. Same set of functions either
             // way — that is what makes it a split and not a change.
-            _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
+            // ⚠️ AND THE THREE THE PAIR LOST ON 9 OCTOBER 2026 GO ON DEPLOYFULL'S
+            // SIDE, which is the mirror of the growth above. The governance hand over
+            // a verdict — `overturnVerdict(address,bool)`, `freezeVerdict(address)`,
+            // `unfreezeVerdict(address)` — left ArbiterRegistryFacet and left the
+            // diamond the same day, so `DeployFull` no longer mounts them while this
+            // cut's record still does. Named by their bytes in
+            // ArbiterSplitRig.verdictHandDoors(), never counted: a fourth door
+            // leaving still reds here.
+            _concat(
+                _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
+                verdictHandDoors()
+            ),
             "this cut vs DeployFull"
         );
     }
@@ -769,6 +795,10 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // ArbiterSplitRig._mountRemovedApplicationDoors for why they go on the
         // applications facet that is already here rather than on a stub.
         _mountRemovedApplicationDoors(address(d), census);
+        // And the three doors of the governance hand over a verdict, which left the
+        // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
+        // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
+        _mountRemovedVerdictHandDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

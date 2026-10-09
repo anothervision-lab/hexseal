@@ -39,7 +39,24 @@ contract MockAgreementForFinalize {
     }
 
     function status() external pure returns (uint8) { return 4; } // DISPUTED
-    function disputedAt() external view returns (uint256) { return block.timestamp; }
+
+    /// ⚠️ ZERO MEANS "NOW", WHICH IS WHAT EVERY SCENE BUT ONE WANTS. The clock
+    /// used to be `block.timestamp` flat, so the dispute window could never be
+    /// made to run out and `abandonClaim` was unreachable on this bench. Needed
+    /// since 9 October 2026, when `_driveToAutoDemotion` lost the owner's
+    /// overturn and had to book its mistakes some other way. Left as an OVERRIDE
+    /// rather than a stored timestamp written in the constructor, so that every
+    /// existing scene keeps the behaviour it was written under -- a mock whose
+    /// dispute is always fresh -- and only the scene that needs an expired window
+    /// asks for one.
+    uint256 public disputedAtOverride;
+
+    function disputedAt() external view returns (uint256) {
+        return disputedAtOverride == 0 ? block.timestamp : disputedAtOverride;
+    }
+
+    function setDisputedAt(uint256 t) external { disputedAtOverride = t; }
+
     function DISPUTE_WINDOW() external pure returns (uint256) { return 30 days; }
     function setArbiter(address) external {}
     function resolveDispute(bool) external {}
@@ -80,6 +97,19 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         vm.store(address(acc), OWNER_SLOT, bytes32(uint256(uint160(owner))));
         _makeArbiter(acc, arbiter);
         _setChief(acc, chief);
+
+        // ⚠️ THE CHAIN STARTS AT A SANE EPOCH, AND IT HAS TO (9 October 2026).
+        // Forge's default `block.timestamp` is 1, and `_driveToAutoDemotion` now
+        // runs a dispute window OUT by moving the deal's clock BACK rather than
+        // the chain's forward -- it must not move the chain, because the callers
+        // read `t0` before it and assert the suspension lands at exactly
+        // `t0 + 72 hours`. At a timestamp of 1 there is no earlier moment to put
+        // the dispute at, so the subtraction would underflow.
+        //
+        // Every assertion in this file is relative to `vm.getBlockTimestamp()`,
+        // so moving the start costs nothing and nothing here reads an absolute
+        // date.
+        vm.warp(365 days);
     }
 
     function test_OwnerSuspends() public {
@@ -368,7 +398,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
 
         assertEq(acc.getCleanVerdicts(arbiter), 0, "before finalisation there is no service");
 
-        vm.warp(vm.getBlockTimestamp() + 24 hours);
+        vm.warp(vm.getBlockTimestamp() + 72 hours); // FINALIZE_DELAY, 24 -> 72 h on 9 Oct 2026
         reg.finalizeVerdict(address(agreement));
 
         assertEq(acc.getCleanVerdicts(arbiter), 1, "an unoverturned verdict added service");
@@ -397,15 +427,49 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
     // ============================================================
 
     /// Drives `arbiter` to the automatic threshold by the real road: three
-    /// overturned verdicts in a row on three different deals. No vm.store into the
+    /// judicial mistakes in a row on three different deals. No vm.store into the
     /// mistake counter — otherwise the test would be staging a scene the production
     /// code might never reach.
+    ///
+    /// ⚠️ THE MISTAKES ARE MISSED WINDOWS NOW, NOT THE OWNER'S OVERTURNS
+    /// (9 October 2026). This loop used to claim, submit a verdict and then call
+    /// `overturnVerdict`; that door is gone. What this helper is FOR is reaching
+    /// MAX_ARBITER_MISTAKES, and `arbiterMistakeStreak` counts every path the same
+    /// — `_recordArbiterMistake` increments it before it looks at which road the
+    /// mistake came down. So the cheapest surviving road is taken: the arbiter
+    /// claims the dispute and never rules, and a stranger takes the dead claim off
+    /// him with `abandonClaim`.
+    ///
+    /// ⚠️ WHAT THIS CHANGES ABOUT THE SCENE, SAID RATHER THAN GLOSSED OVER. The
+    /// cumulative `overturnedVerdicts` counter is NOT touched by this road — it is
+    /// an allow-list of `OwnerOverturn` and `AppealVote` — so a scene that read
+    /// that counter could not use this helper. Nothing in this file reads it: what
+    /// these tests prove is that an arbiter the automatic road has stopped cannot
+    /// finalize, and the suspension is set by the streak alone.
+    ///
+    /// ⚠️ NO VERDICT IS SUBMITTED, and `abandonClaim` requires exactly that
+    /// (`VerdictAlreadySubmitted` otherwise) — the door's whole subject is a
+    /// dispute nobody ruled on. The window is run out by moving the DEAL's clock
+    /// back rather than by warping the chain's forward, so the timestamps the
+    /// callers measure afterwards are left where they were.
     function _driveToAutoDemotion() internal {
         for (uint256 i = 0; i < 3; i++) {
             MockAgreementForFinalize mistake =
                 new MockAgreementForFinalize(address(uint160(0xD00 + i)), address(uint160(0xE00 + i)));
-            _advanceToSubmittedVerdict(mistake, bytes32(uint256(100 + i)));
-            reg.overturnVerdict(address(mistake), false);
+
+            bytes32 salt = bytes32(uint256(100 + i));
+            vm.prank(arbiter);
+            reg.commitDisputeClaim(keccak256(abi.encodePacked(address(mistake), arbiter, salt)));
+            // vm.getBlockNumber() rather than block.number — see the note on
+            // _advanceToSubmittedVerdict, which this loop used to call.
+            vm.roll(vm.getBlockNumber() + 1);
+            vm.prank(arbiter);
+            reg.claimDispute(address(mistake), salt, bytes32(uint256(1)), bytes32(uint256(2)));
+
+            // The window has run out on him: the deal's dispute is older than
+            // DISPUTE_WINDOW, so the claim is dead and anybody may say so.
+            mistake.setDisputedAt(vm.getBlockTimestamp() - 31 days);
+            reg.abandonClaim(address(mistake));
         }
     }
 
@@ -724,5 +788,274 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         assertEq(removalCount, 509, "the removals field returns its own number");
         assertEq(lastRemovalAt, 510, "the moment field returns its own");
         assertEq(lastRemovalCause, uint8(211), "the cause field returns its own");
+    }
+
+    // ============================================================
+    //  THE CEILING ON THE HAND (8 October 2026)
+    //
+    //  Until this date `suspendArbiter` had no counter and no check of any kind:
+    //  every press wrote a fresh 72-hour deadline, without limit, so one hand
+    //  could hold one arbiter stopped for ever by pressing every third day. The
+    //  owner's decision put a ceiling of three on it, with the count going back
+    //  to zero after a week in which nobody pressed.
+    //
+    //  ⚠️ EVERY NUMBER IN THIS SECTION IS TYPED OUT BY HAND and never read back
+    //  off the contract. A lock whose expectation comes from the thing it checks
+    //  agrees with anything: a test that asked `HAND_SUSPENSION_LIMIT` what the
+    //  limit is would be green at any limit. Three and a week are what a person
+    //  decided; if the code moves away from them, these tests must say so.
+    // ============================================================
+
+    uint256 constant HAND_LIMIT    = 3;
+    uint256 constant HAND_SILENCE  = 7 days;
+
+    /// The whole sentence the fourth press is answered with, typed out once so
+    /// that the two tests below cannot drift apart from each other.
+    ///
+    /// ⚠️ A STRING AND NOT A CUSTOM ERROR, deliberately: this refusal is read by
+    /// WHOEVER PRESSED, often from a bare `cast` call, and four bytes of selector
+    /// tell such a reader nothing at all.
+    string constant HAND_CEILING_REFUSAL =
+        "ArbiterAccountability: three suspensions already stand against this arbiter -"
+        " propose his removal (proposeRemoval), or leave him a week unpressed and the lever comes back";
+
+    /// Presses the lever `n` times, an hour apart, and asserts every one of them
+    /// landed. The hour between presses is not decoration: it makes each
+    /// deadline a different number, so "the press landed" is proved by a value
+    /// that moved and not by a value that was already there.
+    function _pressTheHand(uint256 n) internal {
+        for (uint256 i = 0; i < n; i++) {
+            uint256 t = vm.getBlockTimestamp();
+            acc.suspendArbiter(arbiter);
+            assertEq(
+                acc.getSuspendedUntil(arbiter),
+                t + 72 hours,
+                "a press inside the ceiling must land and write its own deadline"
+            );
+            vm.warp(t + 1 hours);
+        }
+    }
+
+    /// THE DESIGNATED LOCK for the ceiling itself.
+    function test_TheFourthSuspensionInARowIsRefused() public {
+        _pressTheHand(HAND_LIMIT);
+
+        uint256 held = acc.getSuspendedUntil(arbiter);
+
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+
+        // A refused press changes NOTHING: the check stands above every write in
+        // the function, so there is no half-pressed state to find.
+        assertEq(acc.getSuspendedUntil(arbiter), held, "a refused press must not move the deadline");
+    }
+
+    /// THE DESIGNATED LOCK for "the refusal names the right instrument".
+    ///
+    /// Asked by searching the returned bytes for the door's name rather than by
+    /// comparing the whole sentence: the sentence may be reworded, the duty to
+    /// name a door the refused presser can actually open may not.
+    ///
+    /// ⚠️ `proposeRemoval` AND NOT `removeArbiterForCause`, and that is measured
+    /// rather than chosen by taste: this ceiling binds the chief arbiter exactly
+    /// as it binds the owner, and `removeArbiterForCause` does not admit the
+    /// chief at all. Naming a door the refused presser may not be able to open
+    /// would be worse than naming none.
+    function test_TheRefusalNamesTheDoorToUseInstead() public {
+        _pressTheHand(HAND_LIMIT);
+
+        (bool ok, bytes memory ret) = address(acc).call(
+            abi.encodeWithSelector(ArbiterAccountabilityFacet.suspendArbiter.selector, arbiter)
+        );
+        assertFalse(ok, "wrong scene: the fourth press must be refused");
+        assertTrue(_bytesContain(ret, "proposeRemoval"), "the refusal must name the door to use instead");
+        assertTrue(_bytesContain(ret, "suspensions"), "and it must say what the refusal is about");
+    }
+
+    /// ONE LEVER, TWO HANDS. The count is per ARBITER and not per presser: the
+    /// owner and the chief share the brake, so sharing the count is what makes
+    /// the ceiling mean anything at all. Without this, two people hold six.
+    function test_TheCeilingBindsTheOwnerAndTheChiefTogether() public {
+        uint256 t = vm.getBlockTimestamp();
+        acc.suspendArbiter(arbiter);                 // owner, 1
+        vm.warp(t + 1 hours);
+        vm.prank(chief);
+        acc.suspendArbiter(arbiter);                 // chief, 2
+        vm.warp(vm.getBlockTimestamp() + 1 hours);
+        acc.suspendArbiter(arbiter);                 // owner, 3
+
+        vm.warp(vm.getBlockTimestamp() + 1 hours);
+        vm.prank(chief);
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// Three is three, not two: the ceiling must not refuse a press a person was
+    /// promised. Proved by the deadline of the third press, which is a number
+    /// that moved rather than a silence.
+    function test_TheThirdPressStillLands() public {
+        _pressTheHand(2);
+        uint256 t = vm.getBlockTimestamp();
+        acc.suspendArbiter(arbiter);
+        assertEq(acc.getSuspendedUntil(arbiter), t + 72 hours, "the third press is inside the ceiling");
+    }
+
+    /// THE DESIGNATED LOCK for "the lever comes back".
+    function test_AWeekOfSilenceGivesTheLeverBack() public {
+        _pressTheHand(HAND_LIMIT);
+        uint256 lastPress = vm.getBlockTimestamp() - 1 hours;
+
+        vm.warp(lastPress + HAND_SILENCE);
+        uint256 t = vm.getBlockTimestamp();
+        acc.suspendArbiter(arbiter);
+        assertEq(acc.getSuspendedUntil(arbiter), t + 72 hours, "after a week of silence the lever is whole");
+
+        // And the count really RESTARTED rather than being nudged down by one:
+        // two more land, the one after them does not.
+        vm.warp(vm.getBlockTimestamp() + 1 hours);
+        acc.suspendArbiter(arbiter);
+        vm.warp(vm.getBlockTimestamp() + 1 hours);
+        acc.suspendArbiter(arbiter);
+        vm.warp(vm.getBlockTimestamp() + 1 hours);
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// The boundary of the silence, from the side that must still refuse.
+    function test_OneSecondShortOfTheWeekStillRefuses() public {
+        _pressTheHand(HAND_LIMIT);
+        uint256 lastPress = vm.getBlockTimestamp() - 1 hours;
+
+        vm.warp(lastPress + HAND_SILENCE - 1);
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// THE DESIGNATED LOCK for "silence, not the calendar".
+    ///
+    /// A calendar reset — three a week, read as `block.timestamp / 7 days` — is
+    /// gamed by pressing three times just before a bucket boundary and three
+    /// more just after it, which doubles the ceiling at a moment the presser
+    /// picks. This scene stands on exactly that boundary: three presses end a
+    /// minute before an epoch-week boundary, and the fourth comes a minute after
+    /// it. Under a calendar rule the fourth would land. It must not.
+    function test_TheResetIsBySilenceAndNotByTheCalendar() public {
+        // A moment three minutes before an epoch multiple of seven days, so that
+        // three hourly presses and the fourth press straddle it.
+        uint256 boundary = ((vm.getBlockTimestamp() / HAND_SILENCE) + 2) * HAND_SILENCE;
+        vm.warp(boundary - 3 hours - 60);
+
+        _pressTheHand(HAND_LIMIT);                       // presses at -3h, -2h, -1h
+        assertLt(vm.getBlockTimestamp(), boundary, "wrong scene: the presses must sit before the boundary");
+
+        vm.warp(boundary + 60);
+        assertGt(vm.getBlockTimestamp(), boundary, "wrong scene: the fourth press must sit after the boundary");
+
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// THE OBVERSE LIE: a lift must NOT hand the press back.
+    ///
+    /// If it did, the ceiling would cost nothing at all — press, lift, press,
+    /// lift, for ever, with the arbiter stopped the whole time the window is
+    /// open. What hands the press back is a week of silence and nothing else.
+    function test_LiftingASuspensionDoesNotGiveThePressBack() public {
+        _pressTheHand(HAND_LIMIT);
+        acc.liftSuspension(arbiter);
+        assertFalse(acc.isSuspended(arbiter), "wrong scene: the lift must have worked");
+
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// The count belongs to the ARBITER, so filling it on one man leaves the
+    /// lever whole over everybody else. Without this a busy month would stop the
+    /// brake for the entire corps.
+    function test_TheCeilingIsPerArbiterAndNotProtocolWide() public {
+        address second = address(0xA2);
+        _makeArbiter(acc, second);
+
+        _pressTheHand(HAND_LIMIT);
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+
+        uint256 t = vm.getBlockTimestamp();
+        acc.suspendArbiter(second);
+        assertEq(acc.getSuspendedUntil(second), t + 72 hours, "another arbiter's lever is untouched");
+    }
+
+    /// A refused press on somebody who is not an arbiter must not spend an
+    /// allowance: the two older guards stand ABOVE the ceiling in the function,
+    /// so a mistyped address costs nothing.
+    function test_ARefusalOlderThanTheCeilingSpendsNothing() public {
+        vm.expectRevert(ArbiterAccountabilityFacet.NotAnArbiter.selector);
+        acc.suspendArbiter(stranger);
+        vm.expectRevert(ArbiterAccountabilityFacet.ArbiterZeroAddress.selector);
+        acc.suspendArbiter(address(0));
+
+        // All three presses are still there.
+        _pressTheHand(HAND_LIMIT);
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// THE DESIGNATED LOCK for "the ceiling binds the hand and not the chain".
+    ///
+    /// The automatic path writes `suspendedUntil` itself, from inside
+    /// `_recordArbiterMistake`, and must keep doing so with the hand's three
+    /// already spent. A ceiling that could be filled up by hand and thereby
+    /// silence the automaton would be a way to PROTECT a bad arbiter by pressing
+    /// at him — the exact opposite of what it is for.
+    ///
+    /// Proved by a deadline that MOVED: the hand's own window is walked out
+    /// first (otherwise `claimDispute` would refuse the arbiter on the way to
+    /// the third mistake), so the number this test reads afterwards can only
+    /// have been written by the automatic path.
+    function test_TheAutomatonIsNotBoundByTheHandsCeiling() public {
+        vm.store(address(reg), OWNER_SLOT, bytes32(uint256(uint160(owner))));
+        _makeArbiterReg(arbiter);
+
+        _pressTheHand(HAND_LIMIT);
+        uint256 lastPress = vm.getBlockTimestamp() - 1 hours;
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+
+        // Out the far end of the hand's own window, but nowhere near the week of
+        // silence — so the hand's three are still spent when the chain presses.
+        uint256 handWindowEnd = lastPress + 72 hours;
+        vm.warp(handWindowEnd);
+        assertFalse(acc.isSuspended(arbiter), "wrong scene: the hand's window must have let go");
+        assertEq(acc.getSuspendedUntil(arbiter), handWindowEnd, "wrong scene: and the old deadline is still on file");
+
+        _driveToAutoDemotion();
+
+        assertTrue(acc.isSuspended(arbiter), "the chain's own suspension must land with the hand's three spent");
+        assertGt(
+            acc.getSuspendedUntil(arbiter),
+            handWindowEnd,
+            "and it must be a NEW window rather than the hand's old one read back"
+        );
+
+        // And the hand is still refused, so the scene above did not quietly
+        // hand the press back by way of the automatic write.
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// Searches `haystack` for `needle`. Used by the refusal test above, because
+    /// what is being asked of the sentence is that it NAMES a door, not that it
+    /// is any particular sentence.
+    function _bytesContain(bytes memory haystack, string memory needle) internal pure returns (bool) {
+        bytes memory n = bytes(needle);
+        if (n.length == 0 || haystack.length < n.length) return false;
+        for (uint256 i = 0; i + n.length <= haystack.length; i++) {
+            bool same = true;
+            for (uint256 j = 0; j < n.length; j++) {
+                if (haystack[i + j] != n[j]) { same = false; break; }
+            }
+            if (same) return true;
+        }
+        return false;
     }
 }

@@ -129,6 +129,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
     function testAnUnclaimedTopUpComesBackAndABlockedClientDoesNotFreezeTheExit() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client); a.raiseDispute();
         vm.prank(client);
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
@@ -173,6 +174,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
     function testAPermanentlyBlockedPayerGetsAClaimNotADeadlock() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(executor); a.raiseDispute();
         vm.prank(executor);
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));

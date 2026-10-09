@@ -38,8 +38,11 @@ pragma solidity ^0.8.20;
 //
 // 2. THE RECIPIENTS. The foundation address is immutable and there is no
 //    function to name another one. The vault and the payroll can only be paid
-//    into the diamond. The reserve can only leave to the address the diamond
-//    names as the DAO.
+//    into the diamond. The reserve leaves to the address the diamond names as
+//    the DAO, or — only after it has waited RESERVE_DAO_WAIT for a DAO that
+//    never came — to the foundation. Both recipients are frozen: neither door
+//    takes an address as an argument, and there is no function that names a
+//    third one. The deadline is argued at RESERVE_DAO_WAIT.
 //
 // 3. THE CLAMPS. Every readable number is squeezed by a frozen bound, and the
 //    direction of each bound is chosen so that moving the number can never pay
@@ -109,11 +112,18 @@ pragma solidity ^0.8.20;
 //    still costs nothing.
 //
 // ------------------------------------------------------------
-// WHAT THE DIAMOND MUST MOUNT — READ THIS BEFORE DEPLOYING
+// WHAT THE DIAMOND MUST MOUNT — ALL OF IT IS MOUNTED NOW
 //
-// ⚠️ SIX selectors this contract calls DO NOT EXIST on the diamond as of
-// 4 September 2026 (checked against 0x760F07367888C62f7c2Dfb619A5e534132855ce5
-// on Base Sepolia, not against a document):
+// ⚠️ SUPERSEDED, AND KEPT RATHER THAN DELETED because the degradation paths
+// further down exist because of it, and because the rollout note below is the
+// record of an order that mattered. SIX selectors this contract calls did NOT
+// exist on the diamond as of 4 September 2026. ALL SIX ARE MOUNTED TODAY —
+// measured 25 September 2026 against 0x760F07367888C62f7c2Dfb619A5e534132855ce5
+// on Base Sepolia, by facetAddress() per selector, not out of a document: every
+// one of the six answers with facet 0xf444db229514D69C4ae61bcBc19CdC74B36eEa95.
+// Nothing below degrades any more for want of a route.
+//
+// The six, and what each is for:
 //
 //     getVaultTarget()               — the vault's target, in USDC. Decision 60
 //                                      wants that target expressed as a NUMBER
@@ -134,8 +144,9 @@ pragma solidity ^0.8.20;
 // getDaoThreshold() = 10 000, getUniqueActiveUsers() = 2, getDAOAddress(), and
 // isDaoActive() = false (routed to facet 0x508a708c39Aa3Fc13EA994DFafcc5AbC683ab04d).
 //
-// ⚠️ ORDER OF ROLLOUT. Mount the six FIRST, install this treasury with
-// setFeeRecipient SECOND. In the other order every distribute() in between runs
+// ⚠️ ORDER OF ROLLOUT — DONE, AND DONE IN THIS ORDER. Kept as the record, and
+// because it is still the rule for the next chain this is deployed on. Mount the
+// six FIRST, install this treasury with setFeeRecipient SECOND. In the other order every distribute() in between runs
 // fully degraded: the vault gets nothing, the payroll gets nothing, the
 // foundation gets FOUNDATION_BPS_UNREAD and the whole rest piles into the
 // reserve. Nothing is lost and nothing is stuck — but money laddered under the
@@ -465,6 +476,54 @@ contract ProtocolTreasury {
     /// until the foundation's ceiling started moving with the handover.)
     uint256 private constant DIAMOND_VIEW_GAS = 100_000;
 
+    /// How long the reserve waits for a DAO before it may leave to the
+    /// foundation instead.
+    ///
+    /// ⚠️ THIS IS THE ONE NUMBER. Moving the deadline is editing this line and
+    /// nothing else: everything downstream — the view, the refusal, the door —
+    /// is derived from it.
+    ///
+    /// WHY THE RESERVE NEEDS A DEADLINE AT ALL. Until this constant existed the
+    /// reserve had two exits and neither was one. withdrawReserve() needs the
+    /// diamond to name a DAO address AND its threshold of unique active users
+    /// to have been earned; topUpVault() only ever moves the arbiter vault's
+    /// shortfall, so it stops at the vault's target and RENAMES the money
+    /// rather than releasing it — the two conditions meet exactly at the target
+    /// and never overlap. A pot whose only way out waits on an event that may
+    /// never happen is a dead end, and the owner's money rule of 24 September
+    /// 2026 is that a dead end gets a door.
+    ///
+    /// ⚠️ WHAT THE DEADLINE DOES NOT DO: it does not cancel the promise. A DAO
+    /// that arrives — ever, before this or after it — takes the reserve, and
+    /// the foundation's door refuses for as long as one exists (daoHasArrived).
+    /// The deadline stops the promise BLOCKING the money; it does not transfer
+    /// the money away from the promise.
+    ///
+    /// WHY FOUR YEARS, and what the measurement settles and what it does not.
+    /// The threshold is not reachable on an ordinary timescale, and that is a
+    /// measurement rather than a feeling: read off the chain on 20 September
+    /// 2026, the comparable on-chain escrow (Kleros Escrow) had done 286 deals
+    /// in 7.3 years, about 39 a year. At two brand-new participants per deal —
+    /// the optimistic bound, since a repeat user is counted once — a threshold
+    /// of 1 000 unique users is about THIRTEEN YEARS away. So the deadline has
+    /// to sit well under that or it releases nothing; and it has to be long
+    /// enough that simply not handing governance over is a worse strategy than
+    /// handing it over, because the foundation's ceiling falls from
+    /// FOUNDATION_BPS_MAX to FOUNDATION_BPS_MAX_DAO the moment it is handed
+    /// over and never rises again — the party who controls the handover is
+    /// therefore paid to stall, and a short deadline pays him twice.
+    ///
+    /// ⚠️ BETWEEN THOSE TWO BOUNDS THE NUMBER IS A JUDGEMENT, NOT A
+    /// MEASUREMENT, and it is written down as one rather than dressed as
+    /// arithmetic. Four years is under a third of the optimistic
+    /// time-to-threshold and longer than the entire life of the dead comparable
+    /// (TalentLayer: 18 deals, zero disputes). Two years would make stalling
+    /// cheap. Six would make the door theatre: nobody now involved would still
+    /// be watching for it.
+    ///
+    /// 1 461 days is four years with one leap day in them.
+    uint256 public constant RESERVE_DAO_WAIT = 1_461 days;
+
     // ==========================================================
     //  IMMUTABLE
     // ==========================================================
@@ -477,6 +536,16 @@ contract ProtocolTreasury {
     /// paper agreement, not code. There is no function to change it, and that
     /// absence is the promise.
     address public immutable foundation;
+
+    /// When this contract was deployed, and the only clock it owns.
+    ///
+    /// The reserve's deadline is measured from here because there is nothing
+    /// else honest to measure it from: this contract has no administrator to
+    /// start a timer, and it cannot watch the diamond for a launch — a contract
+    /// cannot watch another one, which is the same fact latchDao() exists for.
+    /// Frozen at construction, so the deadline cannot be moved after the fact
+    /// by anybody, the diamond key included.
+    uint256 public immutable deployedAt;
 
     // ==========================================================
     //  STORAGE — the four pots
@@ -601,6 +670,17 @@ contract ProtocolTreasury {
     event ReserveWithdrawn(address indexed dao, uint256 amount);
     event FoundationWithdrawn(uint256 amount);
 
+    /// The reserve waited out RESERVE_DAO_WAIT without a DAO appearing, and
+    /// left for the foundation.
+    ///
+    /// A SEPARATE NAME FROM ReserveWithdrawn on purpose. The two carry the same
+    /// money out of the same pot to two different promises, and an indexer that
+    /// could not tell them apart would report a governance handover on a day
+    /// when the opposite happened — the handover failed to happen for four
+    /// years. The recipient is not indexed here because there is only ever one:
+    /// the immutable foundation.
+    event ReserveReleasedToFoundation(uint256 amount);
+
     /// The handover has been seen and written down. Emitted exactly once in the
     /// life of this contract, because daoLatched is written exactly once.
     event DaoLatched();
@@ -627,6 +707,20 @@ contract ProtocolTreasury {
     error DaoAlreadyLatched();
     error DaoNotHandedOver();
 
+    /// The reserve is still inside the window in which it is a DAO's money.
+    ///
+    /// It CARRIES THE SECONDS LEFT, and that is the whole point of declaring a
+    /// second error rather than reusing a bare one: from outside, "too early"
+    /// and "broken" are the same silence, and only one of the two is somebody's
+    /// fault. A caller who is handed a number can tell which he met.
+    error ReserveStillPromised(uint256 secondsRemaining);
+
+    /// A DAO exists, so the reserve is its money and the foundation's door is
+    /// shut — whatever the clock says. See daoHasArrived() for the three signs
+    /// that count, and RESERVE_DAO_WAIT for why the deadline never cancels the
+    /// promise, only its power to block.
+    error DaoHasArrived();
+
     /// A read this contract is not allowed to guess at came back unusable — the
     /// selector is gone, the facet reverted, or it tried to spend more than
     /// DIAMOND_VIEW_GAS instead of answering. Carries the selector so the
@@ -645,6 +739,7 @@ contract ProtocolTreasury {
         usdc       = usdc_;
         diamond    = diamond_;
         foundation = foundation_;
+        deployedAt = block.timestamp;
         _status    = NOT_ENTERED;
     }
 
@@ -788,11 +883,17 @@ contract ProtocolTreasury {
     /// @notice Send everything owed to the arbiter payroll into the diamond.
     /// Same shape and the same strictness as pushVault().
     ///
-    /// ⚠️ fundArbiterPayroll() and getArbiterPayrollBalance() are not mounted on
-    /// the diamond yet (see the file header). Until they are, this function
-    /// reverts and the payroll debt simply accumulates — which is also why the
-    /// payroll SHARE degrades to zero when unreadable: a pot no one can pay into
-    /// should not be filling.
+    /// ⚠️ THIS FUNCTION WORKS NOW. It used to say that fundArbiterPayroll() and
+    /// getArbiterPayrollBalance() were "not mounted on the diamond yet", so that
+    /// this push always reverted and the payroll debt merely accumulated. That
+    /// stopped being true and the sentence stayed, which is worse than saying
+    /// nothing: it told a reader not to bother pressing a door that opens.
+    /// MEASURED 25 September 2026 — facetAddress() on the diamond routes both
+    /// selectors to a live facet (see the file header for the numbers).
+    ///
+    /// What the old sentence explained is still true and still the reason the
+    /// payroll SHARE degrades to zero when its share is unreadable: a pot no one
+    /// can pay into should not be filling.
     function pushPayroll() external nonReentrant {
         uint256 amount = payrollOwed;
         if (amount == 0) revert NothingOwed();
@@ -902,6 +1003,128 @@ contract ProtocolTreasury {
         if (!IUSDC(usdc).transfer(dao, toSend)) revert TransferFailed();
 
         emit ReserveWithdrawn(dao, toSend);
+    }
+
+    // ==========================================================
+    //  THE RESERVE'S SECOND DOOR — THE DEADLINE
+    // ==========================================================
+
+    /// Release the whole reserve to the foundation, because it has waited
+    /// RESERVE_DAO_WAIT for a DAO that never came.
+    ///
+    /// OPEN TO ANYBODY, and deliberately not to the owner alone. An exit that
+    /// waits on the owner remembering to press it is an exit waiting on an
+    /// event that may never happen, which is the defect this door exists to
+    /// close; gating it on him would rebuild the defect one level up. The
+    /// shape is the one withdrawFoundation() already has and the one the
+    /// arbiter bank's surplus door copied on 24 September 2026: no gate, no
+    /// arguments, recipient read out of this contract's own immutable.
+    ///
+    /// THE PRESSER DECIDES NOTHING. There is no address argument and no amount
+    /// argument, so the only thing a caller chooses is the block. He cannot
+    /// send the money anywhere but the foundation, cannot split it, and cannot
+    /// leave a remainder behind for a second press to a different destination.
+    ///
+    /// ⚠️ WHAT THIS DOOR COSTS, SAID OUT LOUD. Once the deadline has passed and
+    /// no DAO exists, the reserve is in practice the foundation's: anybody may
+    /// press this at any moment, and every later distribute() refills a pot
+    /// that the same press empties again. The foundation address and the
+    /// diamond owner are the same party today, so this is the owner receiving
+    /// the reserve. That was the choice made on 24 September 2026 against the
+    /// alternative of leaving the reserve to wait for a DAO with no deadline at
+    /// all, and it is written here rather than only in a journal because this
+    /// contract cannot be patched to add the sentence later.
+    ///
+    /// ⚠️ AND WHAT IT DOES NOT COST: the promise survives the deadline. A DAO
+    /// that appears afterwards shuts this door again (daoHasArrived is asked on
+    /// every press, not once), and the reserve refills from the next
+    /// distribute(). A press can take what has accumulated; it cannot take the
+    /// stream.
+    function releaseReserveToFoundation() external nonReentrant {
+        // The clock is asked FIRST, before a single word is read off the
+        // diamond. Inside the window this refusal is the cheapest one in the
+        // file — one immutable, one timestamp, no external call — so somebody
+        // hammering the door pays for his own hammering and the gas price is
+        // the only thing anyone else notices.
+        uint256 remaining = reserveReleaseIn();
+        if (remaining != 0) revert ReserveStillPromised(remaining);
+
+        // Asked on every press rather than latched, because the answer can only
+        // move in the direction that SHUTS this door, and a shut door costs
+        // nobody anything irreversible.
+        if (daoHasArrived()) revert DaoHasArrived();
+
+        uint256 amount = reserveBalance;
+        if (amount == 0) revert ReserveEmpty();
+
+        // The pot is emptied before the transfer, the same order topUpVault()
+        // uses and for the same reason. If the token refuses — USDC has a
+        // blacklist, and the foundation address is immutable, so landing on it
+        // is not a hypothetical — the revert puts the whole reserve back and
+        // the door can be pressed again another day. Nothing is stranded by a
+        // refused transfer.
+        reserveBalance = 0;
+        if (!IUSDC(usdc).transfer(foundation, amount)) revert TransferFailed();
+
+        emit ReserveReleasedToFoundation(amount);
+    }
+
+    /// Has a DAO appeared, by any of the three signs this contract can see.
+    ///
+    /// The three are asked in order of how much they cost and how sure they
+    /// are, and ANY ONE of them shuts the foundation's door:
+    ///
+    ///   1. this contract has already written the handover down (daoLatched) —
+    ///      settled, and never re-read, for the reason argued at daoLatched;
+    ///   2. the diamond says governance has been handed over, even if nothing
+    ///      has latched it here yet;
+    ///   3. the diamond's own threshold of unique active users has been earned,
+    ///      which is the condition withdrawReserve() gates on.
+    ///
+    /// ⚠️ SIGN 3 DELIBERATELY IGNORES THE DAO ADDRESS, although
+    /// withdrawReserve() needs one. Reading the address here would open the
+    /// foundation's door in exactly the state where the threshold is earned and
+    /// nobody has named an address — and naming the address is the diamond
+    /// owner's job, while the foundation is the diamond owner. That would pay
+    /// him for the omission. Ignoring it means the reserve instead sits still
+    /// until an address is named, which COSTS him, and costing the party able
+    /// to cause the state is the direction this whole file takes.
+    ///
+    /// A THRESHOLD READ OF ZERO COUNTS AS EARNED, not as "unset": zero means
+    /// the diamond answered that anybody has earned it, and in that state
+    /// withdrawReserve() would pay a DAO today. Note the difference from a read
+    /// that does not come back — that one reverts below, it does not read as
+    /// zero.
+    ///
+    /// AN UNREADABLE DIAMOND REVERTS rather than degrading, the same verdict
+    /// withdrawReserve() takes and for the same two reasons. Degrading OPEN
+    /// would hand the foundation a way to collect early by breaking a view
+    /// facet it controls; degrading SHUT would be the right direction but the
+    /// wrong name, and this file already refuses to share one word between "the
+    /// facet is broken" and "the answer is no" (latchDao). A broken read is a
+    /// temporary, fixable state; the non-event this door exists for is not.
+    function daoHasArrived() public view returns (bool) {
+        if (daoLatched) return true;
+        if (_requireDiamondWord(IHexsealDiamond.isDaoActive.selector) != 0) return true;
+
+        uint256 threshold = _requireDiamondWord(IHexsealDiamond.getDaoThreshold.selector);
+        uint256 users     = _requireDiamondWord(IHexsealDiamond.getUniqueActiveUsers.selector);
+        return users >= threshold;
+    }
+
+    /// The moment the reserve stops being blocked for a DAO. A fact about this
+    /// contract alone: no read, no clamp, nothing anybody can move.
+    function reserveReleaseAt() public view returns (uint256) {
+        return deployedAt + RESERVE_DAO_WAIT;
+    }
+
+    /// Seconds still to wait, and 0 once the moment has passed. This is the
+    /// quote a presser reads before pressing, and it is the same number the
+    /// refusal carries — one subtraction, in one place, so the screen and the
+    /// refusal can never disagree about how long is left.
+    function reserveReleaseIn() public view returns (uint256) {
+        uint256 at = reserveReleaseAt();
+        return block.timestamp >= at ? 0 : at - block.timestamp;
     }
 
     // ==========================================================

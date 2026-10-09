@@ -126,12 +126,11 @@ contract DisputeFeeTest is Test {
         // real claim on the dispute instead of passing arbiter_ as an argument (no
         // such argument exists in production, see creditDisputeFee), so the tests
         // now drive the agreement to DISPUTED and genuinely claim it as arbiter.
-        bytes4[] memory arbSels = new bytes4[](5);
+        bytes4[] memory arbSels = new bytes4[](4);
         arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
         arbSels[3] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[4] = ArbiterRegistryFacet.overturnVerdict.selector;
         bytes4[] memory arbSelsVault = new bytes4[](6);
         arbSelsVault[0] = ArbiterVaultFacet.creditDisputeFee.selector;
         arbSelsVault[1] = ArbiterVaultFacet.getTreasurySlice.selector;
@@ -388,39 +387,30 @@ contract DisputeFeeTest is Test {
         assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),        600_000 + 100_001, "treasury slice must accumulate");
     }
 
-    /// The verdict was overturned (overturnVerdict) — the arbiter was wrong and
-    /// gets nothing. The treasury keeps its ordinary 10% and NOT A CENT MORE;
-    /// the arbiter's forfeited 90% goes to the arbiter bank (17 September 2026,
-    /// the owner's decision, journal item 205). Until that day this test was
-    /// `testCreditDisputeFeeOverturnedSendsEntireFeeToTreasury` and asserted the
-    /// opposite — the whole fee into the treasury slice.
-    ///
-    /// With no appeal behind the overturn there is nothing to pay back, so the
-    /// whole 90% lands in the bank. The appeal branches are in
-    /// test/AppealEconomics.t.sol.
-    function testCreditDisputeFeeOverturnedSendsTheForfeitedShareToTheBankNotTheTreasury() public {
-        address agreement = _createAgreement();
-        address arb = address(0xA1);
-        // _disputeAndClaim already submits a verdict (clientWins=true) — here it is
-        // simply overturned by the owner, without submitting a second one.
-        _disputeAndClaim(agreement, arb);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(agreement, false);
-
-        uint256 bankBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
-        usdc.mint(agreement, 6_000_000);
-        vm.startPrank(agreement);
-        usdc.transfer(address(diamond), 6_000_000);
-        ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
-        vm.stopPrank();
-
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "overturned arbiter gets nothing");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 600_000, "the treasury keeps its 10% and no more");
-        assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance() - bankBefore, 5_400_000,
-            "the forfeited 90% goes to the arbiter bank"
-        );
-    }
-
+    // ⚠️ `testCreditDisputeFeeOverturnedSendsTheForfeitedShareToTheBankNotTheTreasury` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION. The scene credited the dispute fee on a
+    //   verdict the owner's hand had overturned with NOTHING ELSE in the picture --
+    //   its own docstring said so: "With no appeal behind the overturn there is
+    //   nothing to pay back, so the whole 90% lands in the bank."
+    //   ⚠️ WHY NOT SIMPLY MOUNT A PANEL AND RECOMPUTE THE SUMS. Because the scene's
+    //   distinguishing condition was "AN OVERTURN WITH NO APPEAL BEHIND IT", and that
+    //   state is now unreachable BY CONSTRUCTION rather than merely hard to build:
+    //   `v.overturned` is written in exactly one place, inside `resolveAppeal`, which
+    //   reverts `NoAppeal` unless `v.appealed` is set -- and `overturn` itself is
+    //   `panelFormed && votesOverturn > votesUphold`, so an overturn implies an appeal
+    //   AND a panel that read it. Every overturn therefore arrives with a deposit
+    //   already refunded out of the case bond or the bank, and the forfeited fee share
+    //   repays THAT first. Putting a panel in would not restore this scene; it would
+    //   replace it with a different one that already exists.
+    //   ⚠️ WHAT IT ASSERTED AND WHERE EACH PART STILL LIVES, checked rather than
+    //   assumed, all in test/AppealEconomics.t.sol's
+    //   test_OverturnedTheCaseBondCoversTheRefundToTheUnit:
+    //     * "the overturned arbiter is paid nothing" -- asserted there verbatim;
+    //     * "the treasury keeps its 10% and no more" -- asserted there as $30 of $300;
+    //     * "the forfeited 90% goes to the arbiter bank" IN FULL -- this is the part
+    //       that is gone, and it is gone because it is no longer true of any reachable
+    //       state: the share repays the bond first and the bank takes the remainder.
+    //
     /// End to end: a real (non-diamond) arbiter can actually take the credited
     /// reward through withdrawArbiterReward(), and the USDC land on their balance.
     /// Before this test withdrawArbiterReward() was never called in the suite —

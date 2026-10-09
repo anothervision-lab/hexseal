@@ -60,6 +60,10 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
             payer, executor, amount, DEADLINE, TERMS, 0
         ));
         vm.prank(executor); a.activate();
+        // Handed in before the dispute: these scenes are about the bank's share of
+        // the top-up, and since 25 September 2026 an unclaimed timeout with no
+        // markDone on the record pays the executor nothing at all.
+        _handIn(a);
         vm.prank(payer); a.raiseDispute();
     }
 
@@ -322,6 +326,7 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _fundVault(DEFAULT_DISCOUNT);
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client); a.raiseDispute();
 
         uint256 before = usdc.balanceOf(client);
@@ -387,42 +392,31 @@ contract DisputeVaultDiscountTest is MoneyPathBase {
         _assertDiamondBalances("after three abandoned disputes");
     }
 
-    /// An overturned verdict pays the arbiter nothing, so the bank's share goes
-    /// home the same way -- and the payer's claim is his own money only.
-    function testAnOverturnedVerdictReturnsTheBanksShareToTheBank() public {
-        _fundVault(DEFAULT_DISCOUNT);
-        (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
-        _activate(a);
-        vm.prank(client); a.raiseDispute();
-        vm.prank(client);
-        ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
-        _trackDeal(address(a));
-
-        _claimByArbiter(a);
-        vm.prank(arbiterAddr);
-        ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), true);
-        ArbiterRegistryFacet(address(diamond)).overturnVerdict(address(a), false);
-        vm.warp(block.timestamp + FINALIZE_DELAY + 1);
-        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
-
-        // Its $3 back, PLUS the arbiter's forfeited 90% of the $3 dispute fee
-        // on this $100 pot ($2.70): since 17 September 2026 an overturned
-        // arbiter's share goes to the bank, no longer to the treasury. Both
-        // literals, neither read off the contract.
-        assertEq(_vault(), DEFAULT_DISCOUNT + 2_700_000, "the bank got its share back, and the forfeited fee share on top");
-        assertEq(
-            ArbiterVaultFacet(address(diamond)).getRefundableBounty(client),
-            FULL_TOPUP - DEFAULT_DISCOUNT,
-            "the payer is owed his $4.30 and not a cent of the bank's $3"
-        );
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
-            0,
-            "the overturned arbiter is paid nothing of the top-up"
-        );
-        _assertDiamondBalances("overturned verdict unwound");
-    }
-
+    // ⚠️ `testAnOverturnedVerdictReturnsTheBanksShareToTheBank` IS GONE (9 October 2026).
+    //   STATE UNREACHABLE BY CONSTRUCTION, and the twin of the scene removed from
+    //   test/DisputeFee.t.sol on the same day. It asserted two literals on a $100 pot
+    //   -- the bank getting its $3 discount back PLUS the arbiter's forfeited $2.70 --
+    //   and both depended on the overturn standing alone, with no appeal deposit
+    //   having been refunded out of the bond or the bank first.
+    //   ⚠️ WHY NOT SIMPLY MOUNT A PANEL AND RECOMPUTE THE SUMS. Because the scene's
+    //   distinguishing condition was "AN OVERTURN WITH NO APPEAL BEHIND IT", and that
+    //   state is now unreachable BY CONSTRUCTION rather than merely hard to build:
+    //   `v.overturned` is written in exactly one place, inside `resolveAppeal`, which
+    //   reverts `NoAppeal` unless `v.appealed` is set -- and `overturn` itself is
+    //   `panelFormed && votesOverturn > votesUphold`, so an overturn implies an appeal
+    //   AND a panel that read it. Every overturn therefore arrives with a deposit
+    //   already refunded out of the case bond or the bank, and the forfeited fee share
+    //   repays THAT first. Putting a panel in would not restore this scene; it would
+    //   replace it with a different one that already exists.
+    //   ⚠️ WHAT IT ASSERTED AND WHERE EACH PART STILL LIVES, checked rather than
+    //   assumed, all in test/AppealEconomics.t.sol's
+    //   test_OverturnedTheCaseBondCoversTheRefundToTheUnit:
+    //     * "the overturned arbiter is paid nothing" -- asserted there verbatim;
+    //     * "the treasury keeps its 10% and no more" -- asserted there as $30 of $300;
+    //     * "the forfeited 90% goes to the arbiter bank" IN FULL -- this is the part
+    //       that is gone, and it is gone because it is no longer true of any reachable
+    //       state: the share repays the bond first and the bank takes the remainder.
+    //
     // ------------------------------------------------------------
     //  5. The size of the discount is a setting, not a constant
     // ------------------------------------------------------------

@@ -393,10 +393,24 @@ contract UpgradeAppealDepositSoftRefund is Script {
 
     /// The same check with the compiled side handed in, so `run()` can reuse the
     /// one artifact read it already paid for.
+    /// ⚠️ THE THREE DOORS THE FACET LOST AFTER THIS CUT WAS SIGNED (9 October
+    /// 2026): `overturnVerdict(address,bool)`, `freezeVerdict(address)` and
+    /// `unfreezeVerdict(address)`, the governance hand over a verdict. The bytes
+    /// are written out because there is no `.selector` left to take.
+    ///
+    /// Named rather than counted, and checked in both directions below: the
+    /// Replace list may exceed the compiled facet by EXACTLY these three and by
+    /// nothing else, and none of the three may be back in the facet while this
+    /// exception still stands.
+    function sinceRemovedFromRegistry() public pure returns (bytes4[3] memory s) {
+        s = [bytes4(0x42a71c6c), bytes4(0x5533316c), bytes4(0x69315118)];
+    }
+
     function assertReplaceListCovers(bytes4[] memory sels, bytes4[] memory fromArtifact) public pure {
+        bytes4[3] memory gone = sinceRemovedFromRegistry();
         require(
-            sels.length == fromArtifact.length,
-            "pre-flight: the Replace list and the compiled facet disagree on how many functions it has"
+            sels.length == fromArtifact.length + gone.length,
+            "pre-flight: the Replace list and the compiled facet disagree on how many functions it has, beyond the three doors removed on 9 October 2026"
         );
         for (uint256 i = 0; i < fromArtifact.length; i++) {
             bool found;
@@ -404,13 +418,27 @@ contract UpgradeAppealDepositSoftRefund is Script {
                 if (fromArtifact[i] == sels[j]) { found = true; break; }
             }
             require(found, "pre-flight: the facet implements a function this cut does not mount");
+            for (uint256 j = 0; j < gone.length; j++) {
+                require(
+                    fromArtifact[i] != gone[j],
+                    "pre-flight: the facet implements one of the three doors removed on 9 October 2026 again - delete this exception"
+                );
+            }
         }
         for (uint256 i = 0; i < sels.length; i++) {
             bool found;
             for (uint256 j = 0; j < fromArtifact.length; j++) {
                 if (sels[i] == fromArtifact[j]) { found = true; break; }
             }
-            require(found, "pre-flight: this cut mounts a selector the facet does not implement");
+            if (!found) {
+                for (uint256 j = 0; j < gone.length; j++) {
+                    if (sels[i] == gone[j]) { found = true; break; }
+                }
+                require(
+                    found,
+                    "pre-flight: this cut mounts a selector the facet does not implement and that is not one of the three doors removed on 9 October 2026"
+                );
+            }
         }
     }
 
@@ -833,9 +861,9 @@ contract UpgradeAppealDepositSoftRefund is Script {
         sels[i++] = ArbiterRegistryFacet.finalizeVerdict.selector;
         sels[i++] = ArbiterVaultFacet.getPendingVerdict.selector;
         sels[i++] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
-        sels[i++] = ArbiterRegistryFacet.freezeVerdict.selector;
-        sels[i++] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        sels[i++] = ArbiterRegistryFacet.overturnVerdict.selector;
+        sels[i++] = bytes4(0x5533316c) /* freezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
+        sels[i++] = bytes4(0x69315118) /* unfreezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
+        sels[i++] = bytes4(0x42a71c6c) /* overturnVerdict(address,bool), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[i++] = ArbiterRegistryFacet.clearStuckVerdict.selector;
         sels[i++] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
         sels[i++] = ArbiterRegistryFacet.recordPresentationDigest.selector;

@@ -199,7 +199,7 @@ contract AdversarialAccessTest is Test {
         svcSels[18] = ServiceBoardFacet.getActiveServices.selector;
         svcSels[19] = ServiceBoardFacet.getPendingRequests.selector;
 
-        bytes4[] memory arbSels = new bytes4[](19);
+        bytes4[] memory arbSels = new bytes4[](16);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -213,12 +213,9 @@ contract AdversarialAccessTest is Test {
         arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
         arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbSels[18] = ArbiterRegistryFacet.raiseAppeal.selector;
+        arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[15] = ArbiterRegistryFacet.raiseAppeal.selector;
         bytes4[] memory arbSelsVault = new bytes4[](12);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;

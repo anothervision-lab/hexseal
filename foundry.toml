@@ -59,6 +59,47 @@ solc = "0.8.31"
 evm_version = "prague"
 isolate = false
 
+# ── REPRODUCIBLE BYTES FOR A STRANGER ────────────────────────────────────────
+#
+# ⚠️ CHANGING THIS LINE MOVES EVERY BYTECODE IN THE TREE, AND WITH IT EVERY
+# CREATE2 ADDRESS DERIVED FROM ONE. That is a CUT, not a repair. The owner
+# decided it on 8 October 2026 and it was already named as the next planned
+# cut's job on 4 October (test/AgreementRendererWiring.t.sol).
+#
+# WHY. The public showcase repository exists so that a stranger can clone it,
+# run `forge build` and get THE SAME BYTES as the chain carries. With solc's
+# default metadata hash he cannot: the hash covers the metadata JSON, the JSON
+# keys its `sources` by path, and the path depends on where the tree was
+# checked out. Measured in test/AgreementRendererWiring.t.sol: the same
+# AgreementRenderer source builds to 0x9b7afd… under one root and 0x47185d…
+# under another, which is why that file has been red in CI and green locally.
+# Four other settings were tried first (remappings pinning among them) and not
+# one of them closed it.
+#
+# A fixed-path container WOULD close it and was REJECTED by the owner, for the
+# reason that matters more than the badge: it keeps the "full match" marker at
+# the price of the goal itself — reproducible only THROUGH US is not
+# reproducible.
+#
+# WHAT IS LOST, said out loud rather than left to be discovered. Sourcify and
+# Etherscan's "full match" needs the metadata hash to resolve to the metadata
+# JSON; with no hash in the bytecode they can only reach a "partial match"
+# (the executable bytes agree, the metadata is not pinned). That is the trade
+# the owner took: a weaker badge from one website, a stronger guarantee for
+# anybody with a shell.
+#
+# WHAT IS *NOT* LOST. `solc` stays in the tail — with `bytecode_hash = "none"`
+# solc still appends the CBOR `{"solc": <version>}`, so the compiler version is
+# still readable off chain, and it is pinned above anyway. The tail shrinks
+# from 53 bytes to about a dozen. The house rule for comparing bytecode has
+# always READ that length out of the tail's own last two bytes and never
+# written it down -- `_hashWithoutMetadata` in
+# test/AgreementRendererWiring.t.sol and `strip_metadata` in
+# script/verify_cut_addresses.py are both in this repository and both do it --
+# so the shrinking is survivable BY DESIGN, and that was measured after this
+# edit rather than assumed.
+bytecode_hash = "none"
+
 # The AST is emitted into the artifacts (out/<File>.sol/<Contract>.json, key
 # "ast") because a build gate reads sources through solc's tree rather than
 # through regular expressions: a `msg.sender` inside a comment is then never

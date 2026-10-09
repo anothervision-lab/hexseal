@@ -215,7 +215,7 @@ contract ReentrancyTest is Test {
         svcSels[18] = ServiceBoardFacet.getActiveServices.selector;
         svcSels[19] = ServiceBoardFacet.getPendingRequests.selector;
 
-        bytes4[] memory arbSels = new bytes4[](18);
+        bytes4[] memory arbSels = new bytes4[](15);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -229,11 +229,8 @@ contract ReentrancyTest is Test {
         arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
         arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        arbSels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
-        arbSels[17] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
+        arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
         bytes4[] memory arbSelsVault = new bytes4[](13);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
@@ -329,7 +326,7 @@ contract ReentrancyTest is Test {
     function _resolveDispute(address agr, bool clientWins) internal {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(agr, clientWins);
-        vm.warp(block.timestamp + 24 hours + 1);
+        vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
     }
 
@@ -421,6 +418,37 @@ contract ReentrancyTest is Test {
         assertFalse(malUSDC.reentrantSucceeded(), "double-payout must not happen");
 
         assertEq(malUSDC.balanceOf(executor), executorBefore + JOB_AMOUNT, "single payout only");
+        assertEq(malUSDC.balanceOf(agr), 0, "agreement drained exactly once");
+    }
+
+    /// The newest payout door, added with mutual cancellation on 27 September
+    /// 2026. It pays TWO wallets in one call, which is what makes it worth its
+    /// own scene: the re-entry fires during the first transfer, while the second
+    /// one has not happened yet, so a missing guard would let the whole split be
+    /// taken twice rather than one share.
+    ///
+    /// `_complete` would refuse a second pass on its own (`AlreadyFinalized`),
+    /// so this scene is about the guard standing in FRONT of that — measured,
+    /// not assumed, because "something else would have caught it" is how a
+    /// removed guard stays green.
+    function testReentrancy_ConfirmCancellation() public {
+        address agr = _deployActive();
+
+        vm.prank(client);
+        Agreement(agr).proposeCancellation(40_000_000, 60_000_000);
+
+        uint256 clientBefore   = malUSDC.balanceOf(client);
+        uint256 executorBefore = malUSDC.balanceOf(executor);
+
+        malUSDC.arm(agr, abi.encodeCall(Agreement.confirmCancellation, (40_000_000, 60_000_000)));
+        vm.prank(executor);
+        Agreement(agr).confirmCancellation(40_000_000, 60_000_000);
+
+        assertTrue(malUSDC.reentrantReverted(),   "guard must block reentrant confirmCancellation");
+        assertFalse(malUSDC.reentrantSucceeded(), "double-payout must not happen");
+
+        assertEq(malUSDC.balanceOf(executor), executorBefore + 60_000_000, "single payout only");
+        assertEq(malUSDC.balanceOf(client),   clientBefore   + 40_000_000, "single refund only");
         assertEq(malUSDC.balanceOf(agr), 0, "agreement drained exactly once");
     }
 

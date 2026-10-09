@@ -34,7 +34,30 @@ import {IAgreementRenderer} from "./AgreementRenderer.sol";
 // the literal cannot live in the renderer's own file for a reason worth
 // writing down: the address is the CREATE2 hash OF THAT FILE'S BYTECODE, so
 // writing it there would change the very bytes it is derived from.
-address constant AGREEMENT_RENDERER = 0xF856d81cC6aFF41eA807A89B36Fc3D0769648743;
+// ⚠️ MOVED 9 OCTOBER 2026, AND NOTHING BUT THE METADATA TAIL MOVED IT.
+// `foundry.toml` now sets `bytecode_hash = "none"` (the owner's decision of
+// 8 October 2026, so that a stranger who clones the showcase gets the same
+// bytes). The renderer's EXECUTABLE code did not change by a byte; its CBOR
+// tail went from 53 bytes to 12, which changed `creationCode`, which changed
+// the CREATE2 hash, which changed the address. The previous value was
+// ~~0xF856d81cC6aFF41eA807A89B36Fc3D0769648743~~ and that contract is still
+// alive on Base Sepolia and still draws correctly -- it is simply no longer
+// what this tree builds.
+//
+// ⚠️ THIS ADDRESS HAS NO CODE ON CHAIN UNTIL THE CUT DEPLOYS THE RENDERER,
+// and that is the first of four steps, in this order: deploy the renderer
+// (CREATE2, salt `hexseal.agreement.renderer.v2`, lands here), then the new
+// Agreement implementation, then a new AgreementDeployer (its `implementation`
+// is immutable, so the old one cannot be redirected), then
+// `FactoryFacet.setAgreementDeployer`. Deploying the implementation before the
+// renderer would mint certificates pointing at an empty address; the deploy
+// script refuses that case by checking this address has code.
+//
+// ⚠️ EXISTING CLONES ARE UNAFFECTED and keep drawing from the old renderer:
+// each clone is nailed to the implementation it was cut from, and that
+// implementation carries the old literal. Measured on chain 8 October 2026:
+// `getLiveDeals()` = 0, so no live deal is caught by the generation boundary.
+address constant AGREEMENT_RENDERER = 0xba92dCAD33f0f25bA8a043F6D5b34c03619c28AC;
 
 // ---------- MINIMAL ERC721 (no OZ, no dependencies) ----------
 // Why not OZ: this implementation is cloned per deal (EIP-1167), so its size
@@ -336,6 +359,28 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     uint256 public constant DISPUTE_WINDOW      = 4 days; // arbiter must resolve the dispute
     uint256 public constant DEADLINE_GRACE      = 1 days; // grace period after the deadline, before a refund
     // If the arbiter does not resolve within 4 days — auto-refund to the client (cover against an inactive arbiter)
+
+    /// How long a mutual-cancellation offer stays answerable.
+    ///
+    /// ⚠️ AN OFFER WITHOUT AN END IS A WEAPON, which is the whole reason this
+    /// constant exists rather than "the offer stands until somebody clears it".
+    /// The numbers on an offer are the numbers of a deal AT THE MOMENT IT WAS
+    /// MADE; a month later the work has moved on and they are simply wrong. An
+    /// offer that never dies lets the other side sit on it and press it at the
+    /// one moment it happens to favour them.
+    ///
+    /// Two days, the same span as AUTO_APPROVE_WINDOW, and for the same reason:
+    /// this is the file's established answer to "the other side must say
+    /// something". It is not DISPUTE_WINDOW's four days, because nobody is
+    /// being asked to read a case here — only to say yes or no to two figures
+    /// they can see.
+    ///
+    /// The other honest end is the right to take the offer back, which is
+    /// `withdrawCancellation`. Both exist: a timer alone leaves the proposer
+    /// bound for two days to a figure they have changed their mind about, and a
+    /// withdrawal right alone leaves an offer standing for ever behind a
+    /// proposer who has stopped answering.
+    uint256 public constant CANCEL_OFFER_WINDOW = 2 days;
 
     // The arbiter's fee on a dispute. There is deliberately NO FLOOR: a $5
     // floor would bite up to a $167 deal, that is across all small and mid-size
@@ -793,6 +838,113 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// Appended at the END of the layout; see undeliveredRefund.
     uint256 public acceptedExtrasCount;
 
+    // -------- THE LIVE MUTUAL-CANCELLATION OFFER --------
+
+    /// Who put the offer on the table. `address(0)` means there is no offer,
+    /// and it is the ONE fact the three cancellation doors gate on -- the
+    /// timestamp and the figure below are read only once this is non-zero.
+    ///
+    /// An address rather than a bool "the client proposed", because the
+    /// question the confirmation asks is not "which side proposed" but "am I
+    /// the OTHER one", and a comparison against a stored address answers it
+    /// without a branch that could be written the wrong way round.
+    ///
+    /// Appended at the END of the layout; see undeliveredRefund. It shares a
+    /// slot with the timestamp below (20 + 5 of 32 bytes), which is a new slot
+    /// and therefore free to pack -- unlike the packing of 28 August 2026, this
+    /// one moves nothing that exists.
+    address private _cancelProposer;
+
+    /// When the offer was made. It dies CANCEL_OFFER_WINDOW later.
+    ///
+    /// The stamp is stored and the expiry computed, rather than the other way
+    /// round, because that is what every other window in this file does
+    /// (`_fundedAt + ACTIVATION_WINDOW`, `_markedDoneAt + AUTO_APPROVE_WINDOW`,
+    /// `_disputedAt + DISPUTE_WINDOW`). A stored expiry would be the one window
+    /// whose length could differ from the constant that names it.
+    ///
+    /// uint40 through `_now40()`, for the reason the packed slot above gives at
+    /// length: the width runs out in the year 36812, and the refusal to
+    /// truncate exists once, in one function, rather than at the sixth cast.
+    uint40  private _cancelProposedAt;
+
+    /// What the offer promises the EXECUTOR.
+    ///
+    /// ⚠️ THE CLIENT'S SHARE IS NOT STORED, AND THAT IS THE SAFETY PROPERTY OF
+    /// THIS WHOLE FEATURE RATHER THAN A SAVED SLOT. It is `_pot() - this`,
+    /// worked out at the moment of payment, so the two shares ALWAYS add up to
+    /// exactly what the escrow holds for the work. Two stored figures would
+    /// have to be checked against the pot at settlement, and a settlement that
+    /// paid out less than the pot would leave the remainder in a clone that has
+    /// no rescue function -- EIP-1167 pins a clone to its implementation for
+    /// life, so stranded money there is stranded for ever. There is no
+    /// arithmetic here that can strand a cent, because the remainder IS the
+    /// client's share.
+    ///
+    /// It is the same payment-by-subtraction the unjudged-dispute split already
+    /// uses three hundred lines up ("by subtraction: the remainder to whose
+    /// money it is"), pointed at a figure two people chose instead of a
+    /// fraction.
+    ///
+    /// ⚠️ WHAT THAT COSTS, SAID OUT LOUD: the client's share MOVES when the pot
+    /// moves. `_pot()` grows when the executor accepts a top-up, so an offer
+    /// made before that acceptance promises the client more than it did when it
+    /// was made. Nobody is robbed by it -- the growth is the client's own money
+    /// coming back, and a top-up is the client's own proposal -- and the
+    /// confirmation is bound to BOTH figures, so the offer cannot be pressed
+    /// under numbers that have moved: it refuses with
+    /// `CancellationTermsChanged` and is re-made. `getCancellation()` computes
+    /// the client's share the same way, so the figure a screen prints is the
+    /// figure a confirmation will accept, always.
+    ///
+    /// Appended at the END of the layout; see undeliveredRefund.
+    uint256 private _cancelToExecutor;
+
+    /// Did this deal end because BOTH SIDES AGREED TO PART?
+    ///
+    /// ⚠️ WHY A FIELD AND NOT A STATUS. `confirmCancellation` closes the deal
+    /// `Status.REFUNDED`, and so do four other paths: the activation timeout,
+    /// a declined offer, the deadline timeout and the arbiter timeout (five
+    /// `_complete(Status.REFUNDED)` calls in four functions). It also wipes
+    /// `_cancelProposer`, `_cancelProposedAt` and `_cancelToExecutor` on the
+    /// way out, so AFTER the call the storage of a deal that two people chose
+    /// to end is indistinguishable from the storage of a deal that simply
+    /// timed out. The only record left was the `CancelledByAgreement` event --
+    /// readable by an indexer, not readable by a contract and not readable by
+    /// a screen that has only an RPC and an address.
+    ///
+    /// A sixth `Status` member would have been the obvious move and it is
+    /// FORBIDDEN here, for two reasons that are both measurable rather than
+    /// stylistic. The enum is parsed by the web client and by the subgraph on
+    /// its existing values, and `script/check-agreement-layout.sh` expands the
+    /// enum into the snapshot line for `_finalStatus` -- a new member changes
+    /// that line and reddens the layout gate by itself. The file already says
+    /// this at the `_complete(Status.REFUNDED)` inside `confirmCancellation`:
+    /// "the status enum is frozen -- the event is what tells the cases apart".
+    /// This field is that sentence made readable on chain.
+    ///
+    /// SET, NEVER CLEARED, and that is on purpose: the three fields above are
+    /// zeroed to stop the offer being answered twice, and this one is the
+    /// opposite kind of fact -- it is about the deal's end, which does not
+    /// happen twice. `_finalized` already refuses every door afterwards.
+    ///
+    /// ⚠️ IT GETS A SLOT OF ITS OWN (27), AND THAT COSTS GAS RATHER THAN
+    /// SAVING IT. There are seven free bytes in slot 25, next to
+    /// `_cancelProposer` and `_cancelProposedAt`, and that slot is written by
+    /// `confirmCancellation` anyway -- a bool there would have been almost
+    /// free. Taking it would mean DECLARING the field in the middle of the
+    /// list, and append-only is the one rule this file has no way to recover
+    /// from breaking: every deal is an EIP-1167 clone reading its storage
+    /// through this implementation's layout for life, so a field that moves is
+    /// unfixable for every deal that already exists. The gate enforces the
+    /// rule as written (prefix + append), not as "nothing live moved", and
+    /// that is the right strictness for a rule whose violation is permanent.
+    /// Measured cost of the honest placement: see
+    /// test/AgreementCancelledByAgreementFlag.t.sol.
+    ///
+    /// Appended at the END of the layout; see undeliveredRefund.
+    bool    private _cancelledByAgreement;
+
     // -------- STATUS ENUM --------
 
     enum Status {
@@ -846,6 +998,15 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// The dispute closed without a verdict because nobody took it on.
     /// Either figure is zero if that side's half could not be delivered.
     event DisputeSplitNoVerdict(uint256 toClient, uint256 toExecutor);
+    /// Nobody took the dispute on AND the work had never been handed in, so the
+    /// whole escrow went back to the client (25 September 2026). Emitted NEXT TO
+    /// `TimedOut`, never instead of it -- the same argument as `OfferDeclined`:
+    /// the money statement keeps the name every reader already knows, and what
+    /// actually happened is said beside it. It carries nothing but the executor
+    /// whose missing hand-in decided the outcome, because the figure is in
+    /// `TimedOut` on the same transaction and two copies of one number are two
+    /// numbers.
+    event DisputeNothingHandedIn(address indexed executor);
     event DisputeResponded(address indexed party);
     /// Timeout on an unclaimed dispute where one side stayed silent.
     /// The shape differs from DisputeSplitNoVerdict on purpose: either party
@@ -888,6 +1049,56 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     // simply went missing with nothing on-chain to say so. claimXP() on the
     // diamond is the manual way back for both parties.
     event XpAwardFailed(address indexed agreement);
+
+    // -------- MUTUAL CANCELLATION --------
+
+    /// One side put an offer to call the deal off on the table.
+    ///
+    /// BOTH FIGURES ARE IN THE LOG, not only the stored one, and `expiresAt` is
+    /// absolute rather than a duration. A reader of this event has to be able to
+    /// print the offer without a second read of the clone -- the subgraph and
+    /// the notification that tells the other party there is something waiting
+    /// both work from logs alone -- and a duration would make them add it to a
+    /// block time they would have to fetch anyway.
+    event CancellationProposed(
+        address indexed by,
+        uint256 toClient,
+        uint256 toExecutor,
+        uint256 expiresAt
+    );
+
+    /// The offer is off the table before anybody said yes to it. Emitted for
+    /// the proposer taking their own offer back AND for the other side saying
+    /// no to it -- one act, and `by` is what tells the two apart, the same way
+    /// `ExtraWithdrawn` and `ExtraRejected` are told apart by which function
+    /// emitted them.
+    event CancellationWithdrawn(address indexed by);
+
+    /// The deal was called off by both sides, and the escrow went where they
+    /// agreed it should.
+    ///
+    /// ⚠️ THE FIGURES ARE WHAT WAS TRANSFERRED, not what was agreed, exactly
+    /// like `DisputeSplitNoVerdict` and `Released` next to it: a share the token
+    /// refused to deliver is booked as a debt and this log says 0 for it,
+    /// because the interface prints these numbers word for word and a figure
+    /// that never reached a wallet is a lie.
+    ///
+    /// `TimedOut` is NOT emitted beside it, and that is the difference from
+    /// `OfferDeclined` and `DisputeNothingHandedIn`, which both ride next to
+    /// `TimedOut` so that existing readers learn the money moved. Those two end
+    /// with the WHOLE escrow going to the client, which is precisely what
+    /// `TimedOut(client, amount)` says. This one does not: on any split,
+    /// `TimedOut` would tell every existing reader that the client got the lot.
+    /// A wrong figure in a name they already parse is worse than a name they do
+    /// not parse yet -- so the status carries the closure (REFUNDED, which
+    /// `AgreementStatusUpdated` announces on the diamond and the subgraph
+    /// already follows), and this event carries the numbers.
+    event CancelledByAgreement(
+        address indexed proposer,
+        address indexed confirmedBy,
+        uint256 toClient,
+        uint256 toExecutor
+    );
 
     // -------- ERRORS --------
 
@@ -943,7 +1154,42 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// test that is supposed to notice if one of the floors disappears.
     error NotEnoughGasForDiamondCall(bytes4 diamondCall);
     error NoArbiterSet();
+    /// The two shares of a cancellation offer do not add up to what the escrow
+    /// holds for the work.
+    ///
+    /// ⚠️ DECLARED SINCE THE BEGINNING AND REVERTED NOWHERE UNTIL
+    /// 27 SEPTEMBER 2026 — it was a dead declaration that both relay decode
+    /// tables already carried a name for. Reused rather than replaced by a new
+    /// error of my own: a new name has to be taught to
+    /// `frontend/src/app/api/relay/route.ts`, to `relayer/app.js`, and to
+    /// fourteen translations before a gasless caller sees anything but four raw
+    /// bytes, and this name says exactly what happened.
+    ///
+    /// It catches every shape of rubbish in one verdict: a sum over the pot, a
+    /// sum under it, two zeros on a funded deal, and `type(uint256).max` on
+    /// either share. The check is written as `toExecutor > pot ||
+    /// toClient != pot - toExecutor` and NOT as `toClient + toExecutor != pot`,
+    /// because the addition overflows on a hostile argument and Solidity's
+    /// overflow is `Panic(0x11)` — a crash, not a verdict, and this file's rule
+    /// is that rubbish is answered by name.
     error WrongAmount();
+    /// There is no cancellation offer on the table to answer or to take back.
+    error NoCancellationPending();
+    /// A cancellation offer cannot be confirmed by the side that made it. This
+    /// is the whole meaning of the word "mutual", and the refusal has a name of
+    /// its own rather than reusing `NotParty` because the caller IS a party --
+    /// `NotParty` would send a person looking for the wrong mistake.
+    error NotCounterparty();
+    /// The offer is no longer the offer that was confirmed: either it was
+    /// re-made with different figures, or the escrow it was measured against
+    /// has changed since.
+    ///
+    /// ⚠️ THIS IS THE LOCK THE FEATURE EXISTS FOR. Without it the second side's
+    /// "yes" would attach to whatever the first side's storage happens to hold
+    /// at the moment the transaction lands, so the first side could put one
+    /// split on the table, wait to be answered, and re-make it in front of the
+    /// answer. "Strictly mutual" would mean its opposite.
+    error CancellationTermsChanged();
     error ExtraNotPending();
     error AlreadyResponded();
     error ZeroAmount();
@@ -1285,9 +1531,52 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         if (sender != executor) revert NotExecutor();
         if (_activatedAt == 0) revert NotActive();
         if (_markedDoneAt != 0) revert AlreadyMarkedDone();
-        if (_disputedAt != 0) revert AlreadyDisputed();
 
-        // Deadline + grace period — the executor may still deliver for 1 day after the deadline
+        // A DISPUTE NOBODY IS JUDGING DOES NOT BAR THE HAND-IN, and until
+        // 25 September 2026 it did -- a bare `_disputedAt != 0` stood here.
+        // That bare check was the hole the delivery-decides fix opened: once
+        // the unjudged timeout started reading `_markedDoneAt`, a client who
+        // raised the dispute BEFORE the hand-in locked the executor out of ever
+        // putting delivery on the record, and the timeout then sent the whole
+        // escrow home. Measured on that scene: 200 USDC of 200 to the client,
+        // nothing to the executor, with four days of his own deadline still
+        // unspent -- the timeout fires DISPUTE_WINDOW after the dispute, not at
+        // the deadline, so his remaining time never entered the arithmetic.
+        //
+        // The owner's rule was "no hand-in AND THE DEADLINE PASSED -> all to
+        // the client", and asking the second half of `_disputedAt` is not
+        // possible: `raiseDispute` below already refuses a hand-in-less dispute
+        // once the grace is over, so "the window was over when the dispute was
+        // opened" is a contradiction and that branch would be dead. Measured:
+        // asking it anyway reddens testTheExecutorsOwnEmptyDisputeEarnsHimNothing
+        // with 150000000 != 0 -- the junk-dispute payoff restored in full.
+        //
+        // So the executor gets his ACTION back rather than a payment for having
+        // lost it. Nothing else about the money moves, and the floor under a
+        // junk dispute stays where the delivery-decides fix put it: a permanent
+        // on-chain claim of delivery, which also opens the client the window to
+        // answer it.
+        //
+        // ⚠️ FENCED ON `arbiter == address(0)`, and without the fence this is
+        // worse than the hole. Once the dispute is claimed the arbiter is
+        // forming a verdict on the record as it stands; letting the executor
+        // add a hand-in underneath that would be editing the evidence after it
+        // was read. Claimed -- refused, and refused as `AlreadyDisputed` rather
+        // than under a new name: that selector (0x09dd1236) is already in the
+        // relayer's and the web client's revert-name tables, and a new error
+        // would reach a gasless caller as an undecodable four bytes.
+        //
+        // NO OTHER DOOR OPENS BY THIS. Every reader of `_markedDoneAt` that
+        // moves money or state is fenced off by an `AlreadyDisputed` check that
+        // runs BEFORE it -- `release`, `triggerAutoApprove`,
+        // `triggerDeadlineTimeout`, `proposeExtra`, `acceptExtra` -- and
+        // `status()` answers DISPUTED before it ever looks at the hand-in. The
+        // one outcome that changes is the unjudged timeout's split, which is
+        // the point.
+        if (_disputedAt != 0 && arbiter != address(0)) revert AlreadyDisputed();
+
+        // Deadline + grace period — the executor may still deliver for 1 day after the deadline.
+        // An open dispute neither extends this border nor shortens it.
         if (block.timestamp > _deadlineAt() + DEADLINE_GRACE) revert DeadlinePassed();
 
         _markedDoneAt = _now40();
@@ -1397,7 +1686,9 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
 
         // Raising it counts as turning up. respondToDispute is what is left to
         // the other side; if they stay silent for the whole window, the timeout
-        // hands them a quarter instead of a half.
+        // hands them a quarter instead of a half — but only on a deal whose
+        // work was handed in. Without a markDone the timeout ignores both flags
+        // and returns the escrow to the client.
         if (sender == client) {
             _clientResponded = true;
         } else {
@@ -1413,8 +1704,12 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     ///
     /// Turning up asserts nothing about the merits — the evidence lives in the
     /// chat, the contract needs only the fact of presence. Read by exactly one
-    /// branch of the timeout: if nobody claimed the dispute, whoever stayed
-    /// silent gets a quarter of the pot instead of half.
+    /// branch of the timeout, and only half of that branch: if nobody claimed
+    /// the dispute AND the work had been handed in, whoever stayed silent gets
+    /// a quarter of the pot instead of half. With no hand-in on the record
+    /// attendance decides nothing at all — the escrow goes back to the client
+    /// whether the executor answered or not, so responding here can never turn
+    /// an empty dispute into money.
     ///
     /// Free and gasless on purpose. Charging for the right to defend oneself
     /// would invert the incentives: a griefer raises a dispute for nothing,
@@ -1692,12 +1987,18 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
 
     /// @notice Dispute timeout — no verdict within DISPUTE_WINDOW.
     /// The outcome depends on whether anybody took the dispute on:
-    ///  • nobody did (arbiter == 0) — attendance decides
+    ///  • nobody did (arbiter == 0) — DELIVERY decides first, attendance
+    ///    second. Nothing was ever handed in (markedDoneAt == 0) — the whole
+    ///    escrow back to the client, TimedOut next to DisputeNothingHandedIn,
+    ///    whoever turned up: otherwise an executor who did nothing is paid for
+    ///    it, which is what this branch did until 25 September 2026. Work WAS
+    ///    handed in — attendance decides as it always has
     ///    (clientResponded/executorResponded): both turned up — the pot in
     ///    half, DisputeSplitNoVerdict; one stayed silent — a quarter to the
     ///    silent one, the rest to the one who turned up, DisputeUnanswered.
-    ///    A full refund to the client on an empty dispute would make it a free
-    ///    way to keep both the money and the work;
+    ///    A full refund on a dispute the executor DID answer with a hand-in
+    ///    would make the dispute a free way to keep both the money and the
+    ///    work;
     ///  • claimed and left undone — everything to the client, the arbiter is
     ///    penalised, ArbiterTimedOut. Halves are not allowed here: stalling
     ///    would become the executor's strategy.
@@ -1728,12 +2029,15 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // DIAMOND the arbiter rather than a person, so it cannot be used as a
         // payee.
         //
-        // Nobody took it on — attendance decides, not an unconditional split:
+        // Nobody took it on — the hand-in decides first and attendance second,
+        // never attendance alone: nothing handed in — TimedOut next to
+        // DisputeNothingHandedIn, the whole escrow to the client; handed in and
         // both turned up — DisputeSplitNoVerdict, half each, the literal
-        // translation of "this could not be decided" into money; one stayed
-        // silent — DisputeUnanswered, a quarter to the silent one and the rest
-        // to the one who turned up (details below, inside the branch). That
-        // removes the incentive to start an empty dispute from either side.
+        // translation of "this could not be decided" into money; handed in and
+        // one stayed silent — DisputeUnanswered, a quarter to the silent one
+        // and the rest to the one who turned up (details below, inside the
+        // branch). That is what removes the payoff of an empty dispute from
+        // either side; attendance on its own removed it from neither.
         //
         // Taken on and left undone — the arbiter's fault, not the parties'.
         // Halves are not allowed here: stalling would become a strategy, and a
@@ -1741,27 +2045,63 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // walk off with half. With a refund to the client, stalling earns them
         // nothing.
         if (arbiter == address(0)) {
-            // Attendance decides how to split. At least one flag is always
-            // set: raiseDispute sets it for whoever raised the dispute, and
-            // without raiseDispute this point is unreachable (_disputedAt is
-            // checked above).
+            // WAS ANYTHING EVER HANDED IN? That is the first question here,
+            // and until 25 September 2026 this branch never asked it: it read
+            // attendance alone, so an executor who had delivered NOTHING and
+            // merely turned up walked off with half the escrow. Raising a
+            // dispute costs nothing (`raiseDispute` takes no money) and no
+            // arbiter takes a $10 deal on for $0.24 — which made a junk
+            // dispute the cheapest way to be paid for doing nothing. Measured
+            // before the fix: $100 of a $200 pot to an executor who never
+            // pressed markDone.
+            //
+            // `_markedDoneAt` is the one fact about delivery this chain holds,
+            // and unlike turning up it cannot be had for free after the fact:
+            // markDone is the executor's own claim, it is refused once the
+            // deadline and its grace have passed, and it stands in the log for
+            // ever. Nothing handed in — the escrow goes home to the client in
+            // full, no matter who turned up.
+            //
+            // WHAT STAYS HONEST ABOUT IT, said out loud rather than left to be
+            // discovered: a crook can still press markDone on empty work and
+            // take his half of an unjudged pot. The floor under a junk dispute
+            // rises from "do nothing" to "make a false claim of delivery, on
+            // chain, permanently" — and a false markDone also opens the client
+            // the window to answer it, which doing nothing never did.
+            //
+            // ⚠️ THE MIRROR THIS CREATES AND DOES NOT CLOSE: a client who
+            // raises the dispute BEFORE the executor presses markDone locks him
+            // out of pressing it at all (markDone refuses a disputed deal,
+            // AlreadyMarkedDone's neighbour AlreadyDisputed) and takes the
+            // whole pot back on the timeout, work delivered or not. The
+            // executor's defence is the order of pressing — markDone first,
+            // then hand the files over — and that belongs to the product, not
+            // to this line.
+            //
+            // ONCE SOMETHING WAS HANDED IN, attendance decides exactly as
+            // before. At least one flag is always set: raiseDispute sets it for
+            // whoever raised the dispute, and without raiseDispute this point
+            // is unreachable (_disputedAt is checked above).
             //
             // Both turned up — there was nobody to judge, so the pot is split
-            // in half. That is the real meaning of the split, and the only rule
-            // that hands neither side leverage: markDone and raiseDispute are
-            // equally free for both parties to press, so neither action can
-            // stand as evidence.
+            // in half. That is the real meaning of the split, and with a
+            // hand-in on the record neither pressing can be read as evidence
+            // of the work's quality: one side says delivered, the other says
+            // not good enough, and nobody judged.
             //
             // One stayed silent — a quarter for them. Silence stops being free,
             // but four days offline do not ruin anyone: being absent is
             // ordinary, it deserves a penalty and not a wipe-out. It also
             // lowers the payoff of "raise a dispute and hope they are asleep" —
             // the prize drops from the whole pot to three quarters.
-            bool both = _clientResponded && _executorResponded;
+            bool handedIn = _markedDoneAt != 0;
+            bool both     = _clientResponded && _executorResponded;
 
             uint256 toClient;
             uint256 toExecutor;
-            if (both) {
+            if (!handedIn) {
+                toClient = pot;                 // nothing delivered — the whole escrow home
+            } else if (both) {
                 toExecutor = pot / 2;
                 toClient   = pot - toExecutor;  // by subtraction: the remainder to whose money it is
             } else if (_clientResponded) {
@@ -1798,9 +2138,44 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
             uint256 clientPaid   = _payClient(toClient)     ? toClient   : 0;
 
             // notifyArbiterTimeout is deliberately not called: there is nobody to penalise.
+            //
+            // THE EXECUTOR'S FAULT IS RECORDED WHEN NOTHING WAS HANDED IN, and
+            // until this line existed it was not: the two other roads that end
+            // "he took it on and nothing followed" -- `triggerDeadlineTimeout`
+            // and `_refundBeforeStart(asTimeout)` -- both call this, and the
+            // unjudged dispute was the one way to reach the same ending with a
+            // clean record. Taking a deal, having it minted, and delivering
+            // nothing now shows up in the record whichever door closes it.
+            // `notifyExecutorFault` zeroes the executor's clean streak, which
+            // is also the gate on standing as an arbiter.
+            //
+            // ⚠️ ONLY WITHOUT A HAND-IN. A dispute over work that WAS delivered
+            // is an argument about quality that nobody judged, and this
+            // contract has no opinion on who was right -- marking the executor
+            // at fault there would be a verdict handed down by a timeout.
+            //
+            // TOLERATED AND CAPPED, exactly like its two neighbours: a
+            // reputation write that fails must not lock the escrow. This is the
+            // last door the deal has, the money has already left above, and the
+            // fallback is a missing mark and not a missing payment.
+            if (!handedIn && _diamondHasCode()) {
+                try IReputationFacet(diamond).notifyExecutorFault{gas: FAULT_NOTIFY_GAS}(address(this)) {} catch {}
+            }
+
             _clearDisputeClaim();
 
-            if (both) {
+            if (!handedIn) {
+                // TWO EVENTS, and `TimedOut` is not optional. Every reader that
+                // exists today — the deal screen, the card, the subgraph's
+                // handleTimedOut — learns that a funded deal ended with the
+                // client paid from THAT name, and an outcome announced only
+                // under a name none of them has been taught would leave the
+                // deal showing "in dispute" for ever in all of them. The same
+                // pairing `_refundBeforeStart` uses for OfferDeclined, for the
+                // same reason.
+                emit TimedOut(client, clientPaid);
+                emit DisputeNothingHandedIn(executor);
+            } else if (both) {
                 emit DisputeSplitNoVerdict(clientPaid, executorPaid);
             } else if (_clientResponded) {
                 emit DisputeUnanswered(client, clientPaid, executorPaid);
@@ -1828,6 +2203,333 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
 
         _clearDisputeClaim();
         emit ArbiterTimedOut(client, refundPaid);
+    }
+
+    // -------- MUTUAL CANCELLATION --------
+    //
+    // ── WHY THIS EXISTS (the owner's decision of 27 September 2026) ─────────
+    // A deal both sides have stopped wanting had no exit. There is a hand-in,
+    // an acceptance, a dispute and four timeouts, and every one of them is a
+    // way out of a deal that went WRONG. Two people who simply changed their
+    // minds had to pick one anyway: wait out a deadline that is weeks off, or
+    // open a dispute neither of them wanted and pay an arbiter to rule on an
+    // argument that does not exist. So they get a door of their own.
+    //
+    // ── WHY IT CARRIES FIGURES AND NOT JUST A YES ──────────────────────────
+    // "Somebody did not want something any more" very often means part of the
+    // work is done. A door that could only refund the client in full would be
+    // no door at all for those people -- it would ask the executor to hand back
+    // money he has earned in order to get out, which is the same trap in a new
+    // shape. So the offer names what each side takes.
+    //
+    // ── WHY A CONFIRMATION IS BOUND TO THOSE FIGURES ───────────────────────
+    // Because "strictly mutual" is otherwise a word. If the second side's yes
+    // attached to whatever the storage held when it landed, the first side could
+    // put one split on the table, wait for the answer, and re-make the offer in
+    // front of it. `CancellationTermsChanged` is what makes a yes a yes to THOSE
+    // TWO NUMBERS and nothing else, and it is the lock this whole section is
+    // built around rather than a validation nicety.
+    //
+    // ── WHAT IT DOES NOT DO, AND WHY EACH ABSENCE IS A DECISION ────────────
+    //   * NO FAULT IS RECORDED. `notifyExecutorFault` is not called and must
+    //     not be: it exists for a man who took somebody's money and delivered
+    //     nothing, and it zeroes a clean streak that gates entry to the arbiter
+    //     corps. An agreed parting is the opposite of that, and marking it would
+    //     be a verdict handed down by consent.
+    //   * NO XP IS AWARDED, and it falls out rather than being written. The
+    //     final status is REFUNDED, and `_complete` awards XP for COMPLETED and
+    //     RESOLVED only. Work that was not finished earns no standing, which is
+    //     what the owner asked for -- and asking for it took no line of code,
+    //     which is the safest way to get a rule.
+    //   * NO PROTOCOL FEE IS RETURNED. The deal's fee was taken at the entrance
+    //     by the factory or a board and was never held here; the escrow this
+    //     clone holds has no fee in it to give back. A HELD TOP-UP fee is
+    //     different and does go home, through `_settlePending` like every other
+    //     exit -- that money paid for work that is now not happening.
+    //
+    // ── AND WHAT IT DELIBERATELY BLOCKS NOTHING ────────────────────────────
+    // A live offer is read by these three functions and by `getCancellation()`,
+    // and by NOTHING else in this file. It does not bar a hand-in, an
+    // acceptance, a dispute, a top-up or any timeout. That is what keeps an
+    // offer from being a weapon: an abandoned one costs its target nothing, the
+    // deal runs on its own clocks, and every door that was open stays open.
+
+    /// @notice One side offers to call the deal off, and says on what terms.
+    ///
+    /// @param toClient   what the client takes
+    /// @param toExecutor what the executor takes
+    ///
+    /// The two must add up to EXACTLY what the escrow holds for the work
+    /// (`totalPayout()`), or the offer is refused with `WrongAmount`. Anything
+    /// still pending as a top-up is not part of that sum and goes home to the
+    /// client on the way out, the same as at every other exit.
+    ///
+    /// ⚠️ ONLY `toExecutor` IS STORED. The client's share is the remainder of
+    /// the pot at the moment of payment -- see `_cancelToExecutor` for why that
+    /// is the safety property of this feature and not a saved slot.
+    ///
+    /// A new offer REPLACES whatever was on the table, from either side. That is
+    /// how a counter-offer works, and it is safe because the answer is bound to
+    /// the figures: replacing an offer cannot capture a yes meant for the old
+    /// one, it can only make that yes refuse.
+    ///
+    /// ⚠️ NO `nonReentrant`, and that is measured rather than forgotten: this
+    /// function makes no external call and moves no token. The guard inlines
+    /// into every function that carries it, and this is the one contract in the
+    /// repository that cannot be split when it reaches the EIP-170 wall.
+    function proposeCancellation(uint256 toClient, uint256 toExecutor) external {
+        address sender = _msgSender();
+        if (sender != client && sender != executor) revert NotParty();
+        if (_activatedAt == 0) revert NotActive();
+        if (_finalized) revert AlreadyFinalized();
+        // ⚠️ THE SAME FENCE THE HAND-IN GOT ON 25 SEPTEMBER 2026, and the same
+        // argument. A dispute NOBODY IS JUDGING does not bar an agreed parting
+        // -- it is the cleanest end that dispute can have, and it costs the
+        // protocol and the corps nothing. Once an arbiter has CLAIMED it he has
+        // put a bond down against this case and is forming a verdict on the
+        // record as it stands; letting the two parties pull the case out from
+        // under him is a lever, and it is precisely the lever the owner asked
+        // not to exist. Refused as `AlreadyDisputed` rather than under a new
+        // name: that selector (0x09dd1236) is already in the relayer's and the
+        // web client's decode tables, and a new error would reach a gasless
+        // caller as four undecodable bytes.
+        if (_disputedAt != 0 && arbiter != address(0)) revert AlreadyDisputed();
+
+        // ⚠️ NOT `toClient + toExecutor != pot`. That addition overflows on a
+        // hostile argument, and Solidity answers an overflow with Panic(0x11) --
+        // a crash where this file's rule is a named verdict. Written this way,
+        // every shape of rubbish lands on one name: over the pot, under it, two
+        // zeros, and type(uint256).max on either side.
+        uint256 pot = _pot();
+        if (toExecutor > pot || toClient != pot - toExecutor) revert WrongAmount();
+
+        _cancelProposer   = sender;
+        _cancelProposedAt = _now40();
+        _cancelToExecutor = toExecutor;
+
+        emit CancellationProposed(
+            sender,
+            toClient,
+            toExecutor,
+            uint256(_cancelProposedAt) + CANCEL_OFFER_WINDOW
+        );
+    }
+
+    /// @notice The other side says yes to those figures, and the deal ends.
+    ///
+    /// @param toClient   what the offer promises the client — checked, not trusted
+    /// @param toExecutor what the offer promises the executor — checked, not trusted
+    ///
+    /// Both figures are arguments so that the caller states what they are
+    /// agreeing to. They are compared against what the offer actually is right
+    /// now, and a disagreement refuses with `CancellationTermsChanged`. Two
+    /// different things move underneath an offer and both are caught by that one
+    /// comparison: the proposer re-making it, and the escrow growing because a
+    /// top-up was accepted in between.
+    ///
+    /// ⚠️ ONE THING THIS CANNOT PREVENT, said out loud rather than left to be
+    /// found: the proposer can take the offer back in front of the confirmation
+    /// (they see it in the mempool and press `withdrawCancellation` first). That
+    /// is not manipulation, it is "I changed my mind before you said yes", and no
+    /// propose/confirm scheme without a binding commitment period can remove it.
+    /// `withdrawExtra` has exactly the same property and has since it was
+    /// written. What CANNOT happen is the thing the owner named: being paid
+    /// figures other than the ones that were confirmed.
+    function confirmCancellation(uint256 toClient, uint256 toExecutor) external nonReentrant {
+        address sender = _msgSender();
+        if (sender != client && sender != executor) revert NotParty();
+        if (_finalized) revert AlreadyFinalized();
+
+        address proposer = _cancelProposer;
+        if (proposer == address(0)) revert NoCancellationPending();
+        // THE WHOLE MEANING OF THE WORD "MUTUAL", in one line. Without it this
+        // function is a unilateral cancellation with extra steps, and the
+        // feature is the opposite of what was asked for.
+        if (sender == proposer) revert NotCounterparty();
+        // An offer that never died would be answerable at the one moment that
+        // happened to suit its holder. See CANCEL_OFFER_WINDOW.
+        //
+        // `>` and not `>=`, matching `respondToDispute` -- the other place in
+        // this file where one side answers the other inside a window and no
+        // money timer sits on the far edge of it. The last second of the window
+        // is still the window.
+        if (block.timestamp > uint256(_cancelProposedAt) + CANCEL_OFFER_WINDOW) {
+            revert WindowAlreadyPassed();
+        }
+        // Asked on BOTH doors, not only on the proposal: an arbiter can claim
+        // the case after an offer is already on the table, and it is the
+        // confirmation that would take the money out from under him.
+        if (_disputedAt != 0 && arbiter != address(0)) revert AlreadyDisputed();
+
+        uint256 pot    = _pot();
+        uint256 toExec = _cancelToExecutor;
+        // ⚠️ THE LOCK. `toExec > pot` cannot happen today -- `amount` is frozen
+        // at `initialize` and `extrasTotal` only ever grows, so the pot an offer
+        // was measured against can never shrink under it -- and it is checked
+        // anyway, because the alternative is that a future change turns the
+        // subtraction below into Panic(0x11) on a money path in a contract that
+        // can never be fixed.
+        if (toExec > pot || toExecutor != toExec || toClient != pot - toExec) {
+            revert CancellationTermsChanged();
+        }
+
+        // Off the table before a cent moves, so the offer cannot be answered
+        // twice even if something below re-entered.
+        _cancelProposer   = address(0);
+        _cancelProposedAt = 0;
+        _cancelToExecutor = 0;
+
+        // ⚠️ AND THE ONE WRITE THAT GOES THE OTHER WAY. The three lines above
+        // erase the offer; this line records that it was ANSWERED. Without it
+        // the storage left behind by two people agreeing to part is the same
+        // storage a timeout leaves, and `endedByAgreement()` would have nothing
+        // to read -- see the field's own comment for why this is not a sixth
+        // `Status`. It is written HERE, in the same statement group and the same
+        // transaction as the erasure, so there is no window in which the offer
+        // is gone and the reason is not yet recorded: either both landed or the
+        // whole call reverted and nothing did.
+        _cancelledByAgreement = true;
+
+        // Hanging top-ups go home first, exactly as at the other five exits.
+        // Without this line the clone would keep them for ever: it has no rescue
+        // function, and every other door is shut once `_complete` has run.
+        _settlePending();
+
+        uint256 toCli = pot - toExec;
+
+        // REFUNDED, not a new enum member. The status enum is frozen -- the
+        // layout gate expands it, the web client and the subgraph parse its
+        // existing values -- and `Status` already makes this call twice for the
+        // same reason: an unjudged split ends REFUNDED, and so does a declined
+        // offer. The event is what tells the cases apart.
+        _complete(Status.REFUNDED);
+
+        // Both halves soft and both halves BOOKED, like the unjudged split. This
+        // is the last door this deal has: after `_complete` every other exit
+        // refuses by name, so neither share may hang on whether an address is
+        // currently servable. What the token refuses is booked as a debt and
+        // pulled later through withdrawUndeliveredPayout/Refund.
+        uint256 executorPaid = _payExecutor(toExec) ? toExec : 0;
+        uint256 clientPaid   = _payClient(toCli)   ? toCli  : 0;
+
+        // Only if a dispute was open -- and it can only have been an unclaimed
+        // one, the fence above saw to that. The diamond books a bounty against
+        // an unclaimed case and refunds it inside this call, so skipping it
+        // would leave somebody's bounty stranded on the diamond. Tolerated and
+        // capped like every other diamond call here, and placed AFTER the money
+        // so a revert inside it cannot roll a payment back.
+        if (_disputedAt != 0) _clearDisputeClaim();
+
+        emit CancelledByAgreement(proposer, sender, clientPaid, executorPaid);
+    }
+
+    /// @notice Take the offer off the table.
+    ///
+    /// ⚠️ OPEN TO BOTH SIDES, and that is one function doing two honest jobs.
+    /// For the proposer it is taking their own offer back -- the second honest
+    /// end an offer needs, next to the window. For the other side it is saying
+    /// no out loud, which is strictly better for them than silence: the screen
+    /// can show a refusal, and the proposer learns where they stand instead of
+    /// waiting out two days.
+    ///
+    /// It buys the other side no power they did not have. Clearing an offer they
+    /// could simply have ignored changes nothing about the money and nothing
+    /// about the deal; the only thing either of them can do to the escrow still
+    /// takes both signatures.
+    ///
+    /// Split into two functions the way `withdrawExtra` and `rejectExtra` are?
+    /// No -- those two move MONEY, and the file keeps them apart so that a
+    /// shared helper could not pay the wrong ledger. Nothing moves here, so one
+    /// door with `by` in its event says everything two doors would.
+    function withdrawCancellation() external {
+        address sender = _msgSender();
+        if (sender != client && sender != executor) revert NotParty();
+        if (_finalized) revert AlreadyFinalized();
+        if (_cancelProposer == address(0)) revert NoCancellationPending();
+
+        _cancelProposer   = address(0);
+        _cancelProposedAt = 0;
+        _cancelToExecutor = 0;
+
+        emit CancellationWithdrawn(sender);
+    }
+
+    /// @notice The offer on the table, as a screen has to print it.
+    ///
+    /// Answers `(address(0), 0, 0, 0)` when there is nothing live -- no offer
+    /// was made, or the deal has already closed with one still standing.
+    ///
+    /// ⚠️ AN EXPIRED OFFER IS STILL REPORTED, with its `expiresAt` in the past.
+    /// "There is no offer" and "there is an offer and it has run out" are two
+    /// different facts, and a view that folded them together would make a screen
+    /// say the wrong one of the two: a person who made an offer yesterday and
+    /// sees nothing at all concludes the transaction failed. The caller compares
+    /// `expiresAt` against its own clock, which is the comparison
+    /// `confirmCancellation` makes too.
+    ///
+    /// ⚠️ THE CLIENT'S SHARE IS COMPUTED, NOT STORED, so this view and the
+    /// confirmation can never disagree: both take it as the remainder of the
+    /// pot. A screen that prints this figure is printing the figure a
+    /// confirmation will accept, at that block. If the escrow grows in between,
+    /// both change together and the stale confirmation refuses.
+    ///
+    /// ⚠️ IT IS ALSO THE FEATURE PROBE. An EIP-1167 clone is nailed to the
+    /// implementation it was born from, so a deal created before this
+    /// implementation exists will never have this selector and answers a call to
+    /// it by reverting. A caller can therefore tell the two generations apart:
+    /// this view answering means the clone can be cancelled by agreement, and
+    /// only a staticcall that REVERTS means it cannot. The interface must make
+    /// that distinction before it offers a button -- a node that merely blinked
+    /// looks the same from outside, and three answers are needed where two would
+    /// lie ("not read yet" is not "not supported").
+    function getCancellation() external view returns (
+        address proposer,
+        uint256 toClient,
+        uint256 toExecutor,
+        uint256 expiresAt
+    ) {
+        proposer = _cancelProposer;
+        if (proposer == address(0) || _finalized) return (address(0), 0, 0, 0);
+        toExecutor = _cancelToExecutor;
+        uint256 pot = _pot();
+        // Guarded, although the pot cannot shrink under a stored share -- see
+        // the same guard in `confirmCancellation`. A view that panics is a
+        // screen that cannot draw a deal at all.
+        toClient   = pot > toExecutor ? pot - toExecutor : 0;
+        expiresAt  = uint256(_cancelProposedAt) + CANCEL_OFFER_WINDOW;
+    }
+
+    /// @notice Did this deal end because both sides agreed to part?
+    ///
+    /// TRUE only after a `confirmCancellation` that went through. FALSE for a
+    /// deal still running, for a deal with an offer merely standing, and for
+    /// every other way of reaching `Status.REFUNDED`: the activation timeout,
+    /// a declined offer, the deadline timeout and the arbiter timeout. So the
+    /// pair (`status()`, this) separates "we agreed" from "it ran out", which
+    /// `status()` alone cannot -- all five ends are REFUNDED, by design, and
+    /// the enum is frozen.
+    ///
+    /// ⚠️ A SEPARATE DOOR RATHER THAN A THIRTEENTH WORD ON `getDetails()`, and
+    /// the reason is the same one written out at `getCancellation()` above: an
+    /// EIP-1167 clone is nailed to the implementation it was born from, so a
+    /// deal older than this build will never have this selector and answers a
+    /// call to it by reverting with no data. THAT REVERT IS THE ANSWER -- it
+    /// means "this deal cannot tell you", which is not "no". Widening the
+    /// `getDetails()` tuple instead would have been the quiet failure: an older
+    /// clone still answers twelve words, the decoder reads the twelfth into the
+    /// thirteenth slot or reverts on length, and a caller gets a wrong answer
+    /// where it should have got no answer at all.
+    ///
+    /// ⚠️ WHAT AN INTERFACE STILL HAS TO DO, said here so it is not discovered
+    /// on a screen. Three answers, not two: `true`, `false`, and "the call
+    /// reverted". A node that merely blinked looks exactly like a clone without
+    /// the door, so a revert must be re-read before it is drawn as a fact. For
+    /// the generation that has `confirmCancellation` but not this view -- deals
+    /// cut between 29 September 2026 and this build -- the only record of a
+    /// mutual end is the `CancelledByAgreement` event, which an indexer can
+    /// read and a bare RPC call cannot.
+    function endedByAgreement() external view returns (bool) {
+        return _cancelledByAgreement;
     }
 
     // -------- EXTRAS --------

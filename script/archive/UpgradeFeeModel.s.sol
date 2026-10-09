@@ -548,10 +548,10 @@ contract UpgradeFeeModel is Script {
         sels[9]  = ArbiterRegistryFacet.clearDisputeClaim.selector;
         sels[10] = ArbiterRegistryFacet.submitVerdict.selector;
         sels[11] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        sels[12] = ArbiterRegistryFacet.overturnVerdict.selector;
+        sels[12] = bytes4(0x42a71c6c) /* overturnVerdict(address,bool), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[13] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        sels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        sels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
+        sels[14] = bytes4(0x5533316c) /* freezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
+        sels[15] = bytes4(0x69315118) /* unfreezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[16] = ArbiterRegistryFacet.clearStuckVerdict.selector;
         sels[17] = ArbiterRegistryFacet.raiseAppeal.selector;
         sels[18] = ArbiterRegistryFacet.voteOnAppeal.selector;

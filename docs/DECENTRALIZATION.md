@@ -26,20 +26,27 @@ after this table.
 | Power | Where | What it means in practice |
 |---|---|---|
 | **Replace any facet** | `diamondCut` (EIP-2535) | The strongest power, and it subsumes the rest: escrow, arbitration and fee logic can all be swapped, and the same call can run arbitrary initialisation code inside the diamond's storage even with an empty list of facets, which leaves `facets()` unchanged. Every guarantee below holds only while this one is unused. |
-| **Overturn an arbiter's verdict** | `ArbiterRegistryFacet.overturnVerdict` | A submitted verdict that has not been finalized can be flipped to the other party — once per verdict, and not while an appeal is being decided. When the verdict then executes, the escrow goes to the party the owner chose; the arbiter's 90% share of the dispute fee is withheld from him — it pays the appeal that found the mistake, and what is left goes to the arbiter vault — and the protocol treasury keeps only its usual 10%; a top-up paid for the dispute goes back to whoever paid it; the arbiter loses 200 XP and is booked one judicial mistake. An appeal can only be raised within 24 hours of the arbiter's verdict, and the overturn does not reopen that window: an overturn pressed after it cannot be appealed. It takes no written reason and does not check whether the caller is a party to the deal. |
-| **Freeze a verdict** | `ArbiterRegistryFacet.freezeVerdict` / `unfreezeVerdict` | A submitted verdict can be held unexecuted, with no deadline on the hold. While it is held the escrow stays where it is: the parties' own exit, the timeout, refuses once a verdict is on file. A frozen verdict cannot be appealed, and the 24-hour appeal window keeps running while it is frozen, so a hold that outlasts the window leaves the losing party no appeal. No written reason, no check of whether the caller is a party. |
-| **Take a dispute away from its arbiter** | `ArbiterRegistryFacet.releaseDisputeClaim` | Before a verdict and inside the dispute window, the owner can take a claimed dispute off the arbiter who holds it. If no other arbiter claims it before the window ends, the deal is settled by the attendance rule — half each if both parties answered the dispute, three quarters to the party who answered otherwise — where an arbiter who held the case and stayed silent would have left the whole escrow to the client. The press can be repeated each time another arbiter claims. No written reason, no check of whether the caller is a party. |
+| ~~**Overturn an arbiter's verdict**~~ **GONE since 9 October 2026** | — | The owner could flip a submitted, unfinalized verdict to the other party, and the arbiter's 90% share of the dispute fee was withheld from him — ~~it pays the appeal that found the mistake~~ **and since 9 October 2026 there is no such press to pay for anything: an appeal is funded by its own deposit and by nothing a hand withholds.** **The door was removed from the protocol, not restricted.** A verdict can now be overturned only one way: the losing party appeals within **72 hours** of the verdict (`FINALIZE_DELAY`), and a panel of three arbiters votes. Nobody can flip a ruling by hand, and nothing was put in its place. Struck through rather than deleted so that a reader comparing this page with an earlier version can see which power went, and when. |
+| ~~**Freeze a verdict**~~ **GONE since 9 October 2026** | — | The owner could hold a submitted verdict unexecuted, and release it again. ~~With no deadline on the hold~~ until 25 September 2026, when the hold was given a clock: one press lapsed by itself **72 hours** after it (`FREEZE_WINDOW`), and the verdict could then be finalized without anybody pressing anything. **Both doors were removed from the protocol on 9 October 2026, and nothing writes that clock any more.** The only hold left on a verdict is the one an appeal raises, and it is released by the resolution of that appeal, which anybody may call once the voting window closes. This also ended a limit the page used to name out loud: because a fresh press restarted the clock with no cap on presses, a hand that pressed every three days could keep somebody's escrow held without any end to it. There is no press any more, so every hold still standing has exactly one window left to run. |
+| **Take a dispute away from its arbiter** | `ArbiterRegistryFacet.releaseDisputeClaim` | Before a verdict and inside the dispute window, the owner can take a claimed dispute off the arbiter who holds it. If no other arbiter claims it before the window ends, the deal settles on the timeout, and that settlement asks about delivery before it asks about attendance — four endings, in this order: nothing ever handed in — the whole escrow to the client, whoever answered; handed in and both answered — half each; handed in and the executor stayed silent — a quarter to the executor and three quarters to the client; handed in and the client stayed silent — a quarter to the client and three quarters to the executor. ~~Settled by the attendance rule alone~~ until 25 September 2026, when the delivery question was put in front of it: before that an executor who had delivered nothing and merely answered the dispute took half. An arbiter who held the case and stayed silent, by contrast, would have left the whole escrow to the client. The press can be repeated each time another arbiter claims. No written reason, no check of whether the caller is a party. |
 | **Delete a stuck verdict record** | `ArbiterRegistryFacet.clearStuckVerdict` | Erases the pending-verdict record of a deal. It refuses while the deal is still `DISPUTED`, so it runs only after the escrow has already left the dispute; nothing else limits it. |
 | **Get past the reserve withdrawal gate** | `ProtocolTreasury.withdrawReserve`, plus the Diamond owner | The reserve is held by `ProtocolTreasury`, which is the fee recipient today. Its withdrawal pays only the DAO address, and only while the diamond reports at least `getDaoThreshold()` unique active users; it never asks `isDaoActive()`, so a manually set flag does not open it. But all three answers are read from the diamond, and the diamond's owner decides what the diamond answers. Three routes past a gate of this shape were worked out and measured against the earlier `Treasury` contract: replacing the facet that reports the user count (visible in `facets()`); inflating the count with real deals, which costs gas and little else; and `diamondCut` with an empty cut and an initialisation call that writes the count straight into storage — about 31,700 gas, and `facets()` is byte-identical before and after, so only the `DiamondCut` event shows it. `ProtocolTreasury` reads the same answers from the same diamond; the routes were not re-measured against it. Separately, the owner can name his own address as the DAO address and accept it from the same key — two public transactions — after which only the user count stands in the way. |
-| **Protocol settings** | `setFeeRecipient`, `setFeeBps`, `setFeeFloor`, `setMaxPendingRequests`, `setTrustedForwarder`, `setAgreementDeployer`, `setDAOAddress` | Where fees go and how large they are (capped at 20% by `MAX_FEE_BPS`), which forwarder the diamond trusts, which deployer clones new agreements. Existing agreements keep the forwarder and implementation they were created with. |
+| **Protocol settings** | `setFeeRecipient`, `setFeeBps`, `setFeeFloor`, `setMaxPendingRequests`, `setTrustedForwarder`, `setAgreementDeployer`, `setDAOAddress` | Where fees go and how large they are. `MAX_FEE_BPS` caps the **rate** at 20% and nothing else: the fee charged is the larger of the rate and the floor, and `setFeeFloor` carries no upper bound at all — at today's $1 floor a $2 deal pays 50%, and on a small enough deal the proportion has no ceiling. Which forwarder the diamond trusts, which deployer clones new agreements. Existing agreements keep the forwarder and implementation they were created with. |
 | **Hand the key to another address** | `transferOwnership` (`OwnershipFacet`) | Every power on this page moves with it. Two-step: the named address must call `acceptOwnership` itself, so a typo does not burn the protocol. |
 | **Redirect deal registration** | `RegistryFacet.setAuthorizedFactory` | Names the one address `RegistryFacet` accepts `register` calls from. Points at the diamond itself today; pointed elsewhere, the record of who is dealing with whom is written by something else. |
 | **Price arbitration** | `setArbiterFloor`, `setDisputeDiscount` | What a dispute costs the parties and what the arbiter is owed. Neither setter has a bound in the code. Live values are 10 USDC and 3 USDC. |
 | **Redraw every receipt NFT** | `JobReceiptFacet.setSvgRenderer` | The renderer contract behind every token image, including tokens already minted. |
-| **Set the treasury's four numbers** | `TreasuryLinkFacet.setTreasuryShares` / `setVaultTargetDisputes` | The facet was cut on 4 September 2026 and `ProtocolTreasury` deployed on 5 September. The split itself — the order of the ladder, who may receive, and the CEILING on every share — is frozen in `ProtocolTreasury`, a contract outside the diamond with no admin and no upgrade path. What the owner can move are the numbers under those ceilings: the foundation's share can be lowered and can never be raised above 60%, and once governance activates that ceiling drops to 20% and the treasury latches it forever. The reserve keeps at least 10% of income by arithmetic, not by promise. Live shares: vault 10%, arbiter payroll 20%, foundation 50%. |
-| **Pause new deals** | `FactoryFacet.pauseNewDeals` / `resumeNewDeals` | Cut on 3 September 2026. Closes the eleven doors where money enters — posting, requesting, hiring on either board, and the direct hire — for 72 hours, and lets go by itself. It cannot reach a deal that already exists: those are EIP-1167 clones running on their own clocks. It cannot trap money either: cancel, reject, remove and withdraw carry no gate. Holding it longer than 72 hours takes another signed transaction, and every press is a log entry with a name against it. This is not a new power — the owner could already stop the marketplace by replacing a facet; it is the same power made fast and reversible. |
-| **The arbiter roster** | `ArbiterRegistryFacet`, `ArbiterApplicationsFacet` | Arbiters are curated by hand for now: every seat on the chain today was given by the owner. Seating, approving and refusing applications, and taking back a seat that has nothing on its record are the owner's (and, within limits, a chief arbiter's). Restoring an arbiter who was removed for cause is the owner's alone. |
-| **Suspend or remove an arbiter** | `ArbiterAccountabilityFacet` | `suspendArbiter` stops an arbiter for 72 hours from the press and expires on its own; pressing again starts the 72 hours again, with no limit on presses and no reason. While it lasts he cannot claim disputes or resign, and a verdict he has already submitted is not executed — the escrow of that deal waits. `removeArbiterForCause` does not expire: it takes the seat, forfeits the bond that seat carries into the arbiter vault, and writes a permanent public accusation against a real address. **Removal is not one button**: it runs only through a `proposeRemoval` that has stood for 48 hours (`REMOVAL_DELAY`) and is executed inside a 14-day window (`PROPOSAL_TTL`), on the same cause code that was served. The section on removal below gives the mechanics, and the section after it prices what a removal costs today. |
+| **Set the treasury's four numbers** | `TreasuryLinkFacet.setTreasuryShares` / `setVaultTargetDisputes` | The facet was cut on 4 September 2026 and `ProtocolTreasury` deployed on 5 September. The split itself — the order of the ladder, who may receive, and the CEILING on every share — is frozen in `ProtocolTreasury`, a contract outside the diamond with no admin and no upgrade path. What the owner can move are the numbers under those ceilings: the foundation's share can be lowered and can never be raised above 60%, and once governance activates that ceiling drops to 20% — the treasury re-reads the diamond's own answer every time it distributes, so the drop needs no press. ~~And the treasury latches it forever~~ at that moment: the handover is written down permanently on the first `distribute()` that has income to split, or by `latchDao()`, which anybody may call and which exists for exactly this window. Until one of the two lands, a facet replacement that makes the diamond answer "not yet" lifts the ceiling back to 60%; after it, the treasury stops asking. The reserve keeps at least 10% of income by arithmetic, not by promise. Live shares: vault 10%, arbiter payroll 20%, foundation 50%. |
+| **Pause new deals** | `FactoryFacet.pauseNewDeals` / `resumeNewDeals` | Cut on 3 September 2026. Closes **twelve** doors for 72 hours and lets go by itself: ten on the two boards and the factory's own two — posting, requesting, hiring on either board, and the direct hire. ~~Eleven doors where money enters~~ was wrong in both halves: there are twelve, and two of them (`editJob`, `editService`) move no money at all. Those two are braked anyway, so that a board where nothing can be hired does not go on advertising rewritten work. It cannot reach a deal that already exists: those are EIP-1167 clones running on their own clocks. It cannot trap money either: cancel, reject, remove and withdraw carry no gate. Holding it longer than 72 hours takes another signed transaction, and every press is a log entry with a name against it. This is not a new power — the owner could already stop the marketplace by replacing a facet; it is the same power made fast and reversible. |
+| **The arbiter roster** | `ArbiterRegistryFacet`, `ArbiterApplicationsFacet` | Two doors lead onto the roster and only one of them is a power. `applyAsArbiter` seats the caller in the same transaction: no modifier, no role check, no money, and the single thing the contract reads is a run of deals closed without a dispute — nobody approves an entry and nobody can refuse one. The owner's door is `addArbiter`, which measures nothing. ⚠️ **Both facts hold at once, and the one in use is the second: every seat on the chain today was given by the owner, and nobody has yet come through the open door.** ~~Approving and refusing applications~~ left the diamond with the cut of 22-24 September 2026, together with the seat bond — there is no application left to decide, and the selectors answer the zero address (see the roll-call below). Taking back a seat that has nothing on its record is the owner's (and, within limits, a chief arbiter's). Restoring an arbiter who was removed for cause is the owner's alone. |
+| **Suspend or remove an arbiter** | `ArbiterAccountabilityFacet` | `suspendArbiter` stops an arbiter for 72 hours from the press and expires on its own; pressing again starts the 72 hours again, and it takes no written reason. ~~With no limit on presses~~ **until 8 October 2026, when the restart was given a ceiling: three presses against one arbiter (`HAND_SUSPENSION_LIMIT`), and the fourth refuses in words that name the removal door instead. The count returns to zero once the arbiter has stood a week with nobody pressing at him (`HAND_SUSPENSION_SILENCE`), measured from the last press, so a calendar boundary cannot be stood on to double it.** The ceiling is on the hand and not on the chain: the automatic suspension that follows a third judicial mistake is written by the protocol itself and is not counted against it. While it lasts he cannot claim disputes or resign, and a verdict he has already submitted is not executed — the escrow of that deal waits. `removeArbiterForCause` does not expire: it takes the seat and writes a permanent public accusation against a real address. ~~and forfeits the bond that seat carries into the arbiter vault~~ — **there is no such bond any more, and that is the row above speaking.** The seat bond left the diamond with the cut of 22-24 September 2026; a seat costs nothing to take and therefore carries nothing to lose. The transfer into the arbiter vault is still written in the facet and still runs, and what it moves is measured at zero: as of 8 October 2026 not one function in this protocol writes a non-zero bond for an arbiter, so `getArbiterBond` answers zero for every address and the forfeiture moves that zero. **What a removal costs today is the seat and the public record, and nothing else** — which is also what the section below pricing a removal has to be read against. **Removal is not one button**: it runs only through a `proposeRemoval` that has stood for 48 hours (`REMOVAL_DELAY`) and is executed inside a 14-day window (`PROPOSAL_TTL`), on the same cause code that was served. The section on removal below gives the mechanics, and the section after it prices what a removal costs today. |
+
+> ⚠️ **One hold can still be standing, and it is not a power — it is the residue of one.** A
+> verdict a hand froze BEFORE 9 October 2026 still carries its flag and its timestamp, and the
+> clock `FREEZE_WINDOW` lapses it **72 hours** after the press that set it, after which anybody
+> may finalize it. The constant and the helper that reads it are kept in the facet for exactly
+> that reason. What is gone is the press: nothing in `src/` writes that timestamp any more, so
+> no new hold of this kind can begin, and each one left standing runs out by itself.
 
 ### The complete roll-call
 
@@ -68,12 +75,14 @@ the table omits, a row the code does not gate, or a different set of callers or 
 does, when the reason is required.
 
 <!-- role-levers:begin -->
-Counted from the code: **40 functions**. The owner is admitted to 36, the chief arbiter to 5, the DAO address to 10, the fee recipient to 2, the pending owner to 1 and the pending DAO address to 1; 3 take words.
+Counted from the code: **37 functions**. The owner is admitted to 33, the chief arbiter to 5, the DAO address to 7, the fee recipient to 2, the pending owner to 1 and the pending DAO address to 1; 3 take words.
+
+> **40 → 37 on 9 October 2026.** Three doors were removed from the protocol, not renamed or moved: the governance hand over a submitted verdict — overturning one, freezing it and releasing it. They were the only three a DAO address shared with the owner on equal terms, which is why the owner's count and the DAO address's count both fall by three. Nothing took their place: a verdict can now be overturned only by a panel of three arbiters voting on an appeal, and the only hold left on a verdict is the appeal's own.
 
 | # | Function | Who may call it | Words | What it does today |
 |---|---|---|---|---|
 | 1 | `DiamondCutFacet.diamondCut` | owner | no | Adds, replaces or removes any facet and can run initialisation code in the diamond's storage. Subsumes everything below. |
-| 2 | `OwnershipFacet.transferOwnership` | owner | no | Names the next owner; nothing moves until that address calls `acceptOwnership` (row 39). A new call overwrites the name; the zero address is refused. |
+| 2 | `OwnershipFacet.transferOwnership` | owner | no | Names the next owner; nothing moves until that address calls `acceptOwnership` (row 36). A new call overwrites the name; the zero address is refused. |
 | 3 | `FactoryFacet.setFeeRecipient` | owner | no | Where every fee is sent. Live value: the `ProtocolTreasury` contract. |
 | 4 | `FactoryFacet.setFeeBps` | owner | no | The fee rate, capped at 2,000 (20%) by `MAX_FEE_BPS`. Live value 500 (5%). |
 | 5 | `FactoryFacet.setFeeFloor` | owner | no | The minimum fee; zero is refused. Live value 1 USDC. |
@@ -90,31 +99,28 @@ Counted from the code: **40 functions**. The owner is admitted to 36, the chief 
 | 16 | `ArbiterVaultFacet.setDisputeDiscount` | owner | no | What the arbiter vault takes off a dispute top-up. No bound in the code. Live value 3 USDC. |
 | 17 | `ArbiterRegistryFacet.setChiefArbiter` | owner | no | Names any address as chief arbiter, or none. Refuses once governance is active. |
 | 18 | `ArbiterRegistryFacet.activateDAO` | owner | no | The governance switch, and it is manual: refuses until a DAO address has accepted, until the diamond counts at least 1,000 unique active users, and until the court is live on its own three floors — 15 deals open at the moment of the press, 8 disputes finalized on an arbiter's verdict in a row with no governance hand in any of them, and 3 different arbiters among them; one-way. See "The four stages". |
-| 19 | `ArbiterRegistryFacet.setDAOAddress` | owner, DAO address | no | Only *proposes* a DAO address (row 40 takes office). The owner proposes until governance is active with a DAO address in office; after that only the sitting DAO address may. The zero address is refused. |
+| 19 | `ArbiterRegistryFacet.setDAOAddress` | owner, DAO address | no | Only *proposes* a DAO address (row 37 takes office). The owner proposes until governance is active with a DAO address in office; after that only the sitting DAO address may. The zero address is refused. |
 | 20 | `ArbiterRegistryFacet.clearStuckVerdict` | owner | no | Deletes the pending-verdict record of a deal that is no longer `DISPUTED`; nothing else limits it. |
-| 21 | `ArbiterRegistryFacet.overturnVerdict` | owner, DAO address | no | Flips a submitted, unfinalized verdict to the other party, once, not during an appeal. At execution the escrow goes the other way, the arbiter's 90% of the dispute fee is withheld and spent on the appeal's refund before anything is left for the arbiter vault, and only the usual 10% goes to the treasury, a top-up is refunded, and the arbiter loses 200 XP and is booked a judicial mistake — the third in a row suspends him and, unless another accusation already stands, lays the chain's own accusation against him. The 24-hour appeal window is not reopened. Does not check whether the caller is a party to the deal. The DAO address is admitted from the moment it accepts, before `activateDAO`; the owner is admitted always. |
-| 22 | `ArbiterRegistryFacet.freezeVerdict` | owner, DAO address | no | Holds a submitted verdict from execution, with no deadline. The escrow waits: the parties' timeout refuses while a verdict is on file. A frozen verdict cannot be appealed, and the 24-hour appeal window keeps running. Same callers as row 21. |
-| 23 | `ArbiterRegistryFacet.unfreezeVerdict` | owner, DAO address | no | Releases a hold; refuses while an appeal is being decided. Same callers as row 21. |
-| 24 | `ArbiterAccountabilityFacet.removeArbiterForCause` | owner, DAO address | unless the chain verifies the cause | Executes a human-laid removal proposal that is at least 48 hours old and under 14 days, on the same cause code. Takes the seat. **It forfeits no money, on the chain since 24 September 2026**: the only field it takes is `arbiterBond`, which is zero for every seat now that the bond is posted per CASE, and a case's bond is not touched by a removal at all. Rewards already earned are not touched either. A cause the chain verifies (at least two judicial mistakes in a row, or a recorded silence) is checked; any other cause needs an evidence digest and words. The caller is the removal authority: the owner until governance is active with a DAO address in office, then only the DAO address. |
-| 25 | `ArbiterRegistryFacet.addArbiter` | owner | no | Seats an arbiter, by name, taking no money and measuring nothing. **The chief lost this door with the cut of 24 September 2026**: it is the one entrance that asks for no record at all, which makes it the widest hole in the corps, and it was held by a man who had himself been appointed. The cap on his bloc went with the power rather than being kept beside it. Closes for everyone once governance is active with a DAO address in office. |
-| 26 | `ArbiterAccountabilityFacet.suspendArbiter` | owner, chief arbiter | no | 72 hours from the press, restartable without limit. Blocks new claims and resignation, and holds execution of verdicts he already submitted. The chief loses it when governance activates; the owner keeps it. |
-| 27 | `ArbiterAccountabilityFacet.liftSuspension` | owner, chief arbiter, DAO address | no | Ends a suspension early. An ordinary one: owner or chief (the chief only until governance activates, the owner always). One left by a removal, or one standing while the chain's own accusation is live: only the removal authority (row 24). |
-| 28 | `ArbiterAccountabilityFacet.proposeRemoval` | owner, chief arbiter, DAO address | unless the chain verifies the cause | Serves the 48-hour notice a removal needs. Owner or chief until governance is active with a DAO address in office, then only the DAO address. A cause the chain does not verify needs an evidence digest and words; a verified cause is checked only when the removal is executed. |
-| 29 | `ArbiterAccountabilityFacet.withdrawProposal` | owner, chief arbiter, DAO address | no | Cancels a removal proposal. Before handover the owner may cancel any, a chief only his own or one the chain laid; after handover only the DAO address. Cancelling a chain-laid accusation also clears the arbiter's judicial-mistake streak. |
-| 30 | `ArbiterRegistryFacet.releaseDisputeClaim` | owner | no | Takes a claimed dispute off its arbiter before a verdict, inside the dispute window. If nobody else claims, the attendance rule settles the escrow (half each if both parties answered, three quarters to the one who answered otherwise) instead of the full refund to the client that the arbiter's silence would bring. Repeatable. Does not check whether the caller is a party. The claiming arbiter may also release his own claim; that is not a role and is not counted. |
-| 31 | `ArbiterVaultFacet.fundVault` | owner, fee recipient | no | Pays USDC **in** to the arbiter vault. A donation, not a lever. |
-| 32 | `TreasuryLinkFacet.fundArbiterPayroll` | owner, fee recipient | no | Pays USDC **in** to the arbiter payroll. |
-| 33 | `FactoryFacet.initFactory` | owner | no | Spent. On the chain it reverts `AlreadyInitialized` even when called from the owner's address. |
-| 34 | `RegistryFacet.initRegistry` | owner | no | Spent. Same. |
-| 35 | `FactoryFacet.initFeeModel` | owner | no | Spent. Same. |
-| 36 | `ArbiterApplicationsFacet.revokeUnprovenSeat` | owner, chief arbiter | always | Takes back a seat that has nothing on its record — no dispute ever taken, no verdict, no mistake, no earnings, no one seated by it, not the chief — while no suspension or removal proposal stands. It refunds whatever bond the seat carries, which is zero for every seat since the bond moved onto the case. The owner may revoke any granted seat, a chief only a seat he granted. Closes once governance is active. |
-| 37 | `OwnershipFacet.acceptOwnership` | pending owner | no | The named successor takes the key, and with it every power on this page. |
-| 38 | `ArbiterRegistryFacet.acceptDAOAddress` | pending DAO address | no | The proposed DAO address takes office by its own transaction — a raw `msg.sender` check, deliberately not a gasless path. Carries no owner check. |
-| 39 | `ProtocolTreasury.withdrawReserve` | DAO address | no | Pays the reserve to the DAO address, only while the diamond reports at least `getDaoThreshold()` unique active users. Does not ask `isDaoActive()`. |
-| 40 | `Treasury.withdrawReserve` | DAO address | no | The same door on the earlier treasury, whose own bar is 100,000 users. That contract is no longer the fee recipient. |
+| 21 | `ArbiterAccountabilityFacet.removeArbiterForCause` | owner, DAO address | unless the chain verifies the cause | Executes a human-laid removal proposal that is at least 48 hours old and under 14 days, on the same cause code. Takes the seat. **It forfeits no money, on the chain since 24 September 2026**: the only field it takes is `arbiterBond`, which is zero for every seat now that the bond is posted per CASE, and a case's bond is not touched by a removal at all. Rewards already earned are not touched either. A cause the chain verifies (at least two judicial mistakes in a row, or a recorded silence) is checked; any other cause needs an evidence digest and words. The caller is the removal authority: the owner until governance is active with a DAO address in office, then only the DAO address. |
+| 22 | `ArbiterRegistryFacet.addArbiter` | owner | no | Seats an arbiter, by name, taking no money and measuring nothing. **The chief lost this door with the cut of 24 September 2026**: it is the one entrance that asks for no record at all, which makes it the widest hole in the corps, and it was held by a man who had himself been appointed. The cap on his bloc went with the power rather than being kept beside it. Closes for everyone once governance is active with a DAO address in office. |
+| 23 | `ArbiterAccountabilityFacet.suspendArbiter` | owner, chief arbiter | no | 72 hours from the press. ~~Restartable without limit~~ **until 8 October 2026, when the restart was given a ceiling: three presses against one arbiter, and the fourth refuses in words that name the removal door instead. The count goes back to zero once the arbiter has stood a week with nobody pressing at him — measured from the last press, so a calendar boundary cannot be stood on to double it.** The ceiling is on the HAND and not on the chain: the automatic suspension that follows a third judicial mistake is written by the protocol itself and is not counted here. Blocks new claims and resignation, and holds execution of verdicts he already submitted. The two who hold this door share one count between them. The chief loses it when governance activates; the owner keeps it. |
+| 24 | `ArbiterAccountabilityFacet.liftSuspension` | owner, chief arbiter, DAO address | no | Ends a suspension early. An ordinary one: owner or chief (the chief only until governance activates, the owner always). One left by a removal, or one standing while the chain's own accusation is live: only the removal authority (row 21). |
+| 25 | `ArbiterAccountabilityFacet.proposeRemoval` | owner, chief arbiter, DAO address | unless the chain verifies the cause | Serves the 48-hour notice a removal needs. Owner or chief until governance is active with a DAO address in office, then only the DAO address. A cause the chain does not verify needs an evidence digest and words; a verified cause is checked only when the removal is executed. |
+| 26 | `ArbiterAccountabilityFacet.withdrawProposal` | owner, chief arbiter, DAO address | no | Cancels a removal proposal. Before handover the owner may cancel any, a chief only his own or one the chain laid; after handover only the DAO address. Cancelling a chain-laid accusation also clears the arbiter's judicial-mistake streak. |
+| 27 | `ArbiterRegistryFacet.releaseDisputeClaim` | owner | no | Takes a claimed dispute off its arbiter before a verdict, inside the dispute window. If nobody else claims, the deal settles on the timeout, which asks about delivery before attendance — four endings, in this order: nothing ever handed in — the whole escrow to the client, whoever answered; handed in and both answered — half each; handed in and the executor stayed silent — a quarter to the executor and three quarters to the client; handed in and the client stayed silent — a quarter to the client and three quarters to the executor. ~~The attendance rule alone~~ settled it until 25 September 2026. The arbiter's own silence, left to run instead, brings the full refund to the client. Repeatable. Does not check whether the caller is a party. The claiming arbiter may also release his own claim; that is not a role and is not counted. |
+| 28 | `ArbiterVaultFacet.fundVault` | owner, fee recipient | no | Pays USDC **in** to the arbiter vault. A donation, not a lever. |
+| 29 | `TreasuryLinkFacet.fundArbiterPayroll` | owner, fee recipient | no | Pays USDC **in** to the arbiter payroll. |
+| 30 | `FactoryFacet.initFactory` | owner | no | Spent. On the chain it reverts `AlreadyInitialized` even when called from the owner's address. |
+| 31 | `RegistryFacet.initRegistry` | owner | no | Spent. Same. |
+| 32 | `FactoryFacet.initFeeModel` | owner | no | Spent. Same. |
+| 33 | `ArbiterApplicationsFacet.revokeUnprovenSeat` | owner, chief arbiter | always | Takes back a seat that has nothing on its record — no dispute ever taken, no verdict, no mistake, no earnings, no one seated by it, not the chief — while no suspension or removal proposal stands. It refunds whatever bond the seat carries, which is zero for every seat since the bond moved onto the case. The owner may revoke any granted seat, a chief only a seat he granted. Closes once governance is active. |
+| 34 | `OwnershipFacet.acceptOwnership` | pending owner | no | The named successor takes the key, and with it every power on this page. |
+| 35 | `ArbiterRegistryFacet.acceptDAOAddress` | pending DAO address | no | The proposed DAO address takes office by its own transaction — a raw `msg.sender` check, deliberately not a gasless path. Carries no owner check. |
+| 36 | `ProtocolTreasury.withdrawReserve` | DAO address | no | Pays the reserve to the DAO address, only while the diamond reports at least `getDaoThreshold()` unique active users. Does not ask `isDaoActive()`. |
+| 37 | `Treasury.withdrawReserve` | DAO address | no | The same door on the earlier treasury, whose own bar is 100,000 users. That contract is no longer the fee recipient. |
 <!-- role-levers:end -->
 
-**Measured against the chain on 24 September 2026**, block 47 219 507, re-checkable by anyone
+**Measured against the chain on 9 October 2026**, block 47 878 598, re-checkable by anyone
 with an RPC endpoint, against the deployed diamond
 `0x760F07367888C62f7c2Dfb619A5e534132855ce5`:
 
@@ -125,10 +131,10 @@ getChiefArbiter()        → 0x0000…0000
 getDAOAddress()          → 0x0000…0000
 getPendingDAOAddress()   → 0x0000…0000
 isDaoActive()            → false
-facets()                 → 14 facets, 260 selectors
+facets()                 → 14 facets, 264 selectors
 ```
 
-- **Rows 1–38 live in the diamond**; rows 39 and 40 are separate contracts, and the selector of
+- **Rows 1–38 live in the diamond**; rows 36 and 37 are separate contracts, and the selector of
   `withdrawReserve` is present in the deployed bytecode of both.
 - Rows 33–35 were each called from the owner's address with `eth_call` on 16 September 2026;
   all three revert with `AlreadyInitialized()` (`0x0dc149f0`). They are spent initializers and
@@ -161,9 +167,12 @@ table.
   `revokeUnprovenSeat` (the second on `isDaoActive()` alone), and `setChiefArbiter`, which
   closes on activation alone. The chief arbiter also loses `suspendArbiter` and the ordinary
   branch of `liftSuspension`.
-- **Shared with the DAO address, never leaving the owner:** `overturnVerdict`,
-  `freezeVerdict`, `unfreezeVerdict`. The modifier they carry puts a DAO address beside the
-  owner, not in place of him.
+- ~~**Shared with the DAO address, never leaving the owner:** `overturnVerdict`,
+  `freezeVerdict`, `unfreezeVerdict`.~~ **All three left the protocol on 9 October 2026**, and
+  the modifier that admitted a DAO address beside the owner went with
+  them — it is carried by nothing now.** This was the one group of powers a DAO address held
+  on equal terms with the owner from the moment it accepted office, before governance was
+  switched on at all. The group is empty, so the question of who shares it does not arise.
 - **No event in the code at all:** `diamondCut`, `transferOwnership`, every fee and protocol
   setting, the pause, the receipt renderer, the treasury numbers, the arbiter floor and
   discount, `clearStuckVerdict`, `releaseDisputeClaim`, `suspendArbiter` and lifting an
@@ -255,7 +264,7 @@ that case's own bond.
 case while `getCleanVerdicts` reads under three, and three once three of his verdicts have
 stood — the same field the corps counts judicial service by, and it counts only verdicts that
 were not overturned, so the slots cannot be bought. The slot is freed by the SIGNATURE of the
-verdict, not by its finalization: an arbiter does not wait out a day's delay and a four-day
+verdict, not by its finalization: an arbiter does not wait out the three-day delay and a four-day
 appeal window before he may read the next case. A separate counter guards the exit from the
 corps, so he cannot sign, resign and walk out with a bond before the panel has had its say.
 
@@ -322,10 +331,15 @@ sentence nobody could lift.
 
 Four arbiters held seats on Base Sepolia with 50 USDC each locked behind them. The cut
 returned all **200 USDC** in the same transaction that changed the rule — the cut's own
-initialiser paid each seat back: not a "come and collect it" door and not a credit against a
-first case, either of which would leave a third state for every branch of the code to
-describe. Measured after the cut, every one of the four reads `getArbiterBond` → 0 and
-`isArbiterActive` → true.
+initialiser paid each seat back, and not as a credit against a first case, which would have left
+a third state for every branch of the code to describe. ~~And not a "come and collect it"
+door~~ — unconditionally, which is the part that was wrong. The initialiser counts what the whole
+roll is owed before it moves a cent, and if the diamond's token balance is short of that sum it
+pays nobody and books every refund as a claimable instead, which is a state a person can be told
+about rather than two seats paid out of somebody's escrow and a revert on the third. Each
+transfer is soft for the same reason, so one address the token will not serve leaves that one man
+a claim and the other three paid. Measured after the cut, every one of the four reads
+`getArbiterBond` → 0 and `isArbiterActive` → true, so neither fallback fired here.
 
 #### What a chief arbiter may still do
 
@@ -370,18 +384,16 @@ written at the time of the facts is the proof. The owner's door refuses a chain-
 (`NotAChainProposal`); the two do not overlap. Its selector `0x94465a83` is routed by the
 live diamond.
 
-⚠️ **The owner's own presses feed that record.** Each `overturnVerdict` books a judicial
-mistake against the arbiter who ruled. Two in a row are enough for the owner's own removal
-proposal on the cause "overturned verdicts" to count as verified by the chain, which needs no
-words. The third in a row suspends the arbiter and, unless another accusation already
-stands, lays the chain's accusation, which anyone may execute after 48 hours, taking the seat
-and the bond. None of the three overturns takes a
-reason.
+⚠️ ~~**The owner's own presses feed that record.**~~ **Not since 9 October 2026: there are no
+presses left to feed it.** `overturnVerdict` was removed, and with it the only way a hand
+could book a judicial mistake against an arbiter. Every mistake on an arbiter's record is now
+written by the protocol itself — a missed dispute window, a claim abandoned, or a panel of
+arbiters overturning his ruling on appeal — and none of the three has a person's name on it.
 
 ### What the bond is worth today
 
 Measured against the deployed diamond `0x760F07367888C62f7c2Dfb619A5e534132855ce5` on
-24 September 2026, block 47 219 507 — after the cut of the same day that retired the seat
+9 October 2026, block 47 878 598 — after the cut of 24 September 2026 that retired the seat
 bond, freed the seat and moved the money onto the case:
 
 ```
@@ -399,7 +411,7 @@ getApplicationRequirements()
 facetAddress(0x6fb78a56) → 0x0000…0000        # applyForArbiterSeat, removed
 facetAddress(0xbcd90be1) → 0x0000…0000        # approveArbiterApplication, removed
 facetAddress(0x8e7e21be) → 0x0000…0000        # rejectArbiterApplication, removed
-facets()             → 14 facets, 260 selectors
+facets()             → 14 facets, 264 selectors
 ```
 
 So **no seat on the chain holds any money, and every seat can act.** The 200 USDC the four
@@ -408,13 +420,22 @@ seats had locked went back to them in the cut's own transaction. `getBondState` 
 reader rather than a state anything depends on; nothing posts a seat bond any more.
 
 **What that does to the price of a corrupt verdict, said plainly.** An arbiter risks the bond
-of the case he is ruling on — which an appeal that overturns him takes down to the unit — his
-seat, his future dispute fees, and a permanent public accusation against his address. What he
-no longer risks is a standing sum: **a removal for cause forfeits nothing.** `_performRemoval`
-takes `arbiterBond`, and that field is zero for everybody; the bond a case carries is either
-already spent on the appellant's refund or goes home to him in full. That is a consequence of
-moving the bond onto the case and not an oversight, and it is written here rather than left to
-be discovered. The scene that holds it — a removal for cause forfeiting nothing now — is a
+of the case he is ruling on — which an appeal that overturns him draws on first, to the unit —
+his seat, his future dispute fees, and a permanent public accusation against his address. What
+he no longer risks is a standing sum: **a removal for cause forfeits nothing.** `_performRemoval`
+takes `arbiterBond`, and that field is zero for everybody.
+
+~~The bond a case carries is either already spent on the appellant's refund or goes home to him
+in full~~ — there is a third ending, and on ordinary pots it is the usual one. A won appeal
+empties the bond into the refund, and then the arbiter's forfeited 90% of the dispute fee pays
+that advance back — the appellant's unpaid balance first, the arbiter vault second, the bond
+third — and whatever reaches the bond is handed to him in the same transaction that executes
+the ruling. On a $100 pot the dispute fee is $3, the deposit and the bond are both the $20
+floor, and nine tenths of $3 is $2.70: he gets $2.70 of his $20 back. The bond is made whole
+only where nine tenths of the dispute fee reaches the $200 deposit ceiling, which takes a pot
+above roughly $7,400; below that he is always left short, and the shortfall is his. That is a
+consequence of moving the bond onto the case and not an oversight, and it is written here
+rather than left to be discovered. The scene that holds it — a removal for cause forfeiting nothing now — is a
 named test in this repository's appeal-economics stand, which is not part of this public
 mirror; the claim you *can* check here is the arithmetic, in `ArbiterAccountabilityFacet`.
 
@@ -425,13 +446,17 @@ is a separate argument; it is recorded here so the total is not overestimated.
 **An appeal can be raised on the chain today, and the corps no longer has to be counted for
 it.** `raiseAppeal` walks nobody: the panel is three seats that arbiters take themselves, and
 whether a panel assembled at all is answered when the review window closes. Two votes decide.
+The losing party has **72 hours** from the signature of the verdict to raise it, the span
+`FINALIZE_DELAY` holds; it was one day until 9 October 2026, when the owner widened it. The
+panel then has four days to vote.
 Until 18–23 September the chain counted the eligible arbiters at the moment an appeal was
 raised and the appellant paid the gas for the walk — 150 029 at four seats, 2 546 205 at five
 hundred — which, with the corps open to anybody with five clean deals and no ceiling on its
 size, would be an appeal only the rich could afford. What an appeal costs is now the deal's own
 number and nothing else: `quoteAppealDeposit(agreement)`, its dispute fee held between
 **20 and 200 USDC** (`APPEAL_DEPOSIT_FLOOR` and `APPEAL_DEPOSIT_CAP` in
-`ArbiterRegistryFacet`). The seats open **one hour** after the appeal is raised, so that a pair
+`ArbiterRegistryStorage`, not in the facet: two facets apply the pair — one charges it and one
+quotes it to a screen — so neither of them owns it). The seats open **one hour** after the appeal is raised, so that a pair
 watching the queue of transactions cannot take all three in the block it lands in.
 
 Who may sit is a record of work rather than money: one case of the voter's own carried to a
@@ -519,10 +544,13 @@ active, whether or not a DAO address is in office. The chief-arbiter role stops 
 that moment, because every check that admits him, in all three arbiter facets, stops seeing
 him.
 
-`overturnVerdict`, `freezeVerdict` and `unfreezeVerdict` are **not** part of this handover.
-They sit behind `onlyOwnerOrDAO`, a modifier that admits the owner always. Neither are
-`releaseDisputeClaim`, `clearStuckVerdict` and `suspendArbiter`, which admit the owner and
-never the DAO address. No event hands any of these over.
+~~`overturnVerdict`, `freezeVerdict` and `unfreezeVerdict` are **not** part of this handover.
+They sit behind `onlyOwnerOrDAO`, a modifier that admits the owner always.~~ **Gone on 9 October 2026**:
+those three doors left the protocol and `onlyOwnerOrDAO` went with them — no
+function carries that modifier any more. They are not part of the handover because they no longer
+exist to hand over.** `releaseDisputeClaim`, `clearStuckVerdict` and `suspendArbiter` are not part
+of it either, and those do still exist: they admit the owner and never the DAO address. No event
+hands any of them over.
 
 **The trigger is a button, and the owner presses it.**
 

@@ -751,6 +751,316 @@ contract ArbiterRemovalForCauseTest is Test {
     }
 
     // ============================================================
+    //  THE OTHER HALF OF THE SAME PAIR: THE PAUSE OWED TO THE ACCUSED
+    //
+    //  The window of a removal is bounded on BOTH sides by two neighbouring lines.
+    //  The upper bound — the life of the accusation, which protects the ACCUSER —
+    //  was frozen into the record on 26 August 2026 by the section above. The lower
+    //  bound — the pause, which protects the ACCUSED — was left reading a live
+    //  constant in that same pair.
+    //
+    //  What that costs him: shorten the pause with a cut, and every standing
+    //  accusation becomes executable in the same block. He is told "forty-eight
+    //  hours to answer", the answer is the only thing that can call the removal off,
+    //  and the hours are taken back without a single transaction he could have seen.
+    //  The removal burns his seat bond, so the loss is money, not standing.
+    //
+    //  ⚠️ HOW THIS IS CHECKED AT ALL — the same way as the section above, and for
+    //  the same reason: a compile-time constant cannot be moved at runtime. The
+    //  divergence "the rule of the record ≠ today's rule" is introduced from the
+    //  OTHER end, by putting a foreign pause into the record — exactly the state a
+    //  cut would have left behind. The numbers (96 hours, 12 hours) are literals
+    //  chosen by a person and derived from nothing under test.
+    // ============================================================
+
+    /// THE MAIN SCENE. An accusation laid under a LONGER pause keeps it after the
+    /// constant is shortened: on the forty-ninth hour today's forty-eight are up, the
+    /// promised ninety-six are not, and the button must refuse — naming the second the
+    /// accused was promised, so a form can show him the right countdown.
+    ///
+    /// And then it must WORK: a door that never opens would pass the first half of
+    /// this test for the wrong reason.
+    function test_ShorteningThePauseDoesNotRipenAStandingAccusation() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, uint32(96 hours));
+
+        assertLt(acc.getRemovalDelay(), 96 hours, "setup: today's constant is the shorter of the two");
+
+        vm.warp(proposedAt + 49 hours);
+        vm.expectRevert(
+            abi.encodeWithSelector(ArbiterAccountabilityFacet.RemovalTooEarly.selector, proposedAt + 96 hours)
+        );
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+        assertTrue(_isArbiterRaw(arbiter), "the pause he was promised is still running, so he keeps the seat");
+
+        vm.warp(proposedAt + 96 hours);
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+        assertFalse(_isArbiterRaw(arbiter), "and once the promised pause is over the button works");
+    }
+
+    /// THE REVERSE SCENE. The rule is about immovability, not about advantage: a pause
+    /// LENGTHENED by a cut gives the accused no more than he was promised either. His
+    /// record says twelve hours, so on the thirteenth the removal goes through — even
+    /// though today's constant would still be holding it back.
+    ///
+    /// Without this half, "the record is read" could not be told from "the longer of
+    /// the two is taken", and the accuser would silently lose a window of his own.
+    function test_LengtheningThePauseGivesTheAccusedNoMoreThanHeWasPromised() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, uint32(12 hours));
+
+        assertGt(acc.getRemovalDelay(), 12 hours, "setup: today's constant is the longer of the two");
+
+        vm.warp(proposedAt + 11 hours);
+        vm.expectRevert(
+            abi.encodeWithSelector(ArbiterAccountabilityFacet.RemovalTooEarly.selector, proposedAt + 12 hours)
+        );
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+
+        vm.warp(proposedAt + 13 hours);
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+        assertFalse(_isArbiterRaw(arbiter), "twelve hours were promised and twelve hours is what they were");
+    }
+
+    /// THE EDGE, TO THE SECOND. The lower bound is inclusive — exactly as
+    /// `hasLiveProposal` treats the upper one — so the second before the promised end
+    /// still refuses and the promised second itself passes. A window that is off by one
+    /// here is a button that goes live an hour early on somebody's clock.
+    function test_ThePromisedPauseEndsOnTheSecondItWasPromisedToEnd() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, uint32(96 hours));
+
+        vm.warp(proposedAt + 96 hours - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(ArbiterAccountabilityFacet.RemovalTooEarly.selector, proposedAt + 96 hours)
+        );
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+
+        vm.warp(proposedAt + 96 hours);
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+        assertFalse(_isArbiterRaw(arbiter), "the promised second is the first one that works");
+    }
+
+    /// THE MIGRATION SEAM. A record made BEFORE the field existed carries a zero, and a
+    /// zero means "the rule is not written down" — the constant in force then answers,
+    /// which is exactly the rule that record was laid under.
+    ///
+    /// Read the other way round — a zero as "no pause at all" — the upgrade itself
+    /// would make every standing accusation executable on the spot, which is the very
+    /// harm this field exists to prevent. So the fallback is not a convenience.
+    function test_AnAccusationWithNoStoredPauseFallsBackToTheConstantInForce() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, 0);
+
+        vm.warp(proposedAt + acc.getRemovalDelay() - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ArbiterAccountabilityFacet.RemovalTooEarly.selector, proposedAt + acc.getRemovalDelay()
+            )
+        );
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+
+        vm.warp(proposedAt + acc.getRemovalDelay());
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+        assertFalse(_isArbiterRaw(arbiter), "an accusation from before the field must not become unexecutable");
+    }
+
+    /// THE SECOND DOOR. `executeChainRemoval` writes the same pair of comparisons for
+    /// itself, so it needs its own scene: the one accused by the chain has no author to
+    /// object to, cannot resign while it stands, and those two days are literally the
+    /// only thing he can do on chain.
+    function test_TheChainsOwnAccusationCarriesThePauseItWasLaidWith() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        // The author is erased — that is what a record laid down by the chain looks like.
+        bytes32 slot = _proposalTtlSlot(arbiter);
+        vm.store(address(acc), slot, vm.load(address(acc), slot) & ~bytes32(uint256(type(uint160).max)));
+        (, , uint256 proposedAt, address by,) = acc.getRemovalProposal(arbiter);
+        assertEq(by, address(0), "setup: the accusation is nobody's, that is, the chain's");
+
+        _setProposalDelay(arbiter, uint32(96 hours));
+
+        vm.warp(proposedAt + 49 hours);
+        vm.expectRevert(
+            abi.encodeWithSelector(ArbiterAccountabilityFacet.RemovalTooEarly.selector, proposedAt + 96 hours)
+        );
+        acc.executeChainRemoval(arbiter);
+        assertTrue(_isArbiterRaw(arbiter), "the chain's door owes him the same pause the common one does");
+
+        vm.warp(proposedAt + 96 hours);
+        acc.executeChainRemoval(arbiter);
+        assertFalse(_isArbiterRaw(arbiter), "and it opens on the promised second, not before and not never");
+    }
+
+    /// CIRCUMSTANCE — GARBAGE ARRIVED. A pause of 136 years in the record (the whole
+    /// range of the field) must produce a VERDICT WITH A NUMBER and not a panic: the sum
+    /// `proposedAt + delay` cannot overflow a uint256 at that width, so there is no
+    /// arithmetic to trip over, and the form can still show the accused a date.
+    ///
+    /// ⚠️ AND IT IS NOT A WAY TO MAKE AN ACCUSATION UNEXECUTABLE FOR EVER, which is the
+    /// thing actually worth proving. Two independent reasons, and the second is checked
+    /// here rather than argued: no external function writes this field at all — the two
+    /// writers are the two proposal doors, both putting a constant there — and even a
+    /// record that somehow held garbage is not a trap, because withdrawing it is always
+    /// available to the removal authority and clears the whole record.
+    ///
+    /// The direction of the failure also matters and is the safe one: an unexecutable
+    /// accusation costs the ACCUSER, while the arbiter keeps his seat and his bond.
+    function test_AnAbsurdPauseRefusesWithANumberAndIsNotATrap() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, type(uint32).max);
+
+        vm.warp(proposedAt + 49 hours);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ArbiterAccountabilityFacet.RemovalTooEarly.selector, proposedAt + uint256(type(uint32).max)
+            )
+        );
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+
+        // The way out is the ordinary one and it still works.
+        acc.withdrawProposal(arbiter);
+        (, , uint256 afterWithdrawal, ,) = acc.getRemovalProposal(arbiter);
+        assertEq(afterWithdrawal, 0, "an absurd pause is withdrawable like any other accusation");
+    }
+
+    /// CIRCUMSTANCE — TWO THINGS IN ONE SECOND. On the very second the pause ends, the
+    /// accused may still answer and the removal may already be executed. Who wins is
+    /// decided by the order of transactions in the block, and it MUST NOT MATTER: the
+    /// answer was never a veto — it is words in the record for the authority to weigh,
+    /// and the docstring of the pause says so ("the accused answering does not move the
+    /// clock").
+    ///
+    /// So both orders are walked here, and what is checked is that neither loses
+    /// anything: the removal goes through either way, and the reply is not eaten by
+    /// arriving in the same second as the sentence.
+    function test_TheAnswerAndTheRemovalInTheSameSecond() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, uint32(96 hours));
+
+        vm.warp(proposedAt + 96 hours);
+
+        // ANSWER FIRST, sentence second — the same second for both.
+        vm.prank(arbiter);
+        acc.respondToRemoval(keccak256("I did not do it"), "");
+        assertEq(acc.getRemovalReply(arbiter), keccak256("I did not do it"), "the reply landed");
+
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+        assertFalse(_isArbiterRaw(arbiter), "the answer is not a veto, and was never meant to be one");
+        assertEq(
+            acc.getRemovalReply(arbiter),
+            keccak256("I did not do it"),
+            "and the sentence does not eat a reply spoken in the same second"
+        );
+    }
+
+    /// The other order, so that the pair is not half-measured: SENTENCE FIRST, and he
+    /// answers afterwards. This is the branch `respondToRemoval` keeps deliberately —
+    /// the man who was silent during the pause must still be able to speak after it.
+    function test_TheRemovalFirstStillLeavesHimAVoice() public {
+        _setStreak(arbiter, 2);
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
+        (, , uint256 proposedAt, ,) = acc.getRemovalProposal(arbiter);
+        _setProposalDelay(arbiter, uint32(96 hours));
+
+        vm.warp(proposedAt + 96 hours);
+        acc.removeArbiterForCause(
+            arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), ""
+        );
+
+        vm.prank(arbiter);
+        acc.respondToRemoval(keccak256("too late, but said"), "");
+        assertEq(acc.getRemovalReply(arbiter), keccak256("too late, but said"), "the door after the sentence is open");
+    }
+
+    /// The human door must freeze TODAY'S pause into the record.
+    ///
+    /// ⚠️ THE ONLY OBSERVABLE DIFFERENCE IS THE VALUE IN STORAGE, for the same reason
+    /// spelled out over `test_TheHumanDoorFreezesTodaysRuleIntoTheAccusation`: while
+    /// the constant has not moved, a record with its own pause and a record with a zero
+    /// behave IDENTICALLY, because a zero falls into the fallback branch of that very
+    /// constant. A behavioural scene for the WRITER is impossible in principle.
+    ///
+    /// The expectation is a LITERAL written down by a person. `getRemovalDelay()` here
+    /// alone would compare the facet's constant with itself and agree at any value; the
+    /// second line pins the getter to the same literal, so "the field is written with
+    /// something other than what is published outwards" is visible too, and it is
+    /// visible WHICH of the two drifted.
+    function test_TheHumanDoorFreezesTodaysPauseIntoTheAccusation() public {
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.Leak, keccak256("x"), PROPOSAL_WORDS);
+
+        assertEq(_storedProposalDelay(arbiter), 48 hours, "the record must hold today's pause and not a zero");
+        assertEq(acc.getRemovalDelay(), 48 hours, "and the same one is published outwards");
+    }
+
+    /// THE SLOT DID NOT GROW, AND THAT IS MEASURED HERE RATHER THAN ASSERTED IN A
+    /// COMMENT. The record's third slot holds `by` (20 bytes), `ttl` (8) and `delay`
+    /// (4) — thirty-two exactly. This reconstructs the whole word out of the three
+    /// fields read back through their own accessors: if any of them moved, or if
+    /// `delay` had been given a slot of its own, the word would no longer match.
+    ///
+    /// Why it matters beyond gas: the layout of this struct is shared with records
+    /// already standing on chain, and only appending is safe. Growing the record by a
+    /// slot would write over whatever the next field of the namespace turns out to be.
+    ///
+    /// The second assertion is the one that catches a spill: a `delay` given a slot of
+    /// its own would land in the record's FOURTH word, which the struct does not own.
+    /// (The first assertion alone would not — it would read a zero out of the free
+    /// bytes and agree with itself. Said out loud so the pair is not trusted for the
+    /// wrong reason.)
+    function test_ThePauseFitsTheRecordsFreeBytesWithoutANewSlot() public {
+        acc.proposeRemoval(arbiter, ArbiterAccountabilityFacet.Cause.Leak, keccak256("x"), PROPOSAL_WORDS);
+
+        (, , , address by,) = acc.getRemovalProposal(arbiter);
+        uint256 rebuilt = uint256(uint160(by))
+            | (uint256(_storedProposalTtl(arbiter)) << 160)
+            | (uint256(_storedProposalDelay(arbiter)) << 224);
+
+        assertEq(
+            uint256(vm.load(address(acc), _proposalTtlSlot(arbiter))),
+            rebuilt,
+            "the third slot must be exactly by + ttl + delay, with no byte left over and none borrowed"
+        );
+        assertEq(
+            vm.load(address(acc), bytes32(uint256(_proposalTtlSlot(arbiter)) + 1)),
+            bytes32(0),
+            "the record must still be three written words: nothing may spill into a fourth"
+        );
+    }
+
+    // ============================================================
     //  THE CHIEF'S PROPOSAL
     //
     //  The chief does not remove — they propose. The proposal goes on chain as a
@@ -2331,6 +2641,37 @@ contract ArbiterRemovalForCauseTest is Test {
         assertEq(atAfter,     atBefore,     "the ttl offset missed: the time of filing moved");
         assertEq(byAfter,     byBefore,     "the ttl offset missed: the author moved");
         assertEq(_storedProposalTtl(who), ttl, "the ttl offset missed: the record did not change");
+    }
+
+    /// `delay` shares that same third slot, in the four bytes left over after `by`
+    /// (20) and `ttl` (8) — measured, not assumed: the compiler's own layout for this
+    /// struct is 128 bytes both before and after the field was appended.
+    function _storedProposalDelay(address who) internal view returns (uint32) {
+        return uint32(uint256(vm.load(address(acc), _proposalTtlSlot(who))) >> 224);
+    }
+
+    /// Puts a FOREIGN pause into the record — the state a cut that moved the constant
+    /// would have left behind. Read-modify-write, and CHECKED: all four neighbours,
+    /// `ttl` included, must stay as they were. Miss the offset and either a neighbour
+    /// moves (visible here) or nothing changes at all (visible to the scene, which then
+    /// fails to go red for a reason of its own). Both halves of that trap are closed.
+    function _setProposalDelay(address who, uint32 delay) internal {
+        (uint8 causeBefore, bytes32 digestBefore, uint256 atBefore, address byBefore,) =
+            acc.getRemovalProposal(who);
+        uint64 ttlBefore = _storedProposalTtl(who);
+
+        bytes32 slot = _proposalTtlSlot(who);
+        bytes32 keepLower = vm.load(address(acc), slot) & bytes32(uint256(type(uint224).max));
+        vm.store(address(acc), slot, keepLower | bytes32(uint256(delay) << 224));
+
+        (uint8 causeAfter, bytes32 digestAfter, uint256 atAfter, address byAfter,) =
+            acc.getRemovalProposal(who);
+        assertEq(causeAfter,  causeBefore,  "the delay offset missed: the cause moved");
+        assertEq(digestAfter, digestBefore, "the delay offset missed: the digest moved");
+        assertEq(atAfter,     atBefore,     "the delay offset missed: the time of filing moved");
+        assertEq(byAfter,     byBefore,     "the delay offset missed: the author moved");
+        assertEq(_storedProposalTtl(who), ttlBefore, "the delay offset missed: the term moved");
+        assertEq(_storedProposalDelay(who), delay, "the delay offset missed: the record did not change");
     }
 
     function _setStreak(address who, uint256 n) internal {

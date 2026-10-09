@@ -145,6 +145,7 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
     function testTheUnjudgedSplitPaysTheExecutorWhileTheClientIsBlocked() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client);   a.raiseDispute();
         vm.prank(executor); a.respondToDispute();
         vm.warp(block.timestamp + DISPUTE_WINDOW + 1);
@@ -174,6 +175,7 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
     function testBothSidesBlockedLeavesEachHalfOwedToItsOwnSide() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client);   a.raiseDispute();
         vm.prank(executor); a.respondToDispute();
         vm.warp(block.timestamp + DISPUTE_WINDOW + 1);
@@ -473,6 +475,7 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
     function testTheSplitBooksTheExecutorsHalfInsteadOfGivingItAway() public {
         (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
         _activate(a);
+        _handIn(a);
         vm.prank(client); a.raiseDispute();
         vm.prank(executor); a.respondToDispute();
         vm.warp(block.timestamp + DISPUTE_WINDOW + 1);

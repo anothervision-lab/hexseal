@@ -653,8 +653,39 @@ contract DeployFull is Script {
     // ArbiterVaultFacet (the EIP-170 split — the facet stood 44 bytes under the
     // ceiling). NOT ONE SIGNATURE CHANGED, so the diamond's total is the same
     // before and after; only the address behind those twenty-eight moved.
+    //
+    // 33 → 30 on 9 October 2026: three signatures DID go, and the diamond's total
+    // went with them (267 → 264). See the note inside.
     function arbiterRegistryFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](33);
+        // 33 → 30 ON 9 OCTOBER 2026: the governance hand over a verdict is gone.
+        // `overturnVerdict(address,bool)` 0x42a71c6c, `freezeVerdict(address)`
+        // 0x5533316c and `unfreezeVerdict(address)` 0x69315118 left
+        // ArbiterRegistryFacet that morning, and the `Remove` group of
+        // script/UpgradeOctoberBatch.s.sol took the same three off the diamond at
+        // block 47 872 983. Measured at block 47 873 768: fourteen facets, 264
+        // routed, `facetAddress` the zero address for all three, the arbiter
+        // registry holding thirty at
+        // 0x11DC81C6dFdB383EDadaFF166032DbB735371262.
+        //
+        // ⚠️ THE RULE IS: THIS LIST FOLLOWS THE CHAIN, NOT THE COMPILED FACET, and
+        // for the hours between the deletion and the cut the two disagreed. The
+        // three were held here by their bytes the whole time, because dropping
+        // them first was tried and measured: 161 tests stopped existing, seven
+        // `*Upgrade` stands collapsing to one synthetic failure each (nine, on the
+        // measurement of 9 October), because they build their diamond from THIS
+        // function and then replay a signed cut
+        // whose `Replace` group names one of the three — and `Replace` reverts on
+        // a selector the diamond does not route, taking the whole cut and the
+        // stand's `setUp` with it. ⚠️ THE SUITE COUNT DID NOT MOVE THROUGH ANY OF
+        // IT; only the test count showed anything at all.
+        //
+        // NINE stands, measured rather than the seven this note first guessed, now
+        // state the shape they need instead of inheriting it: each mounts the three
+        // itself, out of its OWN census, through the shared
+        // `ArbiterSplitRig._mountRemovedVerdictHandDoors`. Those censuses are older
+        // than the cut and route all three for ever, which is why that is a permanent
+        // reconciliation and not an allowance waiting to be deleted.
+        sels = new bytes4[](30);
 
         // DAO mode
         sels[0] = ArbiterRegistryFacet.activateDAO.selector;
@@ -674,28 +705,25 @@ contract DeployFull is Script {
         // 18 September 2026). It sits beside the two doors above because it is
         // the third answer to "who ends a claim": its owner inside the window,
         // the deal on a finalized verdict, and — past the window — anybody.
-        sels[31] = ArbiterRegistryFacet.abandonClaim.selector;
+        sels[28] = ArbiterRegistryFacet.abandonClaim.selector;
 
         // The verdict
         sels[9] = ArbiterRegistryFacet.submitVerdict.selector;
         sels[10] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        sels[11] = ArbiterRegistryFacet.overturnVerdict.selector;
-        sels[12] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        sels[13] = ArbiterRegistryFacet.freezeVerdict.selector;
-        sels[14] = ArbiterRegistryFacet.unfreezeVerdict.selector;
-        sels[15] = ArbiterRegistryFacet.clearStuckVerdict.selector;
+        sels[11] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        sels[12] = ArbiterRegistryFacet.clearStuckVerdict.selector;
 
         // The appeal
-        sels[16] = ArbiterRegistryFacet.raiseAppeal.selector;
-        sels[17] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        sels[18] = ArbiterRegistryFacet.resolveAppeal.selector;
+        sels[13] = ArbiterRegistryFacet.raiseAppeal.selector;
+        sels[14] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        sels[15] = ArbiterRegistryFacet.resolveAppeal.selector;
 
         // Handing over the DAO address in two steps (26 August 2026): this is the
         // PROPOSAL, and the rights pass only when the named address sends
         // acceptDAOAddress() itself. The two READS of that handover
         // (getDAOAddress, getPendingDAOAddress) moved to ArbiterVaultFacet.
-        sels[19] = ArbiterRegistryFacet.setDAOAddress.selector;
-        sels[20] = ArbiterRegistryFacet.acceptDAOAddress.selector;
+        sels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
+        sels[17] = ArbiterRegistryFacet.acceptDAOAddress.selector;
 
         // The three CONSTANT getters that did not move with the rest of the reads,
         // and that is not an oversight: each reads a private constant that this
@@ -705,33 +733,33 @@ contract DeployFull is Script {
         // while the live rule applies the original. Same reasoning as the
         // 16 August split, same five constants, written out in the VIEWS header of
         // the facet itself.
-        sels[21] = ArbiterRegistryFacet.isDaoActive.selector;
-        sels[22] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        sels[23] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        sels[24] = ArbiterRegistryFacet.getMaxArbiterMistakes.selector;
-        sels[25] = ArbiterRegistryFacet.getNoResponseFloor.selector;
-        sels[26] = ArbiterRegistryFacet.getMaxClaimsPerArbiter.selector;
+        sels[18] = ArbiterRegistryFacet.isDaoActive.selector;
+        sels[19] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        sels[20] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        sels[21] = ArbiterRegistryFacet.getMaxArbiterMistakes.selector;
+        sels[22] = ArbiterRegistryFacet.getNoResponseFloor.selector;
+        sels[23] = ArbiterRegistryFacet.getMaxClaimsPerArbiter.selector;
 
         // getChiefBloc calls the private _chiefBloc that addArbiter holds; moving
         // it would cost a second copy of the body.
-        sels[27] = ArbiterRegistryFacet.getChiefBloc.selector;
+        sels[24] = ArbiterRegistryFacet.getChiefBloc.selector;
 
         // The arbiter's chat keys (9 August 2026) — the WRITE. The reads live in
         // ArbiterAccountabilityFacet.
-        sels[28] = ArbiterRegistryFacet.setArbiterChatKey.selector;
+        sels[25] = ArbiterRegistryFacet.setArbiterChatKey.selector;
 
         // The record "asked, got no answer" and the presentation digest
         // (14 August 2026) — again only the WRITES; five readers of the group moved
         // to ArbiterAccountabilityFacet on 16 August 2026.
-        sels[29] = ArbiterRegistryFacet.recordNoResponse.selector;
-        sels[30] = ArbiterRegistryFacet.recordPresentationDigest.selector;
+        sels[26] = ArbiterRegistryFacet.recordNoResponse.selector;
+        sels[27] = ArbiterRegistryFacet.recordPresentationDigest.selector;
 
         // What an appeal needs from the corps: eligible, required, cast
         // (18 September 2026). It stays in this facet rather than moving to the
         // reads in ArbiterVaultFacet because it shares the private eligibility
         // count with raiseAppeal, and a second copy of that count is exactly
         // the mirror this rule must not have.
-        sels[32] = ArbiterRegistryFacet.getAppealPanel.selector;
+        sels[29] = ArbiterRegistryFacet.getAppealPanel.selector;
     }
 
     // ArbiterVaultFacet — count by the `new bytes4[](n)` literal below.
@@ -1073,7 +1101,9 @@ contract DeployFull is Script {
         sels[12] = ArbiterApplicationsFacet.getBondState.selector;
     }
 
-    // TreasuryLinkFacet — 9 selectors
+    // TreasuryLinkFacet — count by the `new bytes4[](n)` literal below (9 until
+    // 24 September 2026, when the arbiter bank's surplus door and its quote
+    // arrived: 11).
     //
     // ⚠️ THIS REPLACED DealMetadataFacet HERE ON 14 SEPTEMBER 2026, and the two
     // moves are one correction, not two. Measured against the live diamond
@@ -1085,7 +1115,7 @@ contract DeployFull is Script {
     // fresh deployment with no treasury link at all — a diamond where the fee
     // split, the arbiter vault and the payroll stream answer nothing.
     function treasuryLinkFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](9);
+        sels = new bytes4[](16);
         sels[0] = TreasuryLinkFacet.fundArbiterPayroll.selector;
         sels[1] = TreasuryLinkFacet.getArbiterPayrollBalance.selector;
         sels[2] = TreasuryLinkFacet.getVaultTarget.selector;
@@ -1095,6 +1125,25 @@ contract DeployFull is Script {
         sels[6] = TreasuryLinkFacet.getTreasuryFoundationBps.selector;
         sels[7] = TreasuryLinkFacet.setTreasuryShares.selector;
         sels[8] = TreasuryLinkFacet.setVaultTargetDisputes.selector;
+        // The arbiter bank's door out and its quote (24 September 2026, mainnet
+        // item D2). The bank used to have one way out — a three-dollar discount
+        // on a top-up in a small dispute — and that way waits on an event which
+        // may never happen. This is the door: open to anybody, the recipient read
+        // off the treasury, whatever stands above the target going to the
+        // foundation the treasury already pays.
+        sels[9]  = TreasuryLinkFacet.pushVaultSurplus.selector;
+        sels[10] = TreasuryLinkFacet.getVaultSurplus.selector;
+        // The payroll pot's door out (25 September 2026, mainnet item D3). The
+        // pot had taken a fifth of every distribution since 4 September and had
+        // no outlet of any kind. These five are the outlet: a period's pot
+        // divided by the cases that stood in it, booked per arbiter by anybody,
+        // the unclaimed remainder pushed to the foundation once the claim window
+        // lapses, and three reads a screen or a keeper needs.
+        sels[11] = TreasuryLinkFacet.bookPayrollShare.selector;
+        sels[12] = TreasuryLinkFacet.sweepPayrollPeriod.selector;
+        sels[13] = TreasuryLinkFacet.quotePayrollShare.selector;
+        sels[14] = TreasuryLinkFacet.getPayrollPeriod.selector;
+        sels[15] = TreasuryLinkFacet.getPayrollPeriodStatus.selector;
     }
 
     // JobReceiptFacet — 21 selectors (ERC-721 + receipt)

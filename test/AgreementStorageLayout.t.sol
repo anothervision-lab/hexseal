@@ -105,10 +105,28 @@ contract AgreementStorageLayoutTest is Test {
     string internal constant ARTIFACT = "out/Agreement.sol/Agreement.json";
     string internal constant OWNER = "src/Agreement.sol:Agreement";
 
-    /// Number of fields the layout is known to have (measured 31 Aug 2026).
+    /// Number of fields the layout is known to have (measured 8 Oct 2026).
     /// Fewer than this means the source of truth is short -- truncated, emptied
     /// or half-written -- and the answer to that is "NOT checked", never "clean".
-    uint256 internal constant KNOWN_FIELDS = 35;
+    ///
+    /// ⚠️ IT WAS 35 FROM 31 AUGUST TO 8 OCTOBER 2026, AND THAT WAS A HOLE,
+    /// measured rather than reasoned about. Five fields were appended in
+    /// between -- `acceptedExtrasCount`, the three the mutual-cancellation
+    /// offer is made of, and the bit that records that it was answered -- and
+    /// the table below stopped before all five. The table is compared as a
+    /// PREFIX, so everything past field 35 was simply not looked at: a mutation
+    /// that moved `_cancelledByAgreement` from the tail into slot 25, shifting
+    /// `_cancelProposer` and `_cancelProposedAt` under it, gave
+    /// script/check-agreement-layout.sh exit 1 and THIS FILE 4 passed, 0
+    /// failed. Three of the five carry the figures a cancellation pays out by,
+    /// so the suite was blind to a reorder of live money fields -- the one
+    /// thing this file exists to stop being true.
+    ///
+    /// Whoever appends the next field appends a row below as well. The count
+    /// here is what makes forgetting it visible: a layout LONGER than the table
+    /// is allowed (append-only is the legal move), but a table shorter than
+    /// this number means the expectation itself was truncated.
+    uint256 internal constant KNOWN_FIELDS = 40;
 
     /// Attributes compared per field: name, slot, offset, type label, size,
     /// declaring contract. Asserted against the running count at the end so a
@@ -163,6 +181,17 @@ contract AgreementStorageLayoutTest is Test {
         f[32] = Field("undeliveredFee",      21,  0, "uint256",                                     32);
         f[33] = Field("extraFee",            22,  0, "mapping(uint256 => uint256)",                 32);
         f[34] = Field("pendingExtraFeeTotal",23,  0, "uint256",                                     32);
+        // -- Appended after 31 August 2026, and added to this table on
+        //    8 October 2026. Slot 25 packs the offer's proposer with its
+        //    timestamp (20 + 5 of 32 bytes); slot 26 holds the executor's
+        //    agreed share whole; slot 27 holds the bit that says the offer was
+        //    answered, alone, because the only legal placement for a new field
+        //    is the end of the declaration list.
+        f[35] = Field("acceptedExtrasCount",  24,  0, "uint256",                                    32);
+        f[36] = Field("_cancelProposer",      25,  0, "address",                                    20);
+        f[37] = Field("_cancelProposedAt",    25, 20, "uint40",                                      5);
+        f[38] = Field("_cancelToExecutor",    26,  0, "uint256",                                    32);
+        f[39] = Field("_cancelledByAgreement",27,  0, "bool",                                        1);
     }
 
     /// The members of `struct Extra`, in declaration order. It is the value type

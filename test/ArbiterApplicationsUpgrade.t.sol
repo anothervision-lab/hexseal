@@ -396,6 +396,14 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
             strip[0] = IDiamondCut.FacetCut(address(0), IDiamondCut.FacetCutAction.Remove, extra);
             IDiamondCut(address(d)).diamondCut(strip, address(0), "");
         }
+
+        // The three doors of the governance hand over a verdict, which left
+        // ArbiterRegistryFacet AND the chain on 9 October 2026. This census was read
+        // long before that cut and holds all three, so the rig has to mount them
+        // itself: see ArbiterSplitRig._mountRemovedVerdictHandDoors for why they go
+        // on the arbiter facet that is already here rather than on a stub.
+        _mountRemovedVerdictHandDoors(address(d), census);
+
         for (uint256 i = 0; i < census.length; i++) {
             require(
                 IDiamondLoupe(address(d)).facetAddress(census[i]) != address(0),

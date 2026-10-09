@@ -364,8 +364,12 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
                 string.concat("a selector landed in neither Replace nor Add: ", facetName)
             );
         }
-        // Not one selector in a group belongs to another facet.
+        // Not one selector in a group belongs to another facet — except the three
+        // the registry LOST after this cut was signed, see
+        // _shrunkFromRegistryAfterThisCut.
+        bytes4[] memory shrunk = _shrunkFromRegistryAfterThisCut();
         for (uint256 i = 0; i < replaceGroup.length; i++) {
+            if (_contains(shrunk, replaceGroup[i])) continue;
             assertTrue(
                 _contains(abiSels, replaceGroup[i]),
                 string.concat("the Replace group carries another facet's selector: ", facetName)
@@ -378,10 +382,17 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
             );
         }
         // And by count — otherwise a repeat inside a group would pass both checks above.
+        //
+        // ⚠️ THE GROUPS MAY EXCEED THE ABI BY WHAT THE FACET LOST AFTER THIS CUT
+        // (9 October 2026). `gone` is counted on the group side rather than taken
+        // off the ABI side, because the ABI no longer mentions these three at all —
+        // there is nothing there to subtract.
         uint256 exempt;
         for (uint256 i = 0; i < abiSels.length; i++) if (_contains(grown, abiSels[i])) exempt++;
+        uint256 goneHere;
+        for (uint256 i = 0; i < replaceGroup.length; i++) if (_contains(shrunk, replaceGroup[i])) goneHere++;
         assertEq(
-            replaceGroup.length + addGroup.length, abiSels.length - exempt,
+            replaceGroup.length + addGroup.length - goneHere, abiSels.length - exempt,
             string.concat("Replace+Add does not match the ABI by selector count: ", facetName)
         );
     }
@@ -525,6 +536,28 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     ///
     /// What disappears if this is removed: a typo in a list mounts a phantom selector.
     /// A Replace onto an address that does not implement it does NOT revert
+    /// ⚠️ WHAT THE ARBITER REGISTRY LOST AFTER THIS CUT WAS SIGNED (9 October
+    /// 2026): the three doors of the governance hand over a verdict. By SIGNATURE
+    /// TEXT, because they are not in this checkout and there is no `.selector` to
+    /// take; verified offline with `cast sig` to 0x42a71c6c / 0x5533316c /
+    /// 0x69315118.
+    ///
+    /// ⚠️ THEY STAY IN THIS CUT'S REPLACE GROUP ON PURPOSE. The list is the
+    /// RECORD of a cut that went on chain and is not rewritten, and the chain still
+    /// routes all three. The docstring on test_NoPhantomSelectorInEitherList says
+    /// what that costs if it is ever left unattended: a selector pointing at a
+    /// facet that does not implement it "can only be taken out by a separate cut
+    /// with a Remove". That Remove is exactly what the pending cut owes, and it is
+    /// carried as an open item rather than as silence here.
+    ///
+    /// Named rather than counted: a FOURTH phantom still reds in both arms below.
+    function _shrunkFromRegistryAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](3);
+        sels[0] = bytes4(keccak256("overturnVerdict(address,bool)"));
+        sels[1] = bytes4(keccak256("freezeVerdict(address)"));
+        sels[2] = bytes4(keccak256("unfreezeVerdict(address)"));
+    }
+
     /// (DiamondCutLib checks only "the address is different and has code"), so the cut
     /// would go through green while the diamond kept an entry leading nowhere forever
     /// — it can only be taken out by a separate cut with a Remove.
@@ -533,7 +566,12 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         bytes4[] memory acc = _abiSelectors("ArbiterAccountabilityFacet");
 
         bytes4[] memory replaceSels = upgrade.replaceSelectors();
+        bytes4[] memory shrunk = _shrunkFromRegistryAfterThisCut();
         for (uint256 i = 0; i < replaceSels.length; i++) {
+            // The three doors removed on 9 October 2026 are phantoms BY DESIGN
+            // until the pending cut's Remove group takes them off the chain — the
+            // one case this arm admits, and it admits it by name.
+            if (_contains(shrunk, replaceSels[i])) continue;
             assertTrue(
                 _contains(reg, replaceSels[i]) || _contains(acc, replaceSels[i]),
                 "Replace: the selector is in neither of the two facets: a phantom"

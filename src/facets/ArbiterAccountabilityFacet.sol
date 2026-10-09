@@ -536,6 +536,49 @@ contract ArbiterAccountabilityFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         if (!d.isArbiter[arbiter]) revert NotAnArbiter();
 
+        // ── THE CEILING ON THE HAND, and the door it points at ─────────────
+        //
+        // Until 8 October 2026 this function had no counter and no check of any
+        // kind: every press simply wrote a fresh deadline, without limit. The
+        // owner's decision gave it a ceiling of three, with the count going
+        // back to zero after a week in which nobody pressed.
+        //
+        // ⚠️ THE REFUSAL NAMES THE OTHER INSTRUMENT, and that is the point of
+        // it rather than decoration. The person at this door wants the arbiter
+        // stopped; being told "no" without being told what to do instead
+        // leaves him pressing at a lever that has quietly stopped working. The
+        // sentence is a plain string and not a custom error for the same
+        // reason: it is read by WHOEVER PRESSED, often with a bare `cast`
+        // call, where a four-byte selector says nothing at all.
+        //
+        // ⚠️ `proposeRemoval` IS THE ONE NAMED, OUT OF TWO. The other removal
+        // door, `removeArbiterForCause`, admits the owner and the DAO address
+        // but NOT the chief arbiter — and this ceiling binds the chief exactly
+        // as it binds the owner. Naming a door the refused presser may not be
+        // able to open would be worse than naming none.
+        //
+        // ⚠️ THE READ COMES BEFORE THE WRITE OF `suspendedUntil`, so a refused
+        // press changes nothing at all: no deadline, no count, no event.
+        uint256 pressed = d.handSuspensions[arbiter];
+        uint256 lastPress = d.lastHandSuspensionAt[arbiter];
+        // The reset, by SILENCE. Written as "a week since the last press" and
+        // never as a calendar bucket — the whole argument is at
+        // `HAND_SUSPENSION_SILENCE`. The `lastPress != 0` guard is what keeps a
+        // man nobody ever pressed at out of this branch; his count is zero
+        // anyway, so the branch would be harmless, but it would also be a lie
+        // in the log of anybody reading the code.
+        if (lastPress != 0 && block.timestamp >= lastPress + ArbiterRegistryStorage.HAND_SUSPENSION_SILENCE) {
+            pressed = 0;
+        }
+        if (pressed >= ArbiterRegistryStorage.HAND_SUSPENSION_LIMIT) {
+            revert(
+                "ArbiterAccountability: three suspensions already stand against this arbiter -"
+                " propose his removal (proposeRemoval), or leave him a week unpressed and the lever comes back"
+            );
+        }
+        d.handSuspensions[arbiter] = pressed + 1;
+        d.lastHandSuspensionAt[arbiter] = block.timestamp;
+
         // From the CURRENT moment, not added to a previous deadline: otherwise
         // two presses in a row hold someone's money for six days instead of
         // three.
@@ -980,10 +1023,16 @@ contract ArbiterAccountabilityFacet {
         // button, and the person learned of it after the fact — sentence
         // first, word after.
         //
-        // Execution window: [proposedAt + REMOVAL_DELAY, proposedAt +
-        // PROPOSAL_TTL). The lower bound is inclusive, the upper exclusive,
-        // exactly as in hasLiveProposal — diverge from it and the button would
-        // go dark before the feed stops showing the accusation as live.
+        // Execution window: [_removalOpensAt(p), _proposalDeadline(p)). The
+        // lower bound is inclusive, the upper exclusive, exactly as in
+        // hasLiveProposal — diverge from it and the button would go dark before
+        // the feed stops showing the accusation as live.
+        //
+        // ⚠️ BOTH BOUNDS COME OUT OF THE RECORD, NOT OUT OF THE CONSTANTS
+        // (25 September 2026 for the lower one, 26 August for the upper). The
+        // pair used to be half frozen: the deadline was read through a helper
+        // while the line above it added a live `REMOVAL_DELAY`, so a cut that
+        // shortened the pause ripened every standing accusation at once.
         //
         // Read HERE rather than through hasLiveProposal(): that one answers
         // "does an accusation stand", while FOUR different refusals with four
@@ -1006,9 +1055,8 @@ contract ArbiterAccountabilityFacet {
         // what he needs to read, not "too early".
         if (p.by == address(0)) revert ChainProposalNeedsTheChainDoor();
 
-        if (block.timestamp < proposedAt + REMOVAL_DELAY) {
-            revert RemovalTooEarly(proposedAt + REMOVAL_DELAY);
-        }
+        uint256 opensAt = _removalOpensAt(p);
+        if (block.timestamp < opensAt) revert RemovalTooEarly(opensAt);
         if (block.timestamp >= _proposalDeadline(p)) revert ProposalStale(proposedAt);
 
         // EXACTLY the cause code is compared — the thing the person was warned
@@ -1289,12 +1337,17 @@ contract ArbiterAccountabilityFacet {
         if (p.by != address(0)) revert NotAChainProposal();
 
         // The same window as the common door, read the same way and in the same
-        // order: not before REMOVAL_DELAY, not on or after PROPOSAL_TTL. Diverge
-        // from hasLiveProposal on either bound and the button goes dark while
-        // the feed still shows the accusation as live.
-        if (block.timestamp < proposedAt + REMOVAL_DELAY) {
-            revert RemovalTooEarly(proposedAt + REMOVAL_DELAY);
-        }
+        // order: not before the pause the record was laid with, not on or after
+        // the term the record was laid with. Diverge from hasLiveProposal on
+        // either bound and the button goes dark while the feed still shows the
+        // accusation as live.
+        //
+        // ⚠️ BOTH BOUNDS THROUGH THE HELPERS, and this door needed the second
+        // one as much as the common one: the man accused by the chain has no
+        // author to object to and cannot resign while it stands, so the pause is
+        // literally the only thing he has.
+        uint256 opensAt = _removalOpensAt(p);
+        if (block.timestamp < opensAt) revert RemovalTooEarly(opensAt);
         if (block.timestamp >= _proposalDeadline(p)) revert ProposalStale(proposedAt);
 
         if (!d.isArbiter[arbiter]) revert NotAnArbiter();
@@ -1731,7 +1784,13 @@ contract ArbiterAccountabilityFacet {
             // The life of THIS accusation, frozen now. The
             // accused is told "fourteen days" once; shortening the constant
             // afterwards must not take them back from him.
-            ttl:            uint64(PROPOSAL_TTL)
+            ttl:            uint64(PROPOSAL_TTL),
+            // And the pause THIS accusation owes him, frozen by the same
+            // argument from the other end (25 September 2026). He is told
+            // "forty-eight hours to answer" once, and the answer is the only
+            // thing that can call the removal off; shortening the constant
+            // afterwards must not ripen the accusation under him.
+            delay:          uint32(REMOVAL_DELAY)
         });
         emit RemovalProposed(arbiter, msg.sender, cause, evidenceDigest, block.timestamp);
         if (bytes(reason).length != 0) {
@@ -2011,6 +2070,37 @@ contract ArbiterAccountabilityFacet {
     {
         uint256 ttl = p.ttl;
         return p.proposedAt + (ttl == 0 ? PROPOSAL_TTL : ttl);
+    }
+
+    /// When THIS accusation may first be executed — its own moment plus the pause
+    /// it was laid with (25 September 2026).
+    ///
+    /// ⚠️ THE ONLY PLACE IN EITHER FACET THAT ADDS A PAUSE TO A `proposedAt`, and
+    /// that is the point of it existing, exactly as with `_proposalDeadline`
+    /// above. Before the record carried its pause, the sum was written out twice
+    /// against a constant — in `removeArbiterForCause` and in
+    /// `executeChainRemoval`, both times on the line NEXT TO the deadline check
+    /// — so shortening the constant by a cut ripened every standing accusation
+    /// AT ONCE, with nobody sending a transaction and the accused seeing nothing
+    /// happen. A man told he has forty-eight hours to answer plans for
+    /// forty-eight hours, and a removal for cause burns his bond.
+    ///
+    /// ⚠️ GREP FOR THIS NAME, NOT FOR `REMOVAL_DELAY`, to count the comparisons.
+    /// The constant is now two things and only two: the pause frozen into a NEW
+    /// record (`proposeRemoval`, and its mirror in the registry for the
+    /// accusation the chain lays), and the fallback answer for a record with a
+    /// zero `delay` written before this change. There must be exactly two calls
+    /// to this function — the two doors that execute a removal.
+    ///
+    /// Zero means the record was written before the field existed, and the
+    /// constant in force is exactly the rule it was written under. Read the other
+    /// way round it would mean "no pause owed", and the upgrade itself would make
+    /// every standing accusation executable on the spot.
+    function _removalOpensAt(ArbiterRegistryStorage.RemovalProposal storage p)
+        private view returns (uint256)
+    {
+        uint256 delay = p.delay;
+        return p.proposedAt + (delay == 0 ? REMOVAL_DELAY : delay);
     }
 
     /// Reading the record whole, archived ones included (stale or already

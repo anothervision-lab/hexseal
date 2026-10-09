@@ -91,7 +91,7 @@ contract FundVaultAccessTest is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
 
-        bytes4[] memory arbSels = new bytes4[](16);
+        bytes4[] memory arbSels = new bytes4[](13);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -105,9 +105,6 @@ contract FundVaultAccessTest is Test {
         arbSels[10] = ArbiterRegistryFacet.getDaoThreshold.selector;
         arbSels[11] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[13] = ArbiterRegistryFacet.overturnVerdict.selector;
-        arbSels[14] = ArbiterRegistryFacet.freezeVerdict.selector;
-        arbSels[15] = ArbiterRegistryFacet.unfreezeVerdict.selector;
         bytes4[] memory arbSelsVault = new bytes4[](8);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
