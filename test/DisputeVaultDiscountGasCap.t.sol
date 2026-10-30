@@ -50,6 +50,10 @@ contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
     /// the only shape in which a top-up exists at all. Five dollars is the pot
     /// the discount was written about.
     uint256 constant SMALL_DEAL = 5_000_000; // $5
+    /// See the note at the raise in `_smallDisputedDealWithAFundedBounty`: the
+    /// default arbiter floor and the dispute fee's own floor are the same ten
+    /// dollars since 20 October 2026, so a top-up only exists above it.
+    uint256 constant RAISED_FLOOR = 20_000_000;
 
     /// More than one discount, so the bank actually pays and the branch under
     /// measurement has a non-zero share to move.
@@ -170,6 +174,15 @@ contract DisputeVaultDiscountGasCapTest is DiamondDeathEscrowBase {
         a.activate();
         vm.prank(client);
         a.raiseDispute();
+
+        // ⚠️ THE ARBITER FLOOR IS RAISED ABOVE THE FEE, 20 OCTOBER 2026, OR
+        // THERE IS NO TOP-UP AND NO SCENE. The dispute fee gained a flat ten
+        // dollar floor and the WHOLE of it goes to the judge, so against the
+        // default ten dollar arbiter floor every deal already pays him enough
+        // and `quoteDisputeTopUp` answers nought on this $5 deal as on any
+        // other. The guard below is what would have said so; the raise is what
+        // keeps the branch under measurement reachable.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(RAISED_FLOOR);
 
         uint256 quote = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(addr);
         assertGt(quote, 0, "this deal needs no top-up - the scene cannot be built on it");

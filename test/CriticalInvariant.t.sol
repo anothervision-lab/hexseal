@@ -84,6 +84,11 @@ contract CriticalInvariantTest is Test {
     // JobBoardFacet now prices the same way — quote(JOB_AMOUNT) numerically
     // equals DIRECT_FEE. cancelJob only burns the floor, refunding the rest.
     uint256 constant JOB_FEE    = 5_000_000;
+    /// What opening a dispute costs its opener, taken at the door since the
+    /// owner's decision of 20 October 2026 and kept by the judge when a verdict
+    /// is actually delivered. `max( the $10 floor, 3% of the pot )`, and on
+    /// this file's $100 deals the floor decides because 3% is three dollars.
+    uint256 constant DISPUTE_DOOR_CHARGE = 10_000_000;
     uint256 constant JOB_FLOOR  = 1_000_000;
     uint256 constant DEADLINE   = 7;
     string constant TERMS = "Standard work terms";
@@ -209,7 +214,7 @@ contract CriticalInvariantTest is Test {
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
         arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
         arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](12);
+        bytes4[] memory arbSelsVault = new bytes4[](15);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
@@ -222,6 +227,13 @@ contract CriticalInvariantTest is Test {
         arbSelsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
         arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
         arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026).
+        // `Agreement.raiseDispute` calls `holdDisputeFee` HARD -- no fee, no
+        // dispute -- so a rig that opens a dispute must route it or every such
+        // scene answers "Diamond: function not found".
+        arbSelsVault[12] = ArbiterVaultFacet.holdDisputeFee.selector;
+        arbSelsVault[13] = ArbiterVaultFacet.settleDisputeFee.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.getHeldDisputeFee.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -282,6 +294,26 @@ contract CriticalInvariantTest is Test {
     //  INVARIANT HELPER
     // ============================================================
 
+
+    /// ⚠️ OPEN A DISPUTE AND PAY FOR IT, AND **DO NOT MINT** (20 October 2026).
+    /// `raiseDispute` pulls `disputeFee()` from the opener through the diamond.
+    /// The first draft of this helper minted exactly the charge, which is fatal
+    /// in a file whose whole subject is that the system's total never moves:
+    /// a mint CREATES money, and the invariant went red by exactly ten dollars
+    /// with nothing wrong in `src/`.
+    ///
+    /// So the opener pays out of the purse the fixture already gave him. His
+    /// having it is asserted rather than assumed: a short purse would otherwise
+    /// make the door refuse and the scene fail somewhere else.
+    function _openTheDisputeAs(address who, address agr) internal {
+        uint256 doorCharge = Agreement(agr).disputeFee();
+        assertGe(
+            usdc.balanceOf(who), doorCharge,
+            "rig: the opener cannot pay the door charge out of what the fixture gave him"
+        );
+        vm.prank(who); usdc.approve(address(diamond), doorCharge);
+        vm.prank(who); Agreement(agr).raiseDispute();
+    }
     function _systemBalance(address agr) internal view returns (uint256) {
         return usdc.balanceOf(client)
              + usdc.balanceOf(client2)
@@ -498,8 +530,7 @@ contract CriticalInvariantTest is Test {
         vm.prank(executor);
         Agreement(agr).activate();
 
-        vm.prank(client);
-        Agreement(agr).raiseDispute();
+        _openTheDisputeAs(client, agr);
         assertEq(_systemBalance(agr), INITIAL_TOTAL, "after raiseDispute");
 
         _claimDispute(agr);
@@ -507,8 +538,43 @@ contract CriticalInvariantTest is Test {
         _resolveDispute(agr, true);
         assertEq(_systemBalance(address(0)), INITIAL_TOTAL, "after resolve client wins");
 
-        // Client only lost the direct-deploy fee; amount returned
-        assertEq(usdc.balanceOf(client), clientBefore - DIRECT_FEE, "client net: fee only");
+        // ⚠️ THE CLIENT LOST TWO THINGS AND THE LINE NAMED ONE, 21 OCTOBER
+        // 2026. The dispute fee is taken at the DISPUTE'S DOOR since the
+        // owner's decision of 20 October, and it is returned only when no
+        // verdict was delivered. A verdict WAS delivered here -- that is what
+        // `_resolveDispute` does -- so the charge is gone for good, into the
+        // judge's reward. It is not a loss the protocol took from him: it is
+        // what he paid to be judged, and he was.
+        //
+        // Worked out by hand, retired figure first so the method can be
+        // checked. Under the rule that stood until 20 October the levy came out
+        // of the POT at the settlement, so the client's own purse lost the
+        // deploy fee alone and the pot came back short instead:
+        //     the deploy fee                              5_000_000
+        //     his net                        -5_000_000
+        // -- which is the single term the line carried. What ships:
+        //     the deploy fee                              5_000_000
+        //     the door charge  max( 10_000_000, 3% of $100 = $3 )
+        //                                                10_000_000
+        //     his net                       -15_000_000
+        // and the pot itself comes home WHOLE, which is the other half of the
+        // same move and is asserted on its own line below.
+        //
+        // ⚠️ THE TWO TERMS ARE NAMED SEPARATELY rather than summed to fifteen,
+        // because they are paid to different addressees under different rules
+        // -- the deploy fee to the protocol treasury, the door charge to the
+        // judge -- and one literal would stay green if one grew by what the
+        // other shrank.
+        assertEq(
+            usdc.balanceOf(client), clientBefore - DIRECT_FEE - DISPUTE_DOOR_CHARGE,
+            "client net: the deploy fee and the door charge he paid to be judged"
+        );
+        // And the pot really did come back whole: his net is the two charges and
+        // nothing of the escrow.
+        assertEq(
+            clientBefore - usdc.balanceOf(client), DIRECT_FEE + DISPUTE_DOOR_CHARGE,
+            "the escrow came back short -- a levy was taken out of the pot as well as at the door"
+        );
         assertEq(usdc.balanceOf(agr), 0, "agreement empty");
     }
 
@@ -521,8 +587,7 @@ contract CriticalInvariantTest is Test {
         vm.prank(executor);
         Agreement(agr).activate();
 
-        vm.prank(executor);
-        Agreement(agr).raiseDispute();
+        _openTheDisputeAs(executor, agr);
         assertEq(_systemBalance(agr), INITIAL_TOTAL, "after raiseDispute");
 
         _claimDispute(agr);
@@ -530,7 +595,31 @@ contract CriticalInvariantTest is Test {
         _resolveDispute(agr, false);
         assertEq(_systemBalance(address(0)), INITIAL_TOTAL, "after resolve executor wins");
 
-        assertEq(usdc.balanceOf(executor), executorBefore + JOB_AMOUNT, "executor got full amount");
+        // ⚠️ THE SAME CORRECTION FROM THE OTHER SIDE, AND NOTE WHO PAID: it is
+        // the EXECUTOR who opened this dispute (`_openTheDisputeAs(executor,
+        // agr)` above), so the door charge came out of HIS purse, and a verdict
+        // was delivered, so it stays with the judge.
+        //
+        // Worked out by hand:
+        //     the pot, whole                            100_000_000
+        //     the door charge  max( 10_000_000, $3 )    -10_000_000
+        //     his net                                   + 90_000_000
+        // -- against the retired `+ 100_000_000`, which reproduces because
+        // nothing was charged at the door and the levy came off the pot at the
+        // settlement instead.
+        //
+        // ⚠️ AND "FULL AMOUNT" IS STILL TRUE OF THE POT, which is why the claim
+        // is split across two lines: the escrow pays him the whole hundred, and
+        // he is separately out the ten he spent to be heard. A single
+        // `+ 90_000_000` would read as the pot having been docked.
+        assertEq(
+            usdc.balanceOf(executor), executorBefore + JOB_AMOUNT - DISPUTE_DOOR_CHARGE,
+            "executor got the full amount less the door charge he paid to be judged"
+        );
+        assertEq(
+            usdc.balanceOf(executor) + DISPUTE_DOOR_CHARGE - executorBefore, JOB_AMOUNT,
+            "the pot did not come out whole -- a levy was taken from the escrow as well as at the door"
+        );
         assertEq(usdc.balanceOf(agr), 0, "agreement empty");
     }
 

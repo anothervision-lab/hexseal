@@ -62,6 +62,7 @@ import {MockUSDCB} from "./BoardsFixture.sol";
 import {UpgradeDisputeVaultDiscount} from "../script/UpgradeDisputeVaultDiscount.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 /// A registry facet whose discount is a DIFFERENT number — the shape the diamond
 /// would be in if the Add group landed on stale code. Nothing but a behavioural
@@ -125,7 +126,7 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
     /// Held to "real, and covering nothing this cut mounted" by
     /// test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](11);
+        sels = new bytes4[](20);
         sels[0] = bytes4(keccak256("withdrawAppealShare(address)"));
         sels[1] = bytes4(keccak256("getAppealShareOwed(address,address)"));
         sels[2] = bytes4(keccak256("getAppealLedger(address)"));
@@ -145,6 +146,71 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         sels[8] = bytes4(keccak256("withdrawCaseBond(address)"));
         sels[9] = bytes4(keccak256("getCaseBond(address)"));
         sels[10] = bytes4(keccak256("getJudgingCount(address)"));
+        // ⚠️ getStreakClock(address) -- 12 October 2026, and it is the second
+        // half of the arbiter ENTRY TEST made readable before the button is
+        // pressed. The entrance stopped asking only "how many clean closes"
+        // and started asking "and how long did the run take"
+        // (MIN_STREAK_SPAN_TO_REGISTER, sixteen days): the constant is private
+        // and `streakClockStartedAt` is read by nothing outside the diamond, so
+        // without this door a candidate with five clean closes saw "5 of 5" and
+        // a button that refused him -- the refusal nobody could predict that
+        // the deal cap taught us to stop shipping.
+        sels[11] = bytes4(keccak256("getStreakClock(address)"));
+        // ⚠️ voteToOverturn(address) -- 14 October 2026, decision 177. The
+        // appeal vote lost its second direction, so the door stopped being
+        // `voteOnAppeal(address,bool)` and its selector changed with its
+        // signature. It is GROWTH here and the old four bytes are still what
+        // the chain routes: the cut that carries this facet has to REMOVE
+        // 0xc9bb9cdd and ADD these, which is two groups where this cut had
+        // one.
+        sels[12] = bytes4(keccak256("voteToOverturn(address)"));
+        // ⚠️ AND THE LOT'S TWO, the same night (decision 177): the chain
+        // SUMMONS the appeal panel now instead of letting whoever presses
+        // first sit down. `summonAppealPanel(address)` is the door anybody may
+        // pull and `getAppealSummons(address)` publishes the five it called.
+        // Plain arrivals — nothing leaves with them — so they belong in the
+        // same `Add` group as the renamed vote above.
+        sels[13] = bytes4(keccak256("summonAppealPanel(address)"));
+        sels[14] = bytes4(keccak256("getAppealSummons(address)"));
+        // ⚠️ AND THE PANEL'S SECOND ANSWER, 17 OCTOBER 2026.
+        // `replyNoOverturn(address)` is the answer that asks for NO overturn,
+        // and the panel's wage is paid for it just as much as for a vote. It is
+        // compiled on ArbiterAppealFacet, which this file's ABI source has
+        // carried since the split of 15 October 2026, and the chain routes it
+        // NOWHERE -- measured on Base Sepolia 18 October 2026, where
+        // `facetAddress(0x1b07a7f6)` answered the zero address. A plain
+        // arrival: nothing leaves with it.
+        sels[15] = bytes4(keccak256("replyNoOverturn(address)"));
+        // ⚠️ AND THE BOND'S QUOTE, 20 OCTOBER 2026 (the owner's "yes, a new
+        // selector"). `quoteCaseBond(address)` answers what an arbiter puts
+        // down to TAKE a case, asked BEFORE he takes it. The judge's bond and
+        // the appeal's PRICE parted company that day -- the bond is held down
+        // to the pot, the price keeps its 20 USDC floor -- so a screen that
+        // promised the bond while reading `quoteAppealDeposit` said $20 over a
+        // $5 deal. `getCaseBond` above could not answer it: that reads the
+        // record the claim writes, and there is no record before the claim. It
+        // is compiled on ArbiterVaultFacet and the chain routes it NOWHERE --
+        // measured on Base Sepolia 20 October 2026, where
+        // `facetAddress(0xda358d0b)` answered the zero address while
+        // `facetAddresses()` answered fifteen. A plain arrival: nothing leaves
+        // with it.
+        sels[16] = bytes4(keccak256("quoteCaseBond(address)"));
+        // ⚠️ AND THE DISPUTE FEE TAKEN AT THE DOOR, 20 OCTOBER 2026 (the
+        // owner's flat prices). The fee came off the escrow and onto the party
+        // who OPENS the dispute, so the vault now holds it between the claim
+        // and the verdict instead of the pot carrying it:
+        // `holdDisputeFee(address,uint256)` 0x7808925d takes it in,
+        // `settleDisputeFee(bool)` 0xefccd7bc pays the judge who delivered or
+        // hands it back, and `getHeldDisputeFee(address)` 0x9dae83cc is the
+        // read a screen needs to show what is on the table before either
+        // happens. All three are compiled on ArbiterVaultFacet and the chain
+        // routes NONE of them -- measured on Base Sepolia 21 October 2026 at
+        // block 48 386 920, where `facetAddress` answered the zero address for
+        // all three while `facetAddresses()` answered fifteen. Plain arrivals:
+        // nothing leaves with them.
+        sels[17] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
+        sels[18] = bytes4(keccak256("settleDisputeFee(bool)"));
+        sels[19] = bytes4(keccak256("getHeldDisputeFee(address)"));
     }
 
     /// The same device for the OTHER facet, which until 20 September 2026 had
@@ -172,6 +238,27 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         sels = new bytes4[](2);
         sels[0] = bytes4(keccak256("getHandoverReadiness()"));
         sels[1] = bytes4(keccak256("getArbiterOutcomeRecord(address)"));
+    }
+
+    /// 🔴 THE DESIGNATED MUTATION FOR THE WIDENED ABI SOURCE (15 October 2026).
+    ///
+    /// Widening "what the group this cut mounted implements" from two artifacts
+    /// to three buys one specific risk: that the source stops discriminating
+    /// and every allowance in this file becomes a blanket pass. This holds both
+    /// ends of that. A selector NO facet implements must still be absent, and
+    /// one of the appeal's six must be PRESENT -- without the second half the
+    /// scene would be green on a source that was never widened at all, and
+    /// without the first it would be green on a source that accepts anything.
+    function test_APhantomInTheWidenedAbiSourceIsStillRefused() public view {
+        bytes4[] memory abiNow = upgrade.registryFacetAbi();
+        bool phantom;
+        bool moved;
+        for (uint256 i = 0; i < abiNow.length; i++) {
+            if (abiNow[i] == bytes4(0xdeadbeef)) phantom = true;
+            if (abiNow[i] == bytes4(0xbff14b7f)) moved = true; // voteToOverturn(address)
+        }
+        assertFalse(phantom, "a selector nothing implements is in the widened ABI source - it has stopped discriminating");
+        assertTrue(moved, "voteToOverturn is not in the widened ABI source - the appeal artifact was never added");
     }
 
     function test_TheGrowthBeyondThisCutIsRealAndCoversNothingItMounted() public view {
@@ -388,8 +475,25 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
             // ArbiterSplitRig.verdictHandDoors(), never counted: a fourth door
             // leaving still reds here.
             _concat(
-                _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
-                verdictHandDoors()
+                // ⚠️ AND THE FOURTH, 14 OCTOBER 2026: the appeal vote door under its
+                // old name. Decision 177 renamed `voteOnAppeal(address,bool)` to
+                // `voteToOverturn(address)`, so `DeployFull` mounts the new bytes while
+                // this cut's record still names the old ones. Same mirror, same rule:
+                // named by their bytes, never counted.
+                _concat(
+                    // ⚠️ AND THE APPEAL'S SIX, 15 OCTOBER 2026. They were part of
+                    // `arbiterRegistryFacetSelectors()` until that day and are a
+                    // group of their own since: the appeal became
+                    // ArbiterAppealFacet, bytes unchanged. Left out, DeployFull's
+                    // side would be six short of what this cut's record names and
+                    // the two sets would disagree about a move nobody made.
+                    _concat(
+                        _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
+                        deploy.arbiterAppealFacetSelectors()
+                    ),
+                    verdictHandDoors()
+                ),
+                removedAppealVoteDoors()
             ),
             "ArbiterRegistry vs DeployFull"
         );
@@ -1025,6 +1129,10 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
         // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
         _mountRemovedVerdictHandDoors(address(d), census);
+        // And the appeal vote door under its old name, which left the facet on
+        // 14 October 2026 with decision 177 and leaves the chain in the cut that
+        // carries it. Same reason, same shape: ArbiterSplitRig.
+        _mountRemovedAppealVoteDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(
@@ -1117,7 +1225,8 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

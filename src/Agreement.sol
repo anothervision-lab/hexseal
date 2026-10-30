@@ -44,19 +44,37 @@ import {IAgreementRenderer} from "./AgreementRenderer.sol";
 // alive on Base Sepolia and still draws correctly -- it is simply no longer
 // what this tree builds.
 //
-// ⚠️ THIS ADDRESS HAS NO CODE ON CHAIN UNTIL THE CUT DEPLOYS THE RENDERER,
-// and that is the first of four steps, in this order: deploy the renderer
-// (CREATE2, salt `hexseal.agreement.renderer.v2`, lands here), then the new
-// Agreement implementation, then a new AgreementDeployer (its `implementation`
-// is immutable, so the old one cannot be redirected), then
+// ⚠️ ALL FOUR STEPS HAVE RUN, AND THE WARNING IS KEPT IN THE PAST TENSE RATHER
+// THAN DELETED: the ORDER is what the next change of generation needs, and it
+// is the part no measurement can recover once it is gone. Until the renderer
+// stood on chain this address had no code, and deploying it was the first of
+// four steps, in this order: deploy the renderer (CREATE2, salt
+// `hexseal.agreement.renderer.v2`, lands here), then the new Agreement
+// implementation, then a new AgreementDeployer (its `implementation` is
+// immutable, so the old one cannot be redirected), then
 // `FactoryFacet.setAgreementDeployer`. Deploying the implementation before the
 // renderer would mint certificates pointing at an empty address; the deploy
-// script refuses that case by checking this address has code.
+// script still refuses that case by checking this address has code.
 //
-// ⚠️ EXISTING CLONES ARE UNAFFECTED and keep drawing from the old renderer:
-// each clone is nailed to the implementation it was cut from, and that
-// implementation carries the old literal. Measured on chain 8 October 2026:
-// `getLiveDeals()` = 0, so no live deal is caught by the generation boundary.
+// Measured on Base Sepolia at block 48 217 738 (17 October 2026, public RPC),
+// and every one of the four is standing:
+//   · this address carries 8 127 bytes of code (the renderer landed 9 October
+//     2026);
+//   · the deployer the diamond hands out is
+//     0x9C9107f109158e29454656bD0d5e7d72Af716A0E, and its immutable
+//     `implementation` is 0x9A1e4516c9534D2B876cB795122A45a72F37294a — 20 123
+//     bytes, the same length this tree builds;
+//   · that implementation carries THIS literal and not the previous
+//     0xF856d8… one, so clones cut from it draw from the renderer above (both
+//     landed 13 October 2026).
+//
+// ⚠️ EXISTING CLONES ARE STILL UNAFFECTED BY A CHANGE OF RENDERER and keep
+// drawing from whichever one their own implementation carries: each clone is
+// nailed to the implementation it was cut from. Measured the same day:
+// `getLiveDeals()` and `getDisputed()` both answer with an empty list, so no
+// live deal sits on the generation boundary — which is the question to ask
+// again, on chain, before the next generation is cut, and not a property of
+// this file.
 address constant AGREEMENT_RENDERER = 0xba92dCAD33f0f25bA8a043F6D5b34c03619c28AC;
 
 // ---------- MINIMAL ERC721 (no OZ, no dependencies) ----------
@@ -294,6 +312,12 @@ interface IArbiterRegistryFacet {
     function notifyArbiterTimeout(address agreement) external;
     function hasSubmittedVerdict(address agreement) external view returns (bool);
     function creditDisputeFee(uint256 total) external;
+    /// The dispute fee, taken from the opener at the door and held on the
+    /// diamond until the dispute ends. See `raiseDispute`.
+    function holdDisputeFee(address payer, uint256 amount) external;
+    /// The same fee, sent where the dispute's ending sends it: to the judge who
+    /// wrote the verdict, or home to the man who paid for one that never came.
+    function settleDisputeFee(bool verdictDelivered) external;
 }
 
 /// Rule B's one question, asked of ArbiterApplicationsFacet through the
@@ -322,6 +346,9 @@ interface IArbiterBondView {
 interface IFactoryFee {
     function getFeeBps() external view returns (uint256);
     function getFeeRecipient() external view returns (address);
+    /// The largest POT this deal may hold, frozen at its birth and only ever
+    /// widened afterwards. See FactoryStorage.agreementPotCeiling.
+    function getAgreementPotCeiling(address agreement) external view returns (uint256);
 }
 
 // ---------- REGISTRY INTERFACE ----------
@@ -382,11 +409,35 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// proposer who has stopped answering.
     uint256 public constant CANCEL_OFFER_WINDOW = 2 days;
 
-    // The arbiter's fee on a dispute. There is deliberately NO FLOOR: a $5
-    // floor would bite up to a $167 deal, that is across all small and mid-size
-    // work, and on a $10 pot it would eat half of it.
-    uint256 public constant DISPUTE_FEE_BPS = 300;          // 3% of the pot
-    uint256 public constant DISPUTE_FEE_CAP = 500_000_000;  // $500 (6 decimals)
+    // The arbiter's fee on a dispute: a FLAT TEN DOLLARS, and the three per
+    // cent only where three per cent is more than ten dollars.
+    //
+    // ⚠️ THERE WAS DELIBERATELY NO FLOOR UNTIL 20 OCTOBER 2026, and the
+    // sentence that stood here is kept because its arithmetic was right and the
+    // owner's answer to it changed: "a $5 floor would bite up to a $167 deal,
+    // that is across all small and mid-size work, and on a $10 pot it would eat
+    // half of it". It would — IF the fee still came out of the pot. It no
+    // longer does. The fee is taken from the party who OPENS the dispute, out
+    // of his own wallet, at the moment he opens it (`raiseDispute`), so a floor
+    // eats none of the escrow on any pot. That change is what makes a floor
+    // possible at all, and the two must never be separated: a floor over a
+    // pot-funded fee would hand the whole of a $10 escrow to the arbiter.
+    //
+    // Ten dollars because that is what the owner priced an hour of reading a
+    // case at, and because it is the same ten `DEFAULT_ARBITER_FLOOR` in
+    // ArbiterVaultFacet already asked the top-up door to reach. Where it bites:
+    // three per cent reaches ten dollars at a pot of $333.33, so every pot
+    // under that pays the flat ten, and above it the percentage takes over —
+    // $15 at the $500 deal ceiling.
+    //
+    // ⚠️ AND THE FLOOR IS ONE OF THREE FLAT PRICES CHOSEN TOGETHER. Ten here,
+    // twenty for the bond a judge puts down (ArbiterRegistryStorage.CASE_BOND_BASE)
+    // and thirty for an appeal (APPEAL_DEPOSIT_FLOOR) — because 20 + 10 = 30,
+    // which makes what a panel earns the same whether it overturns a verdict or
+    // leaves it standing. Moving this ten alone tilts that balance.
+    uint256 public constant DISPUTE_FEE_BPS   = 300;          // 3% of the pot
+    uint256 public constant DISPUTE_FEE_FLOOR = 10_000_000;   // $10 (6 decimals)
+    uint256 public constant DISPUTE_FEE_CAP   = 500_000_000;  // $500 (6 decimals)
 
     // -------- THE CERTIFICATE'S DRAUGHTSMAN --------
     //
@@ -1121,6 +1172,28 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     error NotMarkedDone();
     error AlreadyDisputed();
     error NotDisputed();
+    /// THE DISPUTE FEE CANNOT BE TAKEN, SO THE DISPUTE IS NOT OPENED
+    /// (20 October 2026).
+    ///
+    /// ⚠️ IT IS A NAME FOR A REFUSAL THAT WOULD OTHERWISE BE AN ANONYMOUS
+    /// REVERT, which is the only reason it exists. `raiseDispute` calls the
+    /// diamond HARD, and a high-level call to a codeless address reverts in
+    /// THIS frame with no data at all -- the caller is told nothing, and the
+    /// six tolerated diamond calls in this file are all guarded by
+    /// `_diamondHasCode()` precisely so that they never produce that. A party
+    /// who cannot open a dispute because the diamond is unreachable deserves
+    /// the same courtesy as one who has not approved the money
+    /// (`ArbiterRegistryFacet.DisputeFeeNotCovered`, raised one frame over and
+    /// carrying its three figures).
+    ///
+    /// ⚠️ AND THE REFUSAL IS THE DECISION, NOT A FALLBACK. The alternative --
+    /// opening the dispute anyway when the fee cannot be taken -- is the free
+    /// junk dispute the floor was introduced to price, and it would be
+    /// available on demand to anyone who could make the diamond unreachable.
+    /// What it costs is written out at `raiseDispute`: while the diamond is
+    /// down, no verdict can be bought. The escrow is not stuck behind that --
+    /// both timeout doors are clone-only.
+    error DisputeFeeUnavailable();
     error AlreadyResolved();
     error AlreadyFinalized();
     error WindowNotPassed();
@@ -1205,6 +1278,37 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
     /// change exists to close, and it would be openable by anyone who could
     /// make the diamond stop answering for one block.
     error FeeUnavailable();
+    /// Raised when the deal's own ceiling cannot be read off the diamond, so
+    /// how much room a top-up has is unknown.
+    ///
+    /// ⚠️ A SEPARATE NAME FROM `FeeUnavailable` ON PURPOSE: two different
+    /// things are broken and the person standing in front of the refusal needs
+    /// to know which, because one of them means "the fee model is gone" and
+    /// the other means "the ceiling is gone". A shared name would merge a
+    /// money question and a size question into one unreadable word.
+    ///
+    /// THE DIRECTION IS CLOSED, AND THAT IS THE DECISION. A diamond with no
+    /// code answers a staticcall with success and zero bytes; treating that as
+    /// "no answer, therefore no ceiling" would mean the cap evaporates for
+    /// anybody who can make the diamond stop answering for one block. Not
+    /// answering must LOCK, never OPEN. Refusing costs a top-up that can be
+    /// retried; opening costs the bound this whole thing exists to hold.
+    error PotCeilingUnavailable();
+    /// Raised when an accepted top-up would carry the deal's POT above the
+    /// ceiling the deal was born under.
+    ///
+    /// Carries both numbers for the reason already written out at
+    /// `FactoryFacet.DealAmountAboveCap` — not repeated here.
+    ///
+    /// ⚠️ WHO EVER SEES THIS: THE CLIENT, AND ONLY THE CLIENT. The check lives
+    /// on `proposeExtra`, which is the client's door, so the refusal arrives
+    /// while he is still typing a number and before a cent has moved. The
+    /// EXECUTOR never meets it — `acceptExtra` has no ceiling check at all and
+    /// must not have one, because by then the money is already inside the
+    /// clone and accepting moves it between two of the clone's own counters
+    /// without changing its balance by a cent. The executor therefore only
+    /// ever sees top-ups that already fitted.
+    error ExtraAbovePotCeiling(uint256 ceiling, uint256 wouldBePot);
     /// Raised when a deal is created with no terms at all.
     ///
     /// The terms are the subject of the agreement: they are the only thing an
@@ -1387,12 +1491,29 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         return Status.ACTIVE;
     }
 
-    /// @notice What settling a dispute will take. Public because the interface
-    /// shows this figure BEFORE a dispute is opened: without it a user learns of
-    /// the fee only when less money arrives than expected.
+    /// @notice What opening a dispute will cost the party who opens it. Public
+    /// because the interface shows this figure BEFORE the press: since
+    /// 20 October 2026 it is money that leaves his own wallet, so a screen that
+    /// did not show it would be charging him without saying so.
+    ///
+    ///     min( max( DISPUTE_FEE_FLOOR, 3% of the pot ), DISPUTE_FEE_CAP )
+    ///
+    /// ⚠️ IT USED TO BE WHAT THE WINNER LOST OUT OF THE POT, which is why the
+    /// sentence above changed with the arithmetic. The old reading — "what
+    /// settling a dispute will take" — was true of a fee subtracted from the
+    /// escrow at the verdict; it is false of a fee the opener hands over at the
+    /// door, and a docstring left behind would have gone on promising the old
+    /// shape to whoever read it next.
+    ///
+    /// ⚠️ THE FLOOR IS APPLIED BEFORE THE CEILING, and the order is not
+    /// arbitrary even though no pot can make the two meet: the floor is what
+    /// the judge must be paid and the ceiling is what a party may be asked for,
+    /// so a day when the ceiling is lowered below the floor must answer with
+    /// the CEILING. Written in this order it does.
     function disputeFee() public view returns (uint256) {
         uint256 pot = _pot();
         uint256 fee = (pot * DISPUTE_FEE_BPS) / 10_000;
+        if (fee < DISPUTE_FEE_FLOOR) fee = DISPUTE_FEE_FLOOR;
         return fee > DISPUTE_FEE_CAP ? DISPUTE_FEE_CAP : fee;
     }
 
@@ -1661,8 +1782,42 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         emit AutoApproved(executor, executorPaid);
     }
 
-    /// @notice The client or the executor raises a dispute
+    /// @notice The client or the executor raises a dispute — and pays for it.
     /// A dispute may be raised even after markDone, while AUTO_APPROVE_WINDOW is still open
+    ///
+    /// ⚠️ IT COSTS `disputeFee()` SINCE 20 OCTOBER 2026, AND THAT CLOSES THE
+    /// OLDEST OPEN HOLE IN THIS PROTOCOL. Until today this door took nothing:
+    /// the finding of 30 August 2026 was that a junk dispute therefore PAID —
+    /// open it for nothing, let nobody take a $10 case on for 24 cents of fee,
+    /// and the unclaimed timeout splits the pot. Every fence put in front of
+    /// that since then fenced a SYMPTOM: attendance, then the hand-in. The
+    /// price at the door is the first thing that charges the man who presses.
+    ///
+    /// ⚠️ WHAT IT COSTS THE HONEST PARTY, SAID OUT LOUD BECAUSE IT IS A REAL
+    /// PRICE AND NOT A ROUNDING. A client cheated out of $100 of work pays $10
+    /// to be heard, and he does NOT get it back even when the verdict goes his
+    /// way: the ten dollars are the judge's wage for reading the case, and the
+    /// judge read it either way. "The loser pays" would be fairer and the owner
+    /// did not say it, so it is not introduced here — it would mean holding the
+    /// fee until the verdict and handing it to the winner, which is a different
+    /// decision with its own price (a wrong verdict would then also decide who
+    /// paid for it).
+    ///
+    /// ⚠️ THE MONEY IS PULLED BY THE DIAMOND, NOT BY THIS CLONE. The spender of
+    /// an ERC-20 allowance is whoever calls `transferFrom`, and the diamond is
+    /// the address a party has already approved in order to fund the deal at
+    /// all. A clone-side pull is NOT impossible — the web client already
+    /// permits a clone for `fund()` — but it would need a fresh permit at this
+    /// door, and, decisively, it would put the forfeited fee on the wrong side
+    /// of `resolveAppeal`. Both reasons are written out in full at
+    /// `ArbiterVaultFacet.holdDisputeFee`.
+    ///
+    /// ⚠️ AND IT IS HARD: no fee, no dispute. The call is not wrapped in a
+    /// tolerant catch the way `_updateRegistry` and the fee credit are, because
+    /// a tolerated charge is not a charge. The cost of that is named where the
+    /// door lives: while the diamond cannot take the money, this road is shut.
+    /// The deal is not stuck behind it — `triggerDeadlineTimeout` and
+    /// `triggerAutoApprove` still end it — but nobody can buy a verdict.
     function raiseDispute() external {
         address sender = _msgSender();
         if (_finalized) revert AlreadyFinalized();
@@ -1694,6 +1849,24 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         } else {
             _executorResponded = true;
         }
+
+        // CEI: every state word above is already written, so the pull below
+        // cannot be re-entered into a half-opened dispute. `_pot()` is read
+        // through `disputeFee()` AFTER those writes and is unaffected by them —
+        // none of them touches `amount` or `extrasTotal`.
+        //
+        // ⚠️ NOT WRAPPED, NOT CAPPED, AND NOT SETTLED FOR A PART. A revert here
+        // takes the whole press down and leaves the deal exactly as it was,
+        // which is the intended behaviour: the alternative is a dispute that
+        // was opened without being paid for.
+        //
+        // ⚠️ THE CODELESS CASE IS ASKED FIRST, AND ONLY TO GIVE THE REFUSAL A
+        // NAME. Without it a high-level call to an address with no code reverts
+        // in this frame with empty return data, and a party would see nothing
+        // at all -- the same silence this file spends six `_diamondHasCode()`
+        // guards avoiding on the tolerated calls. See `DisputeFeeUnavailable`.
+        if (!_diamondHasCode()) revert DisputeFeeUnavailable();
+        IArbiterRegistryFacet(diamond).holdDisputeFee(sender, disputeFee());
 
         _updateRegistry(ISignatureRegistry.AgreementStatus.DISPUTED);
 
@@ -1761,84 +1934,61 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         _settlePending();
         uint256 pot = _pot();
 
-        // A failed credit is TOLERATED: otherwise a broken or unmounted
-        // selector on the diamond would make the dispute unclosable, and the
-        // money would stand in escrow forever. Exactly this failure has been
-        // seen on the live diamond, when the treasury could not call fundVault.
+        // ⚠️ THE POT IS NO LONGER TOUCHED BY THE FEE, 20 OCTOBER 2026, AND THAT
+        // IS THE WHOLE OF WHY A FLOOR UNDER THE FEE IS SAFE. The fee left the
+        // opener's wallet at `raiseDispute` and has sat on the diamond ever
+        // since; what the winner receives here is the escrow entire. The
+        // subtraction that used to stand on this line (`pot - taken`) is gone
+        // rather than set to nought, because a subtraction left in place would
+        // be the first thing a later edit reconnected.
         //
-        // No allowance is granted in this scheme at all, so a failure leaves no
-        // dangling approval behind — in the treasury that defect had to be
-        // fixed separately.
+        // ⚠️ AND WITH IT GOES THE ONE INVARIANT THAT MADE THE OLD SHAPE SAFE,
+        // written down because its absence is now harmless and would otherwise
+        // read as a deletion somebody should undo. It ran: at
+        // DISPUTE_FEE_BPS = 300 the fee is ALWAYS strictly below the pot, so
+        // `pot - taken` cannot underflow, and a `&& fee < pot` guard was an
+        // untestable branch on a money path. A FLOOR BREAKS THAT INVARIANT
+        // OUTRIGHT — ten dollars is more than a five dollar pot — and the
+        // branch is not needed anyway, because nothing is subtracted from the
+        // pot any more. `testDisputeFeeBpsIsBelowOneHundredPercent` in
+        // test/DisputeSettlement.t.sol pinned the old invariant; what pins the
+        // new shape is that the fee and the pot never meet in one expression.
+        //
+        // A failed settlement is TOLERATED, for the reason the credit always
+        // was: a broken or unmounted selector on the diamond must not make the
+        // dispute unclosable with the escrow inside it. Exactly this failure
+        // has been seen on the live diamond, when the treasury could not call
+        // fundVault.
+        //
+        // ⚠️ WHAT A FAILURE COSTS, AND IT IS NOT THE OLD COST. It used to mean
+        // "the fee was not taken" and the winner got it instead. Now the money
+        // is already on the diamond, so a failure means the fee STAYS there,
+        // with its amount and its payer both still written in
+        // `disputeFeeHeld` / `disputeFeePrepaidBy`. That is a recoverable
+        // state and deliberately so: a later facet can pay it out to either
+        // addressee, because the record survives. The same could never be said
+        // of money stranded in a clone — there is no rescue function here, and
+        // there never can be one for a clone already born.
         uint256 fee = disputeFee();
-        uint256 taken = 0;
-        // At DISPUTE_FEE_BPS = 300 (3%) the fee is ALWAYS strictly below the
-        // pot: floor(pot * 300 / 10_000) < pot for any pot >= 1, and
-        // DISPUTE_FEE_CAP only lowers the fee, never raises it. A second half
-        // of this condition (`&& fee < pot`) used to stand here — an unmarked
-        // unreachable branch on a money path: not one of 391 tests caught it in
-        // either direction, and a mutation run is what found that. The
-        // invariant is pinned statically —
-        // testDisputeFeeBpsIsBelowOneHundredPercent in
-        // test/DisputeSettlement.t.sol — instead of by a runtime branch that
-        // cannot be tested: firing would mean BPS >= 10_000, a configuration
-        // catastrophe rather than a change of rate, and silently skipping the
-        // fee would mask that error rather than soften it.
-        if (fee > 0 && !_diamondHasCode()) {
-            // No code at the diamond address: the credit cannot happen, and
+        if (!_diamondHasCode()) {
+            // No code at the diamond address: the call cannot happen, and
             // trying would revert in this frame (see _diamondHasCode), taking
-            // the payout below with it. Treated exactly like a failed credit.
+            // the payout below with it.
             emit DisputeFeeSkipped(fee);
-        } else if (fee > 0) {
-            // Credit FIRST, transfer only on success.
-            //
-            // The reverse order looks more natural, and was the first thing
-            // written: "crediting requires the money to have arrived". That is
-            // untrue — creditDisputeFee does not check a balance on any line,
-            // and within one transaction the order does not matter either.
-            //
-            // The cost of getting it wrong would have been permanent, though:
-            // on a failed credit the money would stay on the diamond, from
-            // which there is NO way out. No rescue function exists there,
-            // withdrawTreasurySlice moves only its own counter, and
-            // withdrawArbiterReward only what has been credited. The fee would
-            // burn on every failure.
-            //
-            // A failure means "the fee was not taken", not "the fee was
-            // burned": the transfer stands INSIDE the try, so if
-            // creditDisputeFee fails not a cent leaves the Agreement — the
-            // whole sum stays in the payout below.
-            // Floored, not merely capped. A failed credit means the fee is
-            // never taken and the whole pot goes to the winner instead -- so a
-            // winner who calls finalizeVerdict with a hand-picked gas limit
-            // could starve this one call and keep the arbiter's 3%. The event
-            // says it happened, but nothing can take it back afterwards.
-            _requireDiamondGas(DISPUTE_FEE_GAS, IArbiterRegistryFacet.creditDisputeFee.selector);
-            try IArbiterRegistryFacet(diamond).creditDisputeFee{gas: DISPUTE_FEE_GAS}(fee) {
-                // Taken either way. The credit above already stands on the
-                // diamond, so the fee has stopped being the winner's; the only
-                // question left is whether it has physically arrived.
-                taken = fee;
-                // Soft since 26 August 2026, and it was the last hard payment
-                // in this file. Hard, it read as "the protocol's own transfer
-                // may cancel the person's" -- the exact rule that was settled
-                // the other way one file over. Worse, a revert here is
-                // NOT caught by the catch below: a revert raised inside the
-                // success block of a try/catch escapes its own catch, so a
-                // diamond the token refuses took the whole pot down with it.
-                // Measured: $3 of fee froze $100 of somebody's won dispute,
-                // with VerdictInFlight on the only other door.
-                if (usdc.trySafeTransfer(diamond, fee)) {
-                    emit DisputeFeePaid(fee);
-                } else {
-                    undeliveredFee += fee;
-                    emit DisputeFeeDeferred(fee);
-                }
+        } else {
+            _requireDiamondGas(DISPUTE_FEE_GAS, IArbiterRegistryFacet.settleDisputeFee.selector);
+            // `true` is this side's own fact and the only half of the answer it
+            // owns: a verdict was delivered. WHICH judge wrote it, and whether
+            // a panel has already taken the fee off him, are the diamond's to
+            // know — see `ArbiterVaultFacet.settleDisputeFee`.
+            try IArbiterRegistryFacet(diamond).settleDisputeFee{gas: DISPUTE_FEE_GAS}(true) {
+                emit DisputeFeePaid(fee);
             } catch {
                 emit DisputeFeeSkipped(fee);
             }
         }
 
-        uint256 payout = pot - taken;
+        uint256 payout = pot;
 
         _complete(Status.RESOLVED);
         // Soft when the client wins, for the reason every payment to them is
@@ -2023,6 +2173,33 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         _settlePending();
         uint256 pot = _pot();
 
+        // ⚠️ THE DISPUTE FEE GOES HOME, 20 OCTOBER 2026 — this is the road the
+        // owner's decision of 19 October names: the fee is earned by a
+        // DELIVERED VERDICT and nothing else, so a dispute nobody judged costs
+        // the man who opened it nothing in the end. He was out of pocket while
+        // it was live, which is what makes a junk dispute a real attempt to
+        // spend money rather than a free press, and whole again once it is
+        // clear nobody read it.
+        //
+        // ⚠️ IT IS SETTLED BEFORE THE ESCROW IS DIVIDED, AND THE TWO ARE
+        // UNRELATED SUMS. A reader who finds this call next to the split below
+        // may take the fee for part of the pot: it is not. The pot is the
+        // escrow and goes to the parties by the rules in this function; the fee
+        // is the opener's own ten dollars and goes back to him alone, whichever
+        // way the escrow falls.
+        //
+        // Tolerated for the same reason as in `resolveDispute`: this timeout is
+        // the ONLY way out of DISPUTED when no verdict came, and a diamond that
+        // will not answer must not be able to lock an escrow. A failure leaves
+        // the fee on the diamond with its payer still recorded.
+        if (_diamondHasCode()) {
+            _requireDiamondGas(DISPUTE_FEE_GAS, IArbiterRegistryFacet.settleDisputeFee.selector);
+            // `false`: no verdict. The diamond does not have to trust that —
+            // it knows its own `pendingVerdicts` — but it is the clone's fact
+            // and the clone states it.
+            try IArbiterRegistryFacet(diamond).settleDisputeFee{gas: DISPUTE_FEE_GAS}(false) {} catch {}
+        }
+
         // Two different events are told apart, and the signal is free: the
         // arbiter field is zero until the dispute is taken on. It holds exactly
         // two values — zero and the diamond's address: claimDispute makes the
@@ -2069,14 +2246,76 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
             // chain, permanently" — and a false markDone also opens the client
             // the window to answer it, which doing nothing never did.
             //
-            // ⚠️ THE MIRROR THIS CREATES AND DOES NOT CLOSE: a client who
-            // raises the dispute BEFORE the executor presses markDone locks him
-            // out of pressing it at all (markDone refuses a disputed deal,
-            // AlreadyMarkedDone's neighbour AlreadyDisputed) and takes the
-            // whole pot back on the timeout, work delivered or not. The
-            // executor's defence is the order of pressing — markDone first,
-            // then hand the files over — and that belongs to the product, not
-            // to this line.
+            // ⚠️ AND WHAT THAT FLOOR COSTS HIM, as a number rather than as the
+            // word "honest" — measured 19 October 2026 on a $5 pot: nothing. He
+            // ends with 2 500 000 of 5 000 000 when the client turns up and
+            // 3 750 000 when the client stays silent
+            // (test_NobodyCame_AFalseHandInStillTakesHalfThePotAndTheDoorChargeComesHome,
+            // test_NobodyCame_SilenceCostsAQuarterOnEitherSide), while the
+            // client's road to a verdict instead of this coin-split costs a
+            // flat ten dollars
+            // (test_BuyingAJudgeForAFiveDollarDisputeCostsAFlatTenDollars).
+            //
+            // ⚠️ AND THE SENTENCE "markDone, raiseDispute AND respondToDispute
+            // TAKE NO MONEY" WENT HALF FALSE ON 20 OCTOBER 2026. `raiseDispute`
+            // now takes `disputeFee()` — ten dollars on any pot — from the man
+            // who presses it. The two remaining doors are still free and the
+            // road is still gas somebody else pays, but it is no longer a road
+            // a man with an empty wallet can walk: he must HAVE the ten dollars
+            // and let the diamond spend them.
+            //
+            // ⚠️ AND IT STILL COSTS HIM NOTHING IN THE END, which is the whole
+            // of why the price did not close this hole. The ten dollars are
+            // returned on this very road: no verdict was written, so
+            // `settleDisputeFee(false)` sends them home (the owner's decision of
+            // 19 October, confirmed on the 20th). What the charge buys is a
+            // CAPITAL REQUIREMENT — ten dollars locked for the four days of the
+            // window, so a thousand simultaneous junk disputes need ten
+            // thousand dollars of float — and not a price. Measured as a number
+            // in test_AJunkDisputeStillCostsItsOpenerNothingBecauseTheFeeComesHome,
+            // which is the appointed lock for it. The ratio above, and not the
+            // shape of any gate here, is still what keeps the split unjudged on
+            // a small pot; the floor's own bet is that a judge turns up for ten
+            // dollars where he did not for twenty-seven cents.
+            //
+            // AND WHATEVER IS CHOSEN REACHES ONLY NEW DEALS. Every escrow is a
+            // clone nailed to the implementation it was cut from (EIP-1167), so
+            // a change to this arithmetic arrives with the next implementation
+            // and never reaches a clone already born. Whoever ships one owes the
+            // owner the sentence that says which deals it does not cover.
+            //
+            // ⚠️ THE ORDER OF PRESSING IS NOT THE LEVER, which is what makes a
+            // gate on `_disputedAt` — here or in markDone — look like a fix and
+            // not be one: the road above works with markDone pressed FIRST,
+            // before any dispute exists, where no fence of any shape stands.
+            // test_NobodyCame_TheOrderOfPressingDoesNotChangeWhatAFalseHandInPays
+            // holds the two roads equal and reddens on a gate that moves one of
+            // them and not the other.
+            //
+            // ⚠️ THE MIRROR THIS PARAGRAPH USED TO CLAIM IS NOT IN THIS TREE,
+            // and the gate it pointed at is what refutes it. It read: "a client
+            // who raises the dispute BEFORE the executor presses markDone locks
+            // him out of pressing it at all ... and takes the whole pot back on
+            // the timeout, work delivered or not". markDone has been fenced on
+            // `_disputedAt != 0 && arbiter != address(0)` since 25 September
+            // 2026 — the same day this branch learned to read the hand-in, and
+            // for exactly this reason — so an UNCLAIMED dispute bars nothing.
+            // The paragraph was the stale twin of one the working journal's
+            // decision 119 cancelled the day it was written; it stood here
+            // three weeks longer. Measured 19 October 2026 through the clone's
+            // own doors: the client raises first, the executor presses markDone
+            // inside the dispute, both turn up, four days pass — 2 500 000 to
+            // each
+            // (test_NobodyCame_AFalseHandInStillTakesHalfThePotAndTheDoorChargeComesHome).
+            //
+            // WHERE A MIRROR DOES LIVE is behind a CLAIM, and there it is the
+            // client who gains: once an arbiter holds the case the hand-in door
+            // is shut (test_AClaimShutsTheHandInDoor) and the branch below
+            // sends the whole pot home with the bond refunded in full
+            // (test_AClaimedButUnjudgedDisputeGivesTheClientEverything). That
+            // road is not free — it costs a seat in the corps and a strike —
+            // and it is the arbiter-side tail the working journal tracks, not
+            // this line's business.
             //
             // ONCE SOMETHING WAS HANDED IN, attendance decides exactly as
             // before. At least one flag is always set: raiseDispute sets it for
@@ -2395,6 +2634,33 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // function, and every other door is shut once `_complete` has run.
         _settlePending();
 
+        // ⚠️ AND THE DISPUTE FEE GOES HOME TOO, 20 OCTOBER 2026 — THIS IS THE
+        // SIXTH EXIT AND IT WAS THE ONE THAT LEAKED. The fee is taken at
+        // `raiseDispute` and held on the diamond, and the two doors out of
+        // DISPUTED that everybody thinks of — `resolveDispute` and
+        // `triggerArbiterTimeout` — both settle it. This one is the third, and
+        // it is easy to miss because the deal does not look disputed from here:
+        // `proposeCancellation` refuses only `_disputedAt != 0 && arbiter != 0`,
+        // so two parties may agree to part while a dispute is open that NOBODY
+        // HAS CLAIMED. Without this call the ten dollars stayed on the diamond
+        // for ever with the record still naming their owner.
+        //
+        // ⚠️ IT WAS FOUND BY THE LEDGER IDENTITY AND NOT BY READING, which is
+        // why `_assertDiamondBalances` in test/MoneyPathBase.sol is worth its
+        // cost: "the diamond holds MORE USDC than it books, by 10000000 --
+        // after an unjudged dispute was settled by agreement". Three other
+        // exits (`release`, `triggerDeadlineTimeout`, `triggerAutoApprove`) all
+        // refuse a disputed deal outright, so this was the only gap.
+        //
+        // `false`, because no verdict was ever written — nobody had even taken
+        // the case on, or `proposeCancellation` would have refused. Tolerated
+        // like the other two: an agreement to part must not be blocked by a
+        // diamond that will not answer.
+        if (_disputedAt != 0 && _diamondHasCode()) {
+            _requireDiamondGas(DISPUTE_FEE_GAS, IArbiterRegistryFacet.settleDisputeFee.selector);
+            try IArbiterRegistryFacet(diamond).settleDisputeFee{gas: DISPUTE_FEE_GAS}(false) {} catch {}
+        }
+
         uint256 toCli = pot - toExec;
 
         // REFUNDED, not a new enum member. The status enum is frozen -- the
@@ -2618,6 +2884,54 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
         // Read before anything is written: a diamond that will not name the
         // rate stops the top-up here, with no state touched and no money moved.
         uint256 fee = quoteExtraFee(extraAmount);
+
+        // ---------- THE DEAL CAP, ON THE POT RATHER THAN ON THE BIRTH ----------
+        //
+        // ⚠️ THIS IS THE ONE DOOR THE CEILING HAS TO STAND IN, AND IT IS NOT
+        // `acceptExtra`. `proposeExtra` is the only place USDC enters this clone
+        // after it was born -- the `safeTransferFrom` a few lines below is the
+        // whole of it. `acceptExtra` moves an already-arrived sum from
+        // `pendingExtrasTotal` into `extrasTotal` inside this same contract:
+        // the clone's balance does not change by one cent, so nothing new comes
+        // under risk there and there is nothing for a cap to refuse. Putting a
+        // check in both doors would not be belt-and-braces, it would be a
+        // second place to keep in step.
+        //
+        // AND IT HAS A CONSEQUENCE FOR A PERSON, which is the real reason the
+        // door matters: THE EXECUTOR NEVER MEETS THIS REFUSAL. It belongs to
+        // the client, and it reaches him while he is still choosing a number,
+        // before a cent has moved out of his wallet. The executor only ever
+        // sees top-ups that already fitted -- he is never handed a proposal he
+        // cannot accept, and `acceptExtra` cannot start failing underneath him
+        // because the global ceiling moved.
+        //
+        // WHAT IS COMPARED, and why these four terms. The clone's balance
+        // identity (written out at `pendingExtraFeeTotal`) says the money held
+        // here is `amount + extrasTotal + pendingExtrasTotal + ...`; the three
+        // terms that are the DEAL rather than a debt or a fee are the three
+        // below, and `extraAmount` is what this call would add to them.
+        // `pendingExtrasTotal` is counted even though it is not pot yet,
+        // because the executor can turn all of it into pot at will, and a
+        // ceiling that could be walked past by proposing ten times and
+        // accepting afterwards would not be a ceiling.
+        //
+        // THE FEE IS NOT IN IT. At birth the fee is outside the cap too --
+        // `requireUnderCap(fs, amount)` sees the escrow while `transferFrom`
+        // pulls `amount + fee` -- and one boundary chosen once is worth more
+        // than two boundaries each defensible on its own.
+        //
+        // `>` AND NOT `>=`: a pot of exactly the ceiling is inside it, the same
+        // choice `requireUnderCap` makes and for the same reason.
+        //
+        // PLACED AFTER `quoteExtraFee` DELIBERATELY. The cheap checks above
+        // stand before the diamond is asked anything so that an empty top-up
+        // against a silent diamond still comes back `EmptyTerms` and names the
+        // real problem; this check asks the diamond too, so putting it above
+        // the fee read would have turned that `EmptyTerms` into a
+        // `PotCeilingUnavailable` and taken the property away.
+        uint256 ceiling = _potCeiling();
+        uint256 wouldBePot = amount + extrasTotal + pendingExtrasTotal + extraAmount;
+        if (wouldBePot > ceiling) revert ExtraAbovePotCeiling(ceiling, wouldBePot);
 
         uint256 extraId = nextExtraId++;
         extras[extraId] = Extra({ amount: extraAmount, terms: extraTerms, status: ExtraStatus.PENDING });
@@ -3180,6 +3494,62 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
             bps := mload(ptr)
         }
         if (!ok) revert FeeUnavailable();
+    }
+
+    /// @dev The largest POT this deal may hold, read live off the diamond.
+    ///
+    /// Raw staticcall for the SAME reason `_feeBps` and `_verdictInFlight` use
+    /// one, and the reason is worth restating because here the stakes point the
+    /// other way: a diamond with NO CODE answers a call with success and zero
+    /// bytes of returndata, and only the `returndatasize` check tells that
+    /// apart from an honest answer. Read through a high-level call this would
+    /// come back as "the ceiling is 0" -- which refuses everything, and is the
+    /// safe half of the accident. The dangerous half is the OTHER reading
+    /// somebody might reach for: treating a non-answer as "there is no ceiling"
+    /// would hand the whole bound away to anybody who could make the diamond
+    /// stop answering for one block. So a non-answer reverts, by name, and
+    /// locks the door it cannot measure.
+    ///
+    /// ⚠️ THE PRICE OF THIS, NAMED RATHER THAN DISCOVERED LATER. This is a
+    /// clone reading a selector off the proxy, and a clone cannot be fixed --
+    /// EIP-1167 welds it to the implementation it was cut from. If
+    /// `getAgreementPotCeiling` is ever removed from the diamond by a
+    /// `diamondCut`, every top-up on every clone built from this
+    /// implementation stops working, for good, and no new implementation
+    /// reaches the clones already alive. That is exactly the bet `_feeBps`
+    /// already makes on `getFeeBps` -- the same wager, one selector wider, and
+    /// written down here so the next person reads it instead of finding it.
+    ///
+    /// The budget is FEE_READ_GAS and no new constant is introduced for it:
+    /// this read is the same class and shape as the fee read, and a second
+    /// number would be a second number to keep in step for the sake of three
+    /// cold-ish SLOADs behind a proxy hop.
+    ///
+    /// NO gasleft() FLOOR, for the reason FEE_READ_GAS's own comment gives: a
+    /// failed read here CLOSES a door. Starving this call buys the starver a
+    /// reverted transaction and nothing else.
+    function _potCeiling() private view returns (uint256 ceiling) {
+        address to      = diamond;
+        address self    = address(this);
+        uint256 gasCap  = FEE_READ_GAS;
+        bytes4  selector = IFactoryFee.getAgreementPotCeiling.selector;
+
+        bool ok;
+        assembly ("memory-safe") {
+            // Scratch behind the free-memory pointer; the pointer is not moved
+            // and nothing long-lived is left here. A bytes4 sits in the high
+            // bytes of a Yul word, so mstore + length 4 lays down exactly the
+            // selector, then one word of argument after it. Input and output
+            // share the buffer: the EVM reads the input before it writes the
+            // answer.
+            let ptr := mload(0x40)
+            mstore(ptr, selector)
+            mstore(add(ptr, 4), self)
+            ok := staticcall(gasCap, to, ptr, 36, ptr, 0x20)
+            if lt(returndatasize(), 0x20) { ok := 0 }
+            ceiling := mload(ptr)
+        }
+        if (!ok) revert PotCeilingUnavailable();
     }
 
     /// @dev Where the protocol's fee goes, read live off the diamond.

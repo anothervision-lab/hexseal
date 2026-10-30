@@ -11,6 +11,9 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/ReputationFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
+import {DealCapOff} from "./DealCapOff.sol";
+import {pullAppealLot} from "./AppealLotRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract MockUSDC {
     mapping(address => uint256) public balanceOf;
@@ -106,7 +109,64 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     address feeRecipient;
     
     uint256 constant AMOUNT = 100 * 10**6;
+    /// ⚠️ WHAT THE DIAMOND IS ALLOWED TO SPEND, AND WHY IT IS TWO TERMS SINCE
+    /// 20 OCTOBER 2026. The allowance a client grants the diamond used to cover
+    /// one thing -- the protocol's entrance fee on a hire. It now also covers
+    /// the DISPUTE FEE, because `Agreement.raiseDispute` takes that fee at the
+    /// door and the diamond is the puller (`ArbiterVaultFacet.holdDisputeFee`).
+    /// An allowance sized to the entrance fee alone answers "Allowance
+    /// exceeded" at the dispute door -- 21 scenes in this file on the day the
+    /// floor landed.
+    ///
+    /// It is a SUM of two named terms and not `type(uint256).max`, deliberately:
+    /// an infinite allowance in a fixture hides the day a door starts pulling
+    /// more than it should, and this file has scenes about exactly that.
+    uint256 constant DISPUTE_DOOR_CHARGE = 10_000_000;   // Agreement.DISPUTE_FEE_FLOOR
+
+    /// ⚠️ AND THE ALLOWANCE HAS TO BELONG TO WHOEVER OPENS THE DISPUTE, which
+    /// is the half the sweep of 20 October 2026 missed in three scenes of this
+    /// file. The line above it is written from the CLIENT in every scene,
+    /// because the client is the opener in almost all of them; in these three
+    /// it is the EXECUTOR who calls `raiseDispute`, and the door pulls from
+    /// `_msgSender()`. They answered
+    /// `DisputeFeeNotCovered(10000000, 0, 0)` -- needed ten dollars, nought of
+    /// balance, nought of allowance -- and one of them
+    /// `DisputeFeeNotCovered(10000000, 100000000, 0)`, where a completed deal
+    /// had already paid him so only the allowance was missing.
+    ///
+    /// ⚠️ THE SHAPE OF THAT ERROR IS WORTH READING RATHER THAN SKIPPING: the
+    /// two numbers after the amount are the payer's own balance and allowance,
+    /// so the message names WHICH of the two was wrong. That is what made these
+    /// three a rig fault and not a rule change -- a figure that moved would
+    /// have shown a balance and an allowance both large enough.
+    ///
+    /// Written as a mint AND an approve, both sized to the charge alone, for the
+    /// reason the paragraph above gives: a fixture that approves infinity stops
+    /// being able to see a door that pulls too much.
+    function _fundTheDisputeDoorFor(address opener) internal {
+        usdc.mint(opener, DISPUTE_DOOR_CHARGE);
+        vm.prank(opener);
+        usdc.approve(address(diamond), DISPUTE_DOOR_CHARGE);
+    }
+
+    /// What an appeal costs on this file's pots: the floor, because 3% of them
+    /// is far under it.
+    ///
+    /// ⚠️ 20 -> 30 ON 20 OCTOBER 2026 (the owner's flat prices), AND IT IS A
+    /// CONSTANT NOW BECAUSE IT WAS TWENTY-ONE COPIES OF A LITERAL. Every scene
+    /// that raises an appeal approved the diamond for exactly `20 * 10**6`, so
+    /// the day the price moved all twenty-one answered "Allowance exceeded" --
+    /// a refusal from the MOCK, which reads like a broken fixture rather than
+    /// like a price that moved. One name, one place to move it next time.
+    uint256 constant APPEAL_DEPOSIT = 30_000_000;
+
     uint256 constant DEADLINE = 7;
+
+    /// OVERTURN_STRIKE_SPACING in ArbiterRegistryStorage: the least time
+    /// between two overturns that both count against one arbiter's mistake
+    /// streak (item 301, 17 October 2026). A human literal, never read back
+    /// out of the contract under measurement.
+    uint256 constant OVERTURN_STRIKE_SPACING = 7 days;
     string constant TERMS_HASH = "test terms";
     bytes32 constant DISPUTE_SALT = bytes32("hexseal-test-salt");
     uint256 constant ARBITER_BOND = 50 * 10**6; // must match ArbiterRegistryFacet.ARBITER_BOND
@@ -124,6 +184,63 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     bytes32 constant ARB_STORAGE_BASE = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
     uint256 constant SLOT_OVERTURNED_VERDICTS = 36;
     
+
+    /// ⚠️ ITS OWN FUNCTION SINCE 20 OCTOBER 2026, AND THE REASON IS THE STACK.
+    /// Written inline in `setUp`, this list pushed the frame ONE SLOT past what
+    /// via_ir can hold the moment it grew its twenty-second entry:
+    ///
+    ///   Error: Variable memPtr_112 is 1 too deep in the stack
+    ///
+    /// and the message names no file, which is the expensive half. `setUp` here
+    /// holds ten memory arrays and a dozen facet addresses at once; moving the
+    /// longest list into a frame of its own takes its pointer and its twenty-four
+    /// stores with it. The same remedy, for the same error, is recorded in
+    /// test/MoneyPathBase.sol, which splits its cut into stages.
+    function _arbiterSelectorsVault() private pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](24);
+        sels[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[2] = ArbiterVaultFacet.getArbiters.selector;
+        sels[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        sels[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[6] = ArbiterVaultFacet.fundVault.selector;
+        sels[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        sels[8] = ArbiterVaultFacet.getPendingVerdict.selector;
+        sels[9] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        sels[12] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[13] = ArbiterVaultFacet.getAppealVotes.selector;
+        sels[14] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
+        sels[15] = ArbiterVaultFacet.getPendingDAOAddress.selector;
+        sels[16] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[17] = ArbiterVaultFacet.getRefundableBounty.selector;
+        // The panel's pay and a settled appeal's ledger (17 September 2026).
+        sels[18] = ArbiterVaultFacet.getAppealShareOwed.selector;
+        sels[19] = ArbiterVaultFacet.getAppealLedger.selector;
+        // ⚠️ MOUNTED 20 OCTOBER 2026 BECAUSE TWO SCENES HAD NOWHERE TO LOOK.
+        // Since the owner's decisions of 18-20 October the toll on a settled
+        // appeal lands in `treasurySlice` on two of the three money roads --
+        // the whole deposit when nobody answered, and the quarter of the bond
+        // on an overturn -- and `treasurySlice` is an accounting slice INSIDE
+        // the diamond, so no balance anywhere moves when it grows. Without this
+        // getter the only honest thing those scenes could assert was "nobody
+        // else got it", which is satisfied by money that went nowhere at all
+        // and by money that was never taken.
+        sels[20] = ArbiterVaultFacet.getTreasurySlice.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026), AND THESE
+        // THREE ARE NOT OPTIONAL ON ANY RIG THAT OPENS A DISPUTE.
+        // `Agreement.raiseDispute` calls `holdDisputeFee` and will not open the
+        // dispute if the call fails, so an unmounted selector turns every
+        // disputed scene on this stand into "Diamond: function not found" --
+        // measured on 20 October 2026 as 874 such failures across the tree
+        // before the fixtures were taught the doors.
+        sels[21] = ArbiterVaultFacet.holdDisputeFee.selector;
+        sels[22] = ArbiterVaultFacet.settleDisputeFee.selector;
+        sels[23] = ArbiterVaultFacet.getHeldDisputeFee.selector;
+    }
+
     function setUp() public {
         owner = address(this);
         client = address(0x1);
@@ -201,7 +318,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         ownerSelectors[3] = OwnershipFacet.pendingOwner.selector;
 
         // ArbiterRegistryFacet selectors
-        bytes4[] memory arbiterSelectors = new bytes4[](21);
+        bytes4[] memory arbiterSelectors = new bytes4[](18);
         arbiterSelectors[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbiterSelectors[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbiterSelectors[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -219,32 +336,23 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         arbiterSelectors[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
         arbiterSelectors[15] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
         arbiterSelectors[16] = ArbiterRegistryFacet.resignAsArbiter.selector;
-        arbiterSelectors[17] = ArbiterRegistryFacet.raiseAppeal.selector;
-        arbiterSelectors[18] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        arbiterSelectors[19] = ArbiterRegistryFacet.resolveAppeal.selector;
-        arbiterSelectors[20] = ArbiterRegistryFacet.acceptDAOAddress.selector;
-        bytes4[] memory arbiterSelectorsVault = new bytes4[](20);
-        arbiterSelectorsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
-        arbiterSelectorsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
-        arbiterSelectorsVault[2] = ArbiterVaultFacet.getArbiters.selector;
-        arbiterSelectorsVault[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
-        arbiterSelectorsVault[4] = ArbiterVaultFacet.getClaimCommitment.selector;
-        arbiterSelectorsVault[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
-        arbiterSelectorsVault[6] = ArbiterVaultFacet.fundVault.selector;
-        arbiterSelectorsVault[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
-        arbiterSelectorsVault[8] = ArbiterVaultFacet.getPendingVerdict.selector;
-        arbiterSelectorsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
-        arbiterSelectorsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
-        arbiterSelectorsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
-        arbiterSelectorsVault[12] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
-        arbiterSelectorsVault[13] = ArbiterVaultFacet.getAppealVotes.selector;
-        arbiterSelectorsVault[14] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
-        arbiterSelectorsVault[15] = ArbiterVaultFacet.getPendingDAOAddress.selector;
-        arbiterSelectorsVault[16] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
-        arbiterSelectorsVault[17] = ArbiterVaultFacet.getRefundableBounty.selector;
-        // The panel's pay and a settled appeal's ledger (17 September 2026).
-        arbiterSelectorsVault[18] = ArbiterVaultFacet.getAppealShareOwed.selector;
-        arbiterSelectorsVault[19] = ArbiterVaultFacet.getAppealLedger.selector;
+        arbiterSelectors[17] = ArbiterRegistryFacet.acceptDAOAddress.selector;
+
+        // ⚠️ A GROUP OF ITS OWN SINCE 15 OCTOBER 2026, when the appeal became
+        // ArbiterAppealFacet. These selectors are the same four bytes they were;
+        // what changed is the address behind them, and a FacetCut element carries
+        // exactly ONE address.
+        bytes4[] memory arbiterSelectorsAppeal = new bytes4[](5);
+        arbiterSelectorsAppeal[0] = ArbiterAppealFacet.raiseAppeal.selector;
+        arbiterSelectorsAppeal[1] = ArbiterAppealFacet.voteToOverturn.selector;
+        arbiterSelectorsAppeal[2] = ArbiterAppealFacet.resolveAppeal.selector;
+        arbiterSelectorsAppeal[3] = ArbiterAppealFacet.summonAppealPanel.selector;
+        arbiterSelectorsAppeal[4] = ArbiterAppealFacet.getAppealSummons.selector;
+        // ── The lot (decision 177, 14 October 2026) ──
+        // The chain summons the appeal panel now, so every scene here that
+        // votes needs the door that calls it and the view `pullAppealLot`
+        // reads the seed height out of.
+        bytes4[] memory arbiterSelectorsVault = _arbiterSelectorsVault();
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -291,13 +399,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // about the clean streak in this file now ask the diamond for it.
         reputationSelectors[8] = ReputationFacet.getStreakStanding.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](9);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](10);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, registrySelectors);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet), IDiamondCut.FacetCutAction.Add, factorySelectors);
         cut[2] = IDiamondCut.FacetCut(address(diamondCutFacet), IDiamondCut.FacetCutAction.Add, cutSelectors);
         cut[3] = IDiamondCut.FacetCut(address(diamondLoupeFacet), IDiamondCut.FacetCutAction.Add, loupeSelectors);
         cut[4] = IDiamondCut.FacetCut(address(ownershipFacet), IDiamondCut.FacetCutAction.Add, ownerSelectors);
         cut[5] = IDiamondCut.FacetCut(address(arbiterRegistryFacet), IDiamondCut.FacetCutAction.Add, arbiterSelectors);
+        cut[9] = IDiamondCut.FacetCut(address(new ArbiterAppealFacet()), IDiamondCut.FacetCutAction.Add, arbiterSelectorsAppeal);
         cut[7] = IDiamondCut.FacetCut(
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
@@ -312,6 +421,18 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         FactoryFacet(address(diamond)).initFactory(address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer));
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
         _bondSeat(arbiter);
+
+        // ⚠️ THIS SUITE IS NOT ABOUT THE DEAL CEILING. It is the diamond's own
+        // suite -- routing, the loupe, ownership, the registry -- and one of
+        // its fuzz scenes deliberately sweeps the deal amount from $1 to
+        // $100,000 to show the factory does not care how big a number it is
+        // handed. The ceiling that landed on 12 October 2026 refuses anything
+        // over $500 at birth, so that sweep would measure the ceiling instead
+        // of the routing and hand back a counterexample naming the wrong
+        // thing. Narrowing the sweep to fit would be the worse fix: it would
+        // quietly shrink a range a scene was written to cover. The ceiling is
+        // measured in test/DealCap.t.sol.
+        DealCapOff.thisSuiteIsNotAboutTheCeiling(address(diamond));
     }
     
     
@@ -390,7 +511,20 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     // client, the LOSING EXECUTOR appeals (`raiseAppeal` admits only the losing
     // party, by `_msgSender()`), two of three vote to overturn, and
     // `resolveAppeal` flips `clientWins` to false and books the mistake.
+    /// ⚠️ IT OPENS BY MOVING THE CLOCK A WEEK SINCE 17 OCTOBER 2026, and that
+    /// is the rule under measurement rather than a convenience.
+    /// `OVERTURN_STRIKE_SPACING` counts an overturn against an arbiter's mistake
+    /// streak at most once per seven days (item 301, "a strike as a weapon"), so
+    /// a helper that stages two overturns back to back stages ONE strike and the
+    /// scenes above would be measuring the throttle instead of the threshold
+    /// they were written for. Seven days is a human literal here, as everywhere
+    /// in these files: a helper that asked the contract for its own spacing
+    /// would stay green at any spacing, including none.
+    ///
+    /// The scenes that measure the THROTTLE itself keep their own clocks and do
+    /// not come through here — test/ArbiterOverturnStrikeSpacing.t.sol.
     function _disputeAndOverturn(address cli, address exec, address arbiterAddr) internal returns (address agreementAddr) {
+        vm.warp(block.timestamp + OVERTURN_STRIKE_SPACING);
         (address a2, address a3, address a4) = _ensureAppealPanel();
         require(
             arbiterAddr != a2 && arbiterAddr != a3 && arbiterAddr != a4,
@@ -398,12 +532,12 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
         require(
             exec != a2 && exec != a3 && exec != a4 && cli != a2 && cli != a3 && cli != a4,
-            "a panel seat is a party to this deal - voteOnAppeal would refuse it"
+            "a panel seat is a party to this deal - voteToOverturn would refuse it"
         );
 
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiterAddr, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -425,13 +559,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // The losing side pays for the appeal it is about to win.
         _bondSeat(exec);
         vm.prank(exec);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agreementAddr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agreementAddr);
+        pullAppealLot(address(diamond), agreementAddr);
         // The seats open an hour after the appeal (24 September 2026).
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1);
         _voteOverturn(agreementAddr, a2, a3, a4);
-        // 2-1 is a formed panel and not a tie, so it settles without waiting
-        // out the review window.
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agreementAddr);
+        // Three votes are the bar, so it settles without waiting out the
+        // review window: nothing that could still arrive would change it.
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agreementAddr);
     }
 
     // Fresh deploy -> fund -> activate -> dispute -> claim -> submitVerdict cycle, stopping
@@ -441,7 +576,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     function _disputeToVerdict(address cli, address exc, bool clientWins) internal returns (address agreementAddr) {
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exc, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -488,7 +623,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     // to the shared `client` constant; fresh addresses need minting by the caller first).
     function _completeDeal(address cli, address exc) internal returns (address agreementAddr) {
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exc, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -511,12 +646,17 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     // the other role and gets freshly minted USDC. `baseAddr` seeds the counterparty address
     // range so parallel calls in different tests never collide.
     //
-    // NOTE: Under Mechanism 1 (Reputation gate), each counterparty's *first* deal doesn't
-    // count toward `party`'s cleanStreak (counterparty starts at 0 XP, so the client-XP
-    // check fails). Without a warm-up, 1 in every 3 deals silently stops counting, and
-    // by the time XP crosses targetXP, the streak is well behind what callers expect.
-    // A one-deal warm-up per counterparty (pushing its XP past MIN_COUNTERPARTY_XP)
-    // restores the invariant: every counted deal moves the streak.
+    // NOTE: Under Mechanism 1 (Reputation gate), a counterparty's first deals don't
+    // count toward `party`'s cleanStreak -- the counterparty starts with no closed
+    // deals of its own, so the counterparty check fails. Without a warm-up, deals in
+    // this loop silently stop counting, and by the time XP crosses targetXP the streak
+    // is well behind what callers expect.
+    //
+    // ⚠️ THE WARM-UP IS TWO DEALS SINCE 16 OCTOBER 2026, NOT ONE. The gate asks for
+    // MIN_COUNTERPARTY_WINS = 2 COUNTED DEALS instead of 50 XP; one deal used to pay a
+    // flat 100 XP and clear the old bar twice over, and one deal now clears half of the
+    // new one. Two warm-up deals per counterparty restore the invariant: every counted
+    // deal moves the streak.
     function _growXP(address party, bool asExecutor, uint256 targetXP, uint256 baseAddr) internal {
         usdc.mint(party, 1_000_000 * 10**6);
         uint256 dealIndex = 0;
@@ -525,13 +665,17 @@ contract DiamondTest is Test, HandoverReadinessSeed {
             address counterparty = address(uint160(baseAddr + dealIndex / 3));
             if (counterparty != lastCounterparty) {
                 usdc.mint(counterparty, 1_000_000 * 10**6);
-                // Warm up: Mechanism 1 requires a deal's client to already have
-                // >= MIN_COUNTERPARTY_XP (50) for it to count toward cleanStreak.
-                // A single throwaway deal pushes counterparty past that threshold
-                // before it's used for real below — otherwise 1 in every 3 deals
-                // in this loop would silently not count toward party's streak.
+                // Warm up: Mechanism 1 requires a deal's client to have already closed
+                // >= MIN_COUNTERPARTY_WINS (2) counted deals for this one to count
+                // toward cleanStreak. Two throwaway deals push counterparty over that
+                // line before it is used for real below — otherwise deals in this loop
+                // would silently not count toward party's streak.
+                //
+                // AMOUNT is well above MIN_WIN_AMOUNT and the pair cap is 3, so both
+                // throwaway deals are counted wins.
                 address throwaway = address(uint160(uint256(keccak256(abi.encodePacked("growxp-warmup", counterparty)))));
                 usdc.mint(throwaway, 1_000_000 * 10**6);
+                _completeDeal(counterparty, throwaway);
                 _completeDeal(counterparty, throwaway);
                 lastCounterparty = counterparty;
             }
@@ -544,15 +688,21 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         }
     }
 
-    // Gives `cli` a single throwaway completed deal so its own XP crosses
-    // MIN_COUNTERPARTY_XP (50) before it's used as the client in a deal whose
-    // cleanStreak effect on the executor is under test. `cli` itself starts at
-    // 0 XP in every fresh test, and Mechanism 1 requires prior standing, not
+    // Gives `cli` two throwaway completed deals so its own counted-deal ledger
+    // reaches MIN_COUNTERPARTY_WINS (2) before it's used as the client in a deal
+    // whose cleanStreak effect on the executor is under test. `cli` itself starts
+    // at zero in every fresh test, and Mechanism 1 requires PRIOR standing, not
     // standing gained from the deal being measured. Caller must ensure `cli`
     // already holds USDC (setUp's shared `client` does; fresh addresses need
     // `usdc.mint(cli, ...)` first).
+    //
+    // ⚠️ TWO DEALS, NOT ONE, SINCE 16 OCTOBER 2026. The gate was `xp >= 50` and a
+    // single AMOUNT-sized deal paid a flat 100 XP, so one deal was twice enough;
+    // the gate counts CLOSED DEALS now and one deal is half enough. The pair cap
+    // is 3, so both of these count as wins for `cli`.
     function _warmUpClientXP(address cli) internal {
         address throwaway = address(uint160(uint256(keccak256(abi.encodePacked("warmup", cli)))));
+        _completeDeal(cli, throwaway);
         _completeDeal(cli, throwaway);
     }
 
@@ -675,7 +825,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployAgreement() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         
         vm.prank(address(diamond));
         address agreement = FactoryFacet(address(diamond)).deployAgreement(
@@ -690,7 +840,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployRevertIfZeroAddress() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.FactoryZeroAddress.selector);
         FactoryFacet(address(diamond)).deployAgreement(
@@ -700,7 +850,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployRevertIfClientEqualsExecutor() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.ClientEqualsExecutor.selector);
         FactoryFacet(address(diamond)).deployAgreement(
@@ -710,7 +860,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployRevertIfZeroAmount() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.ZeroAmount.selector);
         FactoryFacet(address(diamond)).deployAgreement(
@@ -720,7 +870,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployRevertIfZeroDeadline() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.ZeroDeadline.selector);
         FactoryFacet(address(diamond)).deployAgreement(
@@ -730,7 +880,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployRevertIfInvalidRegion() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.InvalidRegion.selector);
         FactoryFacet(address(diamond)).deployAgreement(
@@ -740,14 +890,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFactoryDeployRevertIfActiveDealExists() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
         );
         
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.ActiveDealExists.selector);
         FactoryFacet(address(diamond)).deployAgreement(
@@ -776,7 +926,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFullLifecycle() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -826,7 +976,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
 
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, freshExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -837,6 +987,9 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         Agreement(agreementAddr).fund();
         vm.prank(freshExecutor);
         Agreement(agreementAddr).activate();
+        // He has a balance already -- the completed deal above paid him -- but
+        // no allowance to the diamond, which is the half the error named.
+        _fundTheDisputeDoorFor(freshExecutor);
         vm.prank(freshExecutor);
         Agreement(agreementAddr).raiseDispute();
         _claimDispute(agreementAddr);
@@ -852,7 +1005,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
 
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, freshExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -878,7 +1031,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
 
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, freshExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -938,7 +1091,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address disputeClient = address(uint160(32900));
         usdc.mint(disputeClient, 1_000_000 * 10**6);
         vm.prank(disputeClient);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address disputedAgreement = FactoryFacet(address(diamond)).deployAgreement(
             disputeClient, bigExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -976,23 +1129,42 @@ contract DiamondTest is Test, HandoverReadinessSeed {
             "and the streak starts again from one, as it always did"
         );
     }
-    function testCleanStreakDoesNotIncrementWhenClientBelowMinCounterpartyXP() public {
+    // ⚠️ BOTH NAMES SAID `MinCounterpartyXP` UNTIL 16 OCTOBER 2026, and the
+    // name of a test is a record like any other: the bar stopped being an XP
+    // score and became a count of closed deals (MIN_COUNTERPARTY_WINS). The
+    // scenes themselves are unchanged in what they measure -- below the bar
+    // buys nothing, on the bar buys a tick -- which is why only the names and
+    // the rig's precondition moved.
+    function testCleanStreakDoesNotIncrementWhenClientBelowMinCounterpartyWins() public {
         address freshClient = address(uint160(35001));
         address freshExecutor = address(uint160(35002));
         usdc.mint(freshClient, 1_000_000 * 10**6);
         _completeDeal(freshClient, freshExecutor);
-        assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 0);
+        assertEq(
+            ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 0,
+            "a client who had closed nothing before this deal advanced the executor's streak"
+        );
     }
 
-    function testCleanStreakIncrementsOnceClientAboveMinCounterpartyXP() public {
+    function testCleanStreakIncrementsOnceClientAboveMinCounterpartyWins() public {
         address warmClient = address(uint160(35003));
         address freshExecutor = address(uint160(35004));
         usdc.mint(warmClient, 1_000_000 * 10**6);
         _warmUpClientXP(warmClient);
-        assertGe(ReputationFacet(address(diamond)).getXP(warmClient), 50);
+        // The rig's precondition, and it is about the LEDGER rather than the
+        // points: `countedWins` has no getter, but a counted win pays a flat
+        // WIN_XP of 100 each time, so XP at or above 200 cannot have come from
+        // fewer than the two deals the warm-up is supposed to have settled.
+        assertGe(
+            ReputationFacet(address(diamond)).getXP(warmClient), 200,
+            "rig: the two warm-up deals did not both settle as counted wins"
+        );
 
         _completeDeal(warmClient, freshExecutor);
-        assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
+        assertEq(
+            ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1,
+            "a client who had closed two deals of his own bought no tick"
+        );
     }
 
     /// The third of the Phase-2 scenes, inverted the same way and for the same
@@ -1027,10 +1199,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         // And the person is told so, by name, instead of being left to work it
         // out. The running total is the half a screen can read after a reload.
-        (, uint256 stalled, uint256 minCounterpartyXP) =
+        (, uint256 stalled, uint256 minCounterpartyWins) =
             ReputationFacet(address(diamond)).getStreakStanding(bigExecutor);
         assertEq(stalled, 1, "the deal that bought no streak is counted and visible");
-        assertEq(minCounterpartyXP, 50, "and the rule that did it is readable from the same call");
+        // A human literal, not read out of the facet: the third return became a
+        // count of closed deals on 16 October 2026, and a scene that asked the
+        // chain for its own bar and then checked the bar against that answer
+        // would agree with any value.
+        assertEq(minCounterpartyWins, 2, "and the rule that did it is readable from the same call");
     }
 
     // ============ ARBITER DEMOTION ============
@@ -1077,7 +1253,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address disputeClient = address(uint160(40900));
         usdc.mint(disputeClient, 1_000_000 * 10**6);
         vm.prank(disputeClient);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address disputedAgreement = FactoryFacet(address(diamond)).deployAgreement(
             disputeClient, candidate, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1109,6 +1285,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertGe(ReputationFacet(address(diamond)).getXP(candidate), 3000);
         assertGe(ReputationFacet(address(diamond)).getCleanStreak(candidate), 10);
 
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1149,6 +1334,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertGe(ReputationFacet(address(diamond)).getXP(candidate), 3000);
         assertGe(ReputationFacet(address(diamond)).getCleanStreak(candidate), 10);
 
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1270,6 +1464,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _growXP(candidate, true, 3000, 45500);
 
         uint256 balanceBefore = usdc.balanceOf(candidate);
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1285,6 +1488,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address candidate = address(uint160(45100));
         _growXP(candidate, true, 3000, 45600);
 
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1312,6 +1524,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45200));
         _growXP(candidate, true, 3000, 45700);
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         // He claims three disputes below, and each claim asks him for that
@@ -1364,6 +1585,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45300));
         _growXP(candidate, true, 3000, 45400);
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1400,7 +1630,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address cli = address(uint160(46000));
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, address(uint160(46001)), arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1423,7 +1653,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address cli = address(uint160(46100));
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, address(uint160(46101)), arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1450,7 +1680,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address cli = address(uint160(46200));
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, address(uint160(46201)), arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1488,13 +1718,22 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _growXP(candidate, true, 3000, 46700);
         vm.prank(candidate);
         usdc.approve(address(diamond), ARBITER_BOND);
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
         address cli = address(uint160(46800));
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, address(uint160(46801)), candidate, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1521,13 +1760,22 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _growXP(candidate, true, 3000, 47000);
         vm.prank(candidate);
         usdc.approve(address(diamond), ARBITER_BOND);
+        // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
+        // 2026). This suite EARNS its streak with real released deals, which
+        // is why it needs a warp and not a seeded field: the run is genuine and
+        // every tick of it landed in this same block, so
+        // `MIN_STREAK_SPAN_TO_REGISTER` is the one thing still missing. The
+        // deals above are closed by the time this runs, so moving the clock
+        // forward here settles nothing else. The rule itself is measured in
+        // test/CleanStreakCostsSixDollars.t.sol.
+        vm.warp(block.timestamp + 17 days);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
         address cli = address(uint160(47100));
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, address(uint160(47101)), candidate, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1575,7 +1823,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         address cli2 = address(uint160(44300));
         usdc.mint(cli2, 1_000_000 * 10**6);
         vm.prank(cli2);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         address exec2 = address(uint160(44400));
         vm.prank(address(diamond));
         address agreement2 = FactoryFacet(address(diamond)).deployAgreement(
@@ -1608,7 +1856,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
 
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, freshExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1632,7 +1880,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
 
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, freshExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1658,7 +1906,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(freshExecutor), 1);
 
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, freshExecutor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1689,7 +1937,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     function _disputeAndArbiterTimeout(address cli, address exec, address arbiterAddr, uint256 warpTo) internal {
         usdc.mint(cli, 1_000_000 * 10**6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiterAddr, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1753,7 +2001,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRevertIfNotClientFund() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1768,7 +2016,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfAlreadyFunded() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1786,7 +2034,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfNotExecutorActivate() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1804,7 +2052,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfActivationWindowPassed() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1824,7 +2072,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfNotActiveMarkDone() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1842,7 +2090,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfAlreadyMarkedDone() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1865,7 +2113,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfNotMarkedDoneRelease() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1886,7 +2134,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfDisputedRelease() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1912,7 +2160,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementAutoApprove() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1939,7 +2187,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementDisputeAndResolve() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1969,7 +2217,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementDisputeResolveExecutorWins() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -1983,11 +2231,16 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(executor);
         Agreement(agreementAddr).activate();
 
+        _fundTheDisputeDoorFor(executor);
         vm.prank(executor);
         Agreement(agreementAddr).raiseDispute();
 
         _claimDispute(agreementAddr);
 
+        // Read AFTER the door charged him, so the pot below is the pot and the
+        // charge is not inside this subtraction. The escrow pays the winner the
+        // WHOLE pot since the levy moved to the door on 20 October 2026, which
+        // is why the right-hand side is a bare AMOUNT and not AMOUNT less a fee.
         uint256 executorBalanceBefore = usdc.balanceOf(executor);
         _resolveDispute(agreementAddr, false);
 
@@ -1997,7 +2250,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     // Winner of a resolved dispute earns XP; loser earns none (baseline, no prior XP).
     function testAutoAwardXPWinnerOnlyOnResolved() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2027,7 +2280,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     function testAutoAwardXPPenalizesDisputeLoser() public {
         // Deal 1: honest completion — both sides earn XP (100 win + 10 volume = 110).
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address deal1 = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2048,7 +2301,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         // Deal 2: same pair, disputed — client wins, executor loses.
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address deal2 = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2070,7 +2323,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRevertIfNotArbiterResolve() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2096,7 +2349,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementRevertIfNoArbiterSet() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, address(0), AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2120,7 +2373,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementActivationTimeout() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2143,7 +2396,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementDeadlineTimeout() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, 1, TERMS_HASH, 0
@@ -2169,7 +2422,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testAgreementArbiterTimeout() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2209,14 +2462,36 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // "an arbiter took it on and did not finish" — where the client still gets
         // everything — is held by
         // testTimeoutAfterClaimStillRefundsTheClient in the DisputeSettlement suite.
-        assertEq(usdc.balanceOf(client),   clientBalanceBefore   + AMOUNT / 2, "half back to the client");
+        // ⚠️ AND THE CLIENT'S OWN DOOR CHARGE COMES HOME WITH HIS HALF,
+        // 21 OCTOBER 2026. The levy is taken when the DISPUTE is opened since
+        // 20 October and returned when no verdict was delivered -- and nobody
+        // even took this dispute on. `clientBalanceBefore` is read after the
+        // door charged him, so the refund lands in this subtraction.
+        //
+        // Worked out by hand, retired figure first: nothing was charged at the
+        // door under the retired rule, so his half was all he received,
+        //     100_000_000 / 2 = 50_000_000
+        // and the line read `clientBalanceBefore + AMOUNT / 2`. With the charge
+        // coming home, where the floor decides because 3% of a $100 pot is
+        // three dollars:
+        //     the charge       max( 10_000_000, 3_000_000 ) = 10_000_000
+        //     his half         100_000_000 / 2             = 50_000_000
+        //     what he receives  50_000_000 + 10_000_000     = 60_000_000
+        //
+        // ⚠️ THE TWO ARE NAMED SEPARATELY rather than summed to sixty, because
+        // the half is the pot's split and the ten is the door's refund: one
+        // literal would stay green if the split shrank by what the refund grew.
+        //
+        // ⚠️ THE EXECUTOR'S LINE IS THE CONTROL AND IT DOES NOT MOVE: he did
+        // not open this dispute, so nothing comes home to him.
+        assertEq(usdc.balanceOf(client),   clientBalanceBefore   + AMOUNT / 2 + DISPUTE_DOOR_CHARGE, "half back to the client, and his own door charge home with it");
         assertEq(usdc.balanceOf(executor), executorBalanceBefore + AMOUNT / 2, "half to the executor");
         assertEq(usdc.balanceOf(agreementAddr), 0, "the agreement must be emptied");
     }
     
     function testAgreementSoulbound() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2243,8 +2518,11 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         uint256 fee = (uint256(amount) * 500) / 10_000;
         if (fee < 1_000_000) fee = 1_000_000;
 
+        // ⚠️ PLUS THE DISPUTE DOOR CHARGE SINCE 20 OCTOBER 2026, for the same
+        // reason as the fixed approvals elsewhere in this file: `raiseDispute`
+        // pulls it through the diamond. See DISPUTE_DOOR_CHARGE.
         vm.prank(client);
-        usdc.approve(address(diamond), fee);
+        usdc.approve(address(diamond), fee + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, amount, deadline, TERMS_HASH, 0
@@ -2257,7 +2535,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     
     function testFuzzAgreementStatus(uint64 timeJump) public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2338,7 +2616,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterClaimRevertIfCommitTooEarly() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2362,7 +2640,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterClaimRevertIfCommitmentExpired() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2376,7 +2654,16 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).commitDisputeClaim(commitment);
 
-        vm.roll(block.number + 51); // past COMMIT_MAX_BLOCKS (50)
+        // ⚠️ THE WINDOW IS TIME SINCE 28 OCTOBER 2026, so this scene warps
+        // where it used to roll. Fifty-one blocks expire nothing any more —
+        // that is the whole of the fix: fifty blocks were "~100s on Base" at
+        // two seconds a block and became ten seconds when Base Sepolia went to
+        // 0.2 s. One block of height is still needed, because the LOWER bound
+        // stayed in blocks. The other side of it — that blocks alone no longer
+        // shut this door — is held by
+        // test/TheClaimWindowIsTimeNotBlocks.t.sol.
+        vm.roll(block.number + 1);
+        vm.warp(block.timestamp + 101); // past CLAIM_COMMIT_WINDOW (100 seconds)
 
         vm.prank(arbiter);
         vm.expectRevert(ArbiterRegistryFacet.CommitmentExpired.selector);
@@ -2387,7 +2674,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterClaimRevertIfNotDisputed() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2411,7 +2698,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterClaimRevertIfAlreadyClaimed() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2441,7 +2728,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterReleaseDisputeClaim() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2466,7 +2753,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterOwnerCanReleaseClaim() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2485,7 +2772,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterDealsHistoryTracked() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2506,7 +2793,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRaiseDisputeByExecutor() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2515,7 +2802,9 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(client); Agreement(agreementAddr).fund();
         vm.prank(executor); Agreement(agreementAddr).activate();
 
-        // The executor can raise a dispute too
+        // The executor can raise a dispute too -- and he pays the door charge,
+        // because the door pulls from whoever opens it.
+        _fundTheDisputeDoorFor(executor);
         vm.prank(executor);
         Agreement(agreementAddr).raiseDispute();
 
@@ -2524,7 +2813,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRevertIfAlreadyDisputed() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2541,7 +2830,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRaiseDisputeAfterMarkDone() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2560,7 +2849,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRaiseDisputeRevertAfterDeadline() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, 1, TERMS_HASH, 0
@@ -2578,7 +2867,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementReleaseRevertIfWindowPassed() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2597,7 +2886,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementAutoApproveRevertIfWindowNotPassed() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2615,7 +2904,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementAutoApproveByAnyone() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2637,7 +2926,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementActivationTimeoutTooEarly() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2655,7 +2944,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementDeadlineTimeoutTooEarly() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, 7, TERMS_HASH, 0
@@ -2674,7 +2963,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementArbiterTimeoutTooEarly() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2694,7 +2983,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testSubmitVerdict_RevertsAfterDisputeWindow() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2720,7 +3009,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testTriggerArbiterTimeout_RevertsIfVerdictAlreadySubmitted() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2755,7 +3044,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementMarkDoneRevertAfterDeadline() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, 1, TERMS_HASH, 0 // deadline = 1 day
@@ -2773,7 +3062,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testAgreementRevertIfAlreadyResolved() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2805,7 +3094,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterClaimClearedAfterResolve() public {
         vm.prank(client);
-        usdc.approve(address(diamond), 10 * 10**6);
+        usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 0
@@ -2829,13 +3118,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
 
         uint256 diamondBalBefore = usdc.balanceOf(address(diamond));
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
-        assertEq(usdc.balanceOf(address(diamond)), diamondBalBefore + 20 * 10**6);
+        assertEq(usdc.balanceOf(address(diamond)), diamondBalBefore + APPEAL_DEPOSIT);
 
         // Frozen — finalizeVerdict can't proceed until the appeal resolves.
         vm.warp(block.timestamp + 72 hours + 1);
@@ -2849,11 +3139,11 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(client, 100 * 10**6);
         vm.prank(client);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
 
         vm.prank(client); // client already won — not the losing party
         vm.expectRevert(ArbiterRegistryFacet.NotLosingParty.selector);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
     }
 
     function testRaiseAppeal_RevertsIfAlreadyAppealed() public {
@@ -2862,14 +3152,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 40 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT * 2);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(executor);
         vm.expectRevert(ArbiterRegistryFacet.AlreadyAppealed.selector);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
     }
 
     function testRaiseAppeal_RevertsAfterWindowCloses() public {
@@ -2878,12 +3169,12 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
 
         vm.warp(block.timestamp + 72 hours + 1);
         vm.prank(executor);
         vm.expectRevert(ArbiterRegistryFacet.AppealWindowClosed.selector);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
     }
 
     /// ⚠️ THE DOOR STOPPED COUNTING ON 23 SEPTEMBER 2026, so this scene asks
@@ -2902,10 +3193,24 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
 
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+
+        // ⚠️ AND THE LOT REFUSES TO BE PULLED, WHICH IS THE SAME LESSON ONE
+        // DOOR LATER (the lot, 14 October 2026). The corps is the judge alone,
+        // so no draw can reach the bar of three: the chain says so by name,
+        // with both numbers, instead of writing down a panel that could decide
+        // nothing. What this scene is about is unchanged — the APPEAL is let
+        // in, and the deposit comes home at `resolveAppeal`.
+        (, , , uint256 seedBlock, ) =
+            ArbiterAppealFacet(address(diamond)).getAppealSummons(agr);
+        vm.roll(seedBlock + 1);
+        vm.expectRevert(abi.encodeWithSelector(
+            ArbiterRegistryFacet.AppealPanelCannotAssemble.selector, 1, 3
+        ));
+        ArbiterAppealFacet(address(diamond)).summonAppealPanel(agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         assertTrue(
@@ -2967,11 +3272,11 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
 
         vm.prank(executor);
         vm.expectRevert(ArbiterRegistryFacet.VerdictFrozenError.selector);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
 
         ArbiterRegistryStorage.PendingVerdict memory v = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
         assertFalse(v.appealed);
@@ -2983,9 +3288,10 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         ArbiterRegistryStorage.PendingVerdict memory before = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
@@ -2995,7 +3301,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.expectEmit(true, true, false, true, address(diamond));
         emit ArbiterRegistryFacet.AppealVoteCast(agr, a2, true);
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
         // Successful vote incremented the right tally (overturn) and left the other untouched.
         ArbiterRegistryStorage.PendingVerdict memory afterVote = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
@@ -3004,7 +3310,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         vm.prank(a2);
         vm.expectRevert(ArbiterRegistryFacet.AlreadyVoted.selector);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
         // Repeat-vote revert must not have double-counted.
         ArbiterRegistryStorage.PendingVerdict memory afterRevert = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
@@ -3012,36 +3318,41 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(afterRevert.votesUphold, 0);
     }
 
-    function testVoteOnAppeal_DifferentArbitersCanEachVoteOnce() public {
+    function testVoteToOverturn_DifferentArbitersCanEachVoteOnce() public {
         (address a2, address a3,) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.expectEmit(true, true, false, true, address(diamond));
         emit ArbiterRegistryFacet.AppealVoteCast(agr, a2, true);
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // a2 votes to overturn
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr); // a2 votes to overturn
 
+        // ⚠️ THE EVENT'S THIRD TOPIC IS A CONSTANT `true` SINCE DECISION 177
+        // (14 October 2026). It is kept rather than dropped because the
+        // subgraph indexes this event by its signature; what it no longer
+        // carries is a choice.
         vm.expectEmit(true, true, false, true, address(diamond));
-        emit ArbiterRegistryFacet.AppealVoteCast(agr, a3, false);
+        emit ArbiterRegistryFacet.AppealVoteCast(agr, a3, true);
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // a3 votes to uphold — different arbiter, no revert
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
-        // Both votes recorded distinctly in the tally.
+        // Both votes recorded, and `votesUphold` can never move again.
         ArbiterRegistryStorage.PendingVerdict memory v = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr);
-        assertEq(v.votesOverturn, 1);
-        assertEq(v.votesUphold, 1);
+        assertEq(v.votesOverturn, 2);
+        assertEq(v.votesUphold, 0);
 
         // a3 can't vote again either, but a2's earlier vote didn't block a3 in the first place.
         vm.prank(a3);
         vm.expectRevert(ArbiterRegistryFacet.AlreadyVoted.selector);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
     }
 
     function testVoteOnAppeal_RulingArbiterCannotVoteOnOwnVerdict() public {
@@ -3050,14 +3361,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(arbiter); // the one who ruled
         vm.expectRevert(ArbiterRegistryFacet.CannotVoteOnOwnVerdict.selector);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
     }
 
     function testVoteOnAppeal_RevertsWithoutAppeal() public {
@@ -3066,7 +3378,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         vm.prank(address(0x30));
         vm.expectRevert(ArbiterRegistryFacet.NoAppeal.selector);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
     }
 
     function testVoteOnAppeal_RevertsAfterWindowCloses() public {
@@ -3075,16 +3387,17 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.warp(block.timestamp + 4 days + 1); // APPEAL_REVIEW_WINDOW
 
         vm.prank(a2);
         vm.expectRevert(ArbiterRegistryFacet.AppealWindowClosed.selector);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
     }
 
     function testResolveAppeal_OverturnFlipsVerdictAndPenalizesArbiter() public {
@@ -3093,30 +3406,31 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         uint256 executorBalBefore = usdc.balanceOf(executor);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr); // overturn
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr); // overturn
         vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
         // Deposit refunded to the appellant (executor).
-        assertEq(usdc.balanceOf(executor), executorBalBefore - 20 * 10**6 + 20 * 10**6);
+        assertEq(usdc.balanceOf(executor), executorBalBefore - APPEAL_DEPOSIT + APPEAL_DEPOSIT);
         // Ruling arbiter penalized exactly like today's overturnVerdict.
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 1);
 
         // Verdict flipped — finalizing now pays the executor, not the client.
         vm.warp(block.timestamp + 72 hours + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
-        assertEq(usdc.balanceOf(executor), executorBalBefore - 20 * 10**6 + 20 * 10**6 + AMOUNT);
+        assertEq(usdc.balanceOf(executor), executorBalBefore - APPEAL_DEPOSIT + APPEAL_DEPOSIT + AMOUNT);
     }
 
     // ============================================================
@@ -3150,9 +3464,10 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         uint256 balAfterPaying = usdc.balanceOf(executor);
 
@@ -3161,10 +3476,10 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // The token refuses this exact refund, and only it.
         vm.mockCall(
             address(usdc),
-            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(APPEAL_DEPOSIT)),
             abi.encode(false)
         );
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
         vm.clearMockedCalls();
 
         // The deposit did NOT reach his wallet — that is the premise, not the bug.
@@ -3187,9 +3502,10 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         uint256 balAfterPaying = usdc.balanceOf(executor);
 
@@ -3197,23 +3513,23 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         vm.mockCall(
             address(usdc),
-            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(APPEAL_DEPOSIT)),
             abi.encode(false)
         );
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
         vm.clearMockedCalls();
 
         // It landed in the claimable, whole.
         assertEq(
             ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
-            20 * 10**6,
+            APPEAL_DEPOSIT,
             "the undelivered deposit was written down nowhere"
         );
 
         // And the existing button really pays it out.
         vm.prank(executor);
         ArbiterVaultFacet(address(diamond)).withdrawDisputeBounty();
-        assertEq(usdc.balanceOf(executor), balAfterPaying + 20 * 10**6, "claim did not pay");
+        assertEq(usdc.balanceOf(executor), balAfterPaying + APPEAL_DEPOSIT, "claim did not pay");
         assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor), 0);
     }
 
@@ -3225,9 +3541,10 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         _voteOverturn(agr, a2, a3, a4);
@@ -3235,15 +3552,15 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // One byte back. Not `false`, not `true` — undecodable.
         vm.mockCall(
             address(usdc),
-            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+            abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(APPEAL_DEPOSIT)),
             hex"01"
         );
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
         vm.clearMockedCalls();
 
         assertEq(
             ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
-            20 * 10**6,
+            APPEAL_DEPOSIT,
             "a short reply was not treated as undelivered"
         );
     }
@@ -3256,9 +3573,10 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
         uint256 balAfterPaying = usdc.balanceOf(executor);
 
@@ -3278,7 +3596,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.etch(address(usdc), address(new ReentrantUSDC()).code);
         ReentrantUSDC(address(usdc)).arm(address(diamond), agr);
 
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
         // The knock must actually have happened, or this test locks nothing.
         assertTrue(ReentrantUSDC(address(usdc)).fired(), "the reentrant knock never fired");
@@ -3287,7 +3605,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
             "a reentrant resolveAppeal was SERVED: state writes moved below the transfer"
         );
         // Paid once, not twice.
-        assertEq(usdc.balanceOf(executor), balAfterPaying + 20 * 10**6, "deposit paid twice");
+        assertEq(usdc.balanceOf(executor), balAfterPaying + APPEAL_DEPOSIT, "deposit paid twice");
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter),
             1,
@@ -3313,19 +3631,20 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         for (uint256 i = 0; i < 2; i++) {
             address agr = _disputeToVerdict(client, executor, true);
             vm.prank(executor);
-            usdc.approve(address(diamond), 20 * 10**6);
+            usdc.approve(address(diamond), APPEAL_DEPOSIT);
             vm.prank(executor);
-            ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+            ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+            pullAppealLot(address(diamond), agr);
             vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
             _voteOverturn(agr, a2, a3, a4);
 
             vm.mockCall(
                 address(usdc),
-                abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(20 * 10**6)),
+                abi.encodeWithSelector(bytes4(0xa9059cbb), executor, uint256(APPEAL_DEPOSIT)),
                 abi.encode(false)
             );
-            ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+            ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
             vm.clearMockedCalls();
 
             // ⚠️ The won appeal was refunded out of the ruling arbiter's bond
@@ -3336,26 +3655,41 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
             if (i == 0) {
                 firstPot = ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor);
-                assertEq(firstPot, 20 * 10**6, "first deposit did not land in the pot");
+                assertEq(firstPot, APPEAL_DEPOSIT, "first deposit did not land in the pot");
             }
         }
 
         // Both are there. `+=`, not `=`.
+        // ⚠️ TWO DEPOSITS OF THIRTY AND NOT OF TWENTY, 21 OCTOBER 2026. The
+        // literal read `40 * 10**6` -- two of the retired $20 price -- and the
+        // owner put the price at a flat $30 on the 20th. Written as the
+        // constant times two rather than as 60_000_000, so the day the price
+        // moves again this line moves with it and keeps saying what it means:
+        //     the price           30_000_000  (APPEAL_DEPOSIT)
+        //     two of them         30_000_000 x 2 = 60_000_000
+        // The retired pair reproduces the same way: 20_000_000 x 2 = 40_000_000.
+        //
+        // The claim is about `+=` against `=`, so the figure has to be the SUM
+        // of two and not a third literal: with `=` the pot would hold one
+        // price, 30_000_000, which is exactly half of this and would show up
+        // here rather than in a bound.
         assertEq(
             ArbiterVaultFacet(address(diamond)).getRefundableBounty(executor),
-            40 * 10**6,
+            APPEAL_DEPOSIT * 2,
             "the second undelivered deposit overwrote the first"
         );
     }
 
-    /// Two overturn, one uphold — the standard winning shape.
+    /// Three to overturn — the standard winning shape, and since decision 177
+    /// (14 October 2026) the smallest one there is: three is the bar and there
+    /// is no second direction to spend a seat on.
     function _voteOverturn(address agr, address a2, address a3, address a4) internal {
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
     }
 
     // ============================================================
@@ -3440,92 +3774,239 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         assertEq(
             ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).appealDeposit,
-            20 * 10**6,
+            APPEAL_DEPOSIT,
             "the record holds exactly what was taken from the person"
         );
     }
 
-    /// THE REFUND FOLLOWS THE RECORD, NOT THE CONSTANT. A person paid twenty, the
-    /// rule has changed since — SEVEN comes back, because that is what their own
-    /// record says, and exactly the difference stays on the diamond.
-    function test_TheRefundFollowsTheRecordAndNotTheConstant() public {
+    /// THE SPLIT FOLLOWS THE RECORD, NOT THE CONSTANT. A person paid twenty and
+    /// the rule has changed since, so SEVEN is what gets divided — that is what
+    /// their own record says.
+    ///
+    /// ⚠️ THIS SCENE WAS `test_TheRefundFollowsTheRecordAndNotTheConstant`,
+    /// then for two days it was the SPLIT that followed the record, and as of
+    /// 19 October 2026 the refund is back and the split is somebody else's
+    /// money. Both of the rules it was written under are abolished, and the
+    /// round trip is left visible on purpose:
+    ///
+    ///   abolished 17 October  — a refund on any branch at all;
+    ///   abolished 19 October  — "half the deposit crosses to the party who did
+    ///                            not appeal". A charge paid to the man you are
+    ///                            appealing against is a price for disagreeing;
+    ///                            what the half defended is defended instead by
+    ///                            the deposit coming home only on an appeal that
+    ///                            CARRIED.
+    ///
+    /// ⚠️ AND THE SCENE IS A STRONGER LOCK FOR IT, because the poke touches ONE
+    /// of the two records and the two roads out now follow DIFFERENT records.
+    /// `_setStoredAppealDeposit` rewrites `appealDeposit` and leaves `caseBonds`
+    /// alone, so this appeal carries a recorded deposit of SEVEN beside a
+    /// recorded bond of TWENTY — and the refund is sized by the first while the
+    /// panel's wage is sized by the second. A branch that read either price off
+    /// today's constant shows up here, and so does a branch that crossed the
+    /// two records.
+    ///
+    /// ⚠️ AND A THIRD RULE MOVED ON 19-20 OCTOBER 2026: the panel takes THREE
+    /// QUARTERS of its pocket and the last quarter is a TOLL, which on an
+    /// OVERTURN goes to the TREASURY. Not across — the other side of the deal
+    /// is the man who was WRONG on this road — and not to the arbiter bank,
+    /// which the corps must not be paid out of. So the figure in the client's
+    /// hand here is NOUGHT, and it used to be the 2 base units a division of
+    /// three could not split.
+    ///
+    ///   the refund, on the deposit's poked record of seven dollars:
+    ///     7_000_000                   to the appellant, whole, in cash
+    ///   the panel's wage, on the bond's own untouched record of twenty PLUS
+    ///   the ten dollar dispute fee the overturned judge forfeits
+    ///   (20 October 2026 -- the pocket is two sums now):
+    ///    20_000_000 + 10_000_000 = 30_000_000  the pocket
+    ///    30_000_000 * 3 / 4 = 22_500_000  three quarters, the panel's share
+    ///    22_500_000 / 3     =  7_500_000  to each of the three who answered
+    ///   the toll, one subtraction and not a second fraction:
+    ///    30_000_000 - 7_500_000 x 3 = 7_500_000  to the TREASURY
+    ///   and nothing at all to the other side of the deal
+    ///     and 7_500_000 + 7_500_000 x 3 = 30_000_000, the pocket exactly
+    function test_TheSplitFollowsTheRecordAndNotTheConstant() public {
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
-        uint256 balAfterPaying   = usdc.balanceOf(executor);
+        uint256 balAfterPaying     = usdc.balanceOf(executor);
         uint256 diamondAfterPaying = usdc.balanceOf(address(diamond));
+        uint256 sideAfterPaying    = usdc.balanceOf(client);
+        uint256 bankAfterPaying    = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 treasAfterPaying   = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
         _setStoredAppealDeposit(agr, 7 * 10**6);
+        // A control that the poke landed where it was aimed, and ONLY there.
+        // `getCaseBond` is not mounted on this file's rig, so the bond's own
+        // record is witnessed below by the 6_666_666 wage and the 2 that crosses
+        // — figures the poked seven cannot produce by any division of three.
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).appealDeposit, 7 * 10**6,
+            "setup: the poke did not reach appealDeposit, so this scene is measuring today's constant after all"
+        );
 
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
+        // ── The panel's wage, every figure off the BOND's record of twenty.
+        //    Nothing crosses on an overturn: the abolished half would have put
+        //    3_500_000 of the DEPOSIT here, and the toll that replaced it goes
+        //    to the treasury on this road.
         assertEq(
-            usdc.balanceOf(executor), balAfterPaying + 7 * 10**6,
-            "what came back is what the record says, not today's constant"
+            usdc.balanceOf(client) - sideAfterPaying, 0,
+            "something crossed to the other side on an OVERTURN -- either a half came back or the toll went the wrong way"
         );
         assertEq(
-            usdc.balanceOf(address(diamond)), diamondAfterPaying - 7 * 10**6,
-            "exactly as much left the diamond; it gave away nothing extra"
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice() - treasAfterPaying, 7_500_000,
+            "the quarter of the BOND did not reach the treasury -- a quarter of the poked DEPOSIT would be 1_750_000"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 7_500_000,
+            "the first man's wage is a third of the DEPOSIT's poked record, not three quarters of the bond's own over three"
+        );
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 7_500_000, "the second man's wage does not follow the pocket's record");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a4), 7_500_000, "the third man's wage does not follow the pocket's record");
+        assertEq(
+            uint256(7_500_000 + 7_500_000 * 3), uint256(30_000_000),
+            "arithmetic: the toll and the three wages are not the overturn pocket -- the bond plus the forfeited fee"
+        );
+        assertEq(uint256(20_000_000 + 10_000_000), uint256(30_000_000), "arithmetic: the pocket is not the bond plus the fee");
+
+        // ── The refund, off the deposit's poked record, and in cash.
+        assertEq(
+            usdc.balanceOf(executor) - balAfterPaying, 7 * 10**6,
+            "the refund followed today's constant or the bond's record instead of the deposit's own"
+        );
+
+        // ── And exactly that much left the diamond: the 7_000_000 refund, and
+        //    nothing else at all. The 22_500_000 of wages is still HERE, booked
+        //    and unpulled; so is the 7_500_000 toll, because `treasurySlice` is
+        //    an accounting slice inside the diamond and not a transfer out of
+        //    it. That is why the outflow is the refund alone and why the
+        //    treasury had to be asserted by its own getter above rather than by
+        //    this subtraction.
+        assertEq(
+            usdc.balanceOf(address(diamond)),
+            diamondAfterPaying - 7 * 10**6,
+            "the diamond gave away something besides the refund"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), bankAfterPaying,
+            "the bank took a cut of the deposit or of the bond"
         );
     }
 
-    /// AND THE FORFEIT TOO. A losing appellant loses exactly what is recorded.
-    /// Half without the other half is worth nothing — should these two branches
-    /// diverge, the diamond would start either overpaying or underpaying out of
-    /// somebody else's money.
+    /// AND ON THE ROAD NOBODY CARRIED. The appellant of an appeal that did not
+    /// carry gets back exactly what is recorded, too -- the same `_depositOf`
+    /// read on the other way out of `resolveAppeal`.
     ///
-    /// ⚠️ Since 17 September 2026 a lost appeal's deposit pays the panel, so
-    /// what follows the record is the panel's share: seven over three votes,
-    /// 2.333333 each, and the one base unit left over into the vault. Twenty
-    /// would have been 6.666666 and two units.
-    function test_TheForfeitFollowsTheRecordAndNotTheConstant() public {
+    /// ⚠️ REWRITTEN FOUR TIMES AND THE ADDRESSEE HAS BEEN EVERY ONE IT CAN BE.
+    /// This paragraph has said, in order: "a lost appeal's deposit pays the
+    /// panel, so what follows the record is the panel's share, seven over three
+    /// votes, 2.333333 each and one base unit over into the vault"
+    /// (17 September 2026); then decision 171's forfeit of the whole recorded
+    /// deposit INTO THE ARBITER BANK (14 October). The owner's decision of
+    /// 17 OCTOBER 2026 refused the bank outright — a summoned panel that stays
+    /// away was burning the deposit of the man it was called to review into the
+    /// pot it is paid from — so the whole of it crossed to THE OTHER SIDE of
+    /// the deal instead. His decision of 19 OCTOBER 2026 refused that one too,
+    /// on a measurement rather than a preference: the other side of the deal is
+    /// an address a second key manufactures, so a man holding both ends had his
+    /// own deposit handed back and an appeal nobody read was FREE. It goes to
+    /// the TREASURY now, which has no private key behind it at any number of
+    /// addresses.
+    ///
+    /// ⚠️ SO THE SCENE IS RENAMED. It was
+    /// `test_TheCrossingFollowsTheRecordAndNotTheConstant`, and there is no
+    /// crossing on this road any more; what the name has always been FOR is the
+    /// second half, and that half never moved. Measured before renaming --
+    /// `grep -rln` over docs/ .claude/ src/ test/ script/ frontend/ found the
+    /// old name nowhere outside this file and the archived run logs.
+    ///
+    /// What did not change is the only thing this scene is for: the amount
+    /// follows `_depositOf` and not today's constant. It remains the cleaner of
+    /// the two locks over that read, because nobody answered and so nothing is
+    /// divided — there is no pocket to take the quarter of 19-20 October out
+    /// of, so the recorded seven is visible as ONE number. A branch reading the
+    /// constant instead of the record would bank 20 000 000 rather than
+    /// 7 000 000, a difference nobody can miss.
+    function test_TheUnreadDepositFollowsTheRecordAndNotTheConstant() public {
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         _setStoredAppealDeposit(agr, 7 * 10**6);
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 balBeforeSettling = usdc.balanceOf(executor);
+        uint256 sideBeforeSettling = usdc.balanceOf(client);
+        uint256 treasBeforeSettling = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        // ⚠️ NOBODY ANSWERS, AND THAT IS THE WHOLE-DEPOSIT ROAD. Three men were
+        // summoned and not one of them voted or replied, so there is nobody to
+        // pay a wage to and nothing is divided -- which is what makes the
+        // recorded seven visible as a single number rather than as three
+        // thirds. The chain still cannot tell "the panel read it and refused"
+        // from "nobody read it" (177 took that away for good), and it no longer
+        // needs to: neither buys the appellant anything, because the deposit is
+        // not a forfeit he can escape in any branch.
+        vm.warp(vm.getBlockTimestamp() + 4 days + 1);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + 1,
-            "the vault took the remainder of what was recorded, not of today's price"
+            usdc.balanceOf(executor), balBeforeSettling,
+            "the deposit was paid back to the appellant"
         );
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 2_333_333,
-            "the panel is paid out of what was recorded, not out of today's price"
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice() - treasBeforeSettling, 7 * 10**6,
+            "what the treasury took is today's constant instead of what the record says"
+        );
+        assertEq(
+            usdc.balanceOf(client) - sideBeforeSettling, 0,
+            "the deposit crossed to the other side of the deal, which is the road that closed on 19 October 2026"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            "the bank took the deposit of the man the panel it is paid from was called to review"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 0,
+            "a man who answered nothing was paid a wage"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 0,
+            "a man who answered nothing was paid a wage"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a4), 0,
+            "a man who answered nothing was paid a wage"
         );
     }
 
@@ -3539,25 +4020,59 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 balAfterPaying = usdc.balanceOf(executor);
         _setStoredAppealDeposit(agr, 0);
 
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
+        // ⚠️ THE FALLBACK IS TWENTY AND THE LIVE PRICE IS THIRTY, 21 OCTOBER
+        // 2026, AND THIS SCENE IS THE ONE THAT CARES. It expected
+        // `APPEAL_DEPOSIT` -- the price a modern appeal is sold at -- which was
+        // right only while the two numbers happened to be equal.
+        // `APPEAL_DEPOSIT_BEFORE_RECEIPT` in ArbiterAppealFacet is a separate
+        // constant on purpose: it is what an appeal cost before its price was
+        // written beside it, the flat 20 USDC in force until 26 August 2026,
+        // and the facet's own note says reading today's floor there instead
+        // would refund a man who paid twenty with thirty -- ten dollars of
+        // somebody else's money for a price he never paid.
+        //
+        // ⚠️ SO THE SCENE GOT STRONGER RATHER THAN WEAKER, which is worth
+        // saying: until 20 October the fallback and the floor were both twenty,
+        // so this assertion could not tell which of the two the facet read. The
+        // owner's flat prices separated them, and the measurement now
+        // distinguishes a constant from a quote. The run named the gap:
+        // 90000000 against my 100000000, exactly the ten dollars the facet's
+        // paragraph warns about.
+        //
+        // Worked out by hand. He paid the LIVE price to appeal and is refunded
+        // the OLD constant, because the record he is judged by holds nought:
+        //     he paid           30_000_000  (the live floor)
+        //     he is refunded    20_000_000  (the pre-reform constant)
+        //     he is out          10_000_000
+        // and "in full" in the message means in full OF WHAT THE RECORD SAYS,
+        // not of what he paid -- so the message is corrected too.
+        uint256 PRE_REFORM_DEPOSIT = 20_000_000;   // APPEAL_DEPOSIT_BEFORE_RECEIPT
         assertEq(
-            usdc.balanceOf(executor), balAfterPaying + 20 * 10**6,
-            "a pre-reform record is judged by the constant, and the person gets theirs in full"
+            usdc.balanceOf(executor), balAfterPaying + PRE_REFORM_DEPOSIT,
+            "a pre-reform record is judged by the pre-reform constant, not by today's price"
+        );
+        // And the two really are different numbers, so the line above is
+        // measuring the constant and not a quote that happens to match it.
+        assertTrue(
+            PRE_REFORM_DEPOSIT != APPEAL_DEPOSIT,
+            "the pre-reform constant and today's price are one number again -- this scene can no longer tell which of them the facet read"
         );
     }
 
@@ -3773,7 +4288,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // The card hands the pair out together, because either number alone
         // misleads: three clean verdicts read as a good judge, six overturns
         // alone would punish a long-serving one.
-        (, , , , , , , uint256 cleanVerdicts, uint256 overturned, , , , , )
+        (, , , , , , , uint256 cleanVerdicts, uint256 overturned, , , , , , , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(cleanVerdicts, 3, "the card's clean half");
         assertEq(overturned, 6, "the card's overturned half, standing right beside it");
@@ -3808,39 +4323,97 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
 
-    /// ⚠️ REWRITTEN ON PURPOSE, 17 September 2026 (the owner's appeal
-    /// economics). Until then this was `testResolveAppeal_UpholdForfeitsDepositNoPenalty`
-    /// and asserted "the vault grows by the whole $20". Now the deposit pays the
-    /// PANEL, equally, including the one arbiter who voted the other way — a
-    /// vote is paid for being cast, not for which side it took — and only the
-    /// remainder of the division goes to the vault. All three amounts literal.
-    function testResolveAppeal_UpholdPaysThePanelNoPenalty() public {
+    /// ⚠️ REWRITTEN FOUR TIMES, AND THE NUMBER HAS NOW BEEN EVERY VALUE IT CAN
+    /// BE. On 17 September 2026 it stopped asserting "the vault grows by the
+    /// whole $20", because the deposit became the PANEL'S pay on every outcome
+    /// with the remainder to the vault. On 14 October 2026 decision 171 took
+    /// the panel off the deposit, so the whole deposit was forfeited into the
+    /// bank again. Decision 177, the same night, removed the vote to uphold --
+    /// and with it the chain's ability to know that a panel had READ an appeal
+    /// and refused it -- so the deposit went home and the bank took nothing.
+    ///
+    /// The owner's decision of 17 OCTOBER 2026 is the fourth, and it refused the
+    /// third with arithmetic rather than principle: if a count short of the bar
+    /// sends the deposit home, the cheapest attack in the protocol is to file
+    /// and let the panel fall short, which at a corps of five or fewer needs no
+    /// luck at all. So the money lands in two places and neither is the bank or
+    /// the appellant -- and the scene was renamed, because
+    /// `...SendsTheDepositHome` is the one thing it no longer does.
+    ///
+    /// ⚠️ THE SPLIT BETWEEN THOSE TWO PLACES MOVED ON 19-20 OCTOBER 2026, and
+    /// the name did not have to move with it: it was half across and half to
+    /// the panel, then the whole of it to the panel for one day, and it is
+    /// THREE QUARTERS to the panel with a quarter across now. What the name
+    /// claims -- the whole deposit is spent and none of it comes home -- is
+    /// true under all three.
+    ///
+    /// The round trip is left visible rather than tidied: this number has been
+    /// all five things, and the next pass may well move it a sixth time.
+    function testResolveAppeal_AVerdictLeftStandingStillCostsTheWholeDeposit() public {
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 execBefore  = usdc.balanceOf(executor);
+        uint256 sideBefore  = usdc.balanceOf(client);
+        uint256 treasBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
+        // Two of the three vote and the third says nothing, which is the only
+        // shape a refused appeal has now. The window has to run out.
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
-        vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
+        vm.warp(vm.getBlockTimestamp() + 4 days + 1);
 
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
-        // $20 over three votes: 6.666666 each, two base units left for the vault.
-        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + 2, "only the remainder of the division");
-        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 6_666_666, "an upholding voter is paid");
-        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 6_666_666, "an upholding voter is paid");
-        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a4), 6_666_666, "and so is the one who voted to overturn");
+        // ⚠️ "HALF CROSSES TO THE OTHER SIDE" IS ABOLISHED (19 October 2026),
+        //    and the number below is the new fact in its place rather than a
+        //    loosened version of the old one. The argument: a charge on an
+        //    appellant that is paid to the party he is appealing AGAINST is a
+        //    price for disagreeing, and the thing the half was defending -- a
+        //    junk appeal must cost its author -- is defended by the refund rule
+        //    instead, since the deposit comes home only on an appeal that
+        //    CARRIED.
+        //
+        // ⚠️ AND "THE WHOLE DEPOSIT IS THE PANEL'S WAGE" WAS ABOLISHED THE NEXT
+        //    DAY (19-20 October 2026). The refund rule alone did not finish the
+        //    job: a junk appeal is answered by the attacker's OWN seat, so he
+        //    collected the pocket back as a WAGE and never needed a refund --
+        //    measured at NOUGHT with one seat. So the panel takes THREE
+        //    QUARTERS and the last quarter is a TOLL that leaves his circle. On
+        //    a verdict LEFT STANDING the toll crosses to the party who did not
+        //    appeal: he won the verdict and was held out of his money by an
+        //    appeal that did not carry.
+        //
+        // ── Derived by hand from the rule, not read back out of the call:
+        //      wage      = 30_000_000 * 3 / 4  = 22_500_000
+        //      each      = 22_500_000 / 2      = 11_250_000
+        //      the toll  = 30_000_000 - 11_250_000 x 2 = 7_500_000 -> ACROSS
+        //      and 7_500_000 + 11_250_000 x 2 = 30_000_000, the deposit
+        //
+        //    `execBefore` is read AFTER the deposit was taken, so "nothing came
+        //    back to him" is equality on his balance and not a difference.
+        assertEq(usdc.balanceOf(executor), execBefore, "the deposit came home to the appellant");
+        assertEq(usdc.balanceOf(client) - sideBefore, 7_500_000, "the toll that crossed to the party who did not appeal is not the quarter");
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "the bank took a cut of an appeal that carried nothing");
+        // ⚠️ AND THE TOLL WENT ACROSS AND NOT TO THE TREASURY, which is the
+        //    addressee the OUTCOME decides: on an overturn this same quarter is
+        //    the treasury's. A branch that sent both to one place is red here.
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), treasBefore, "the toll reached the treasury on a verdict that STOOD");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 11_250_000, "the first man who answered was not paid half of the deposit's three quarters");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 11_250_000, "the second man who answered was not paid half of the deposit's three quarters");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a4), 0, "the silent arbiter was paid");
+        assertEq(uint256(7_500_000 + 11_250_000 + 11_250_000), uint256(APPEAL_DEPOSIT), "arithmetic: the toll and the two wages are not the deposit");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization.
@@ -3849,53 +4422,77 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(uint8(Agreement(agr).status()), uint8(Agreement.Status.RESOLVED));
     }
 
-    // Tie vote (2 overturn vs. 2 uphold) at/above quorum must resolve to UPHOLD, not overturn,
-    // since resolveAppeal() uses strict `>` (votesOverturn > votesUphold) to decide overturn.
-    // Requires a 4th eligible voter beyond the 3 from _addAppealQuorumArbiters(), since the
-    // ruling arbiter can't vote on its own verdict and 3 eligible voters can never tie.
-    /// ⚠️ A TIE IS TWO VOTES NOW, NOT FOUR (23 September 2026). The panel has
-    /// three seats and the fourth arbiter is refused, so 2-vs-2 is a tally that
-    /// can no longer exist and three votes can never tie. The rule this scene
-    /// holds is unchanged — a tie is not a majority, so the verdict stands —
-    /// and it has moved to the only turnout that can still produce one.
+    // A count BELOW THE BAR leaves the verdict standing, and the door may not
+    // be pressed until the window closes.
+    /// ⚠️ THIS SCENE WAS "A TIED VOTE UPHOLDS, NOT OVERTURNS", AND A TIE IS
+    /// NOW IMPOSSIBLE (decision 177, 14 October 2026). It had been rewritten
+    /// once before: 2-vs-2 became 1-vs-1 when the panel went down to three
+    /// seats. Now there is no second direction for either side of a tie to come
+    /// from. What survives is the rule underneath it -- a count that falls
+    /// short overturns nothing -- and the state that used to be reached by a
+    /// tie is reached by two honest votes and a third man who says nothing.
     ///
-    /// It also has to WAIT for the window: with a seat still open, a tie is not
-    /// a reason to settle early, or the side the verdict favours could buy the
-    /// outcome by pressing the door first.
-    function testResolveAppeal_TiedVoteUpholdsNotOverturn() public {
+    /// It also has to WAIT for the window, for the reason it always did: with
+    /// the bar unmet and seats still open the next vote could carry it, so the
+    /// side the verdict favours must not be able to settle first.
+    function testResolveAppeal_ACountBelowTheBarLeavesTheVerdictStanding() public {
         (address a2, address a3,) = _addAppealQuorumArbiters();
 
         address agr = _disputeToVerdict(client, executor, true); // client wins, executor loses
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
-        vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // overturn
-        vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
+        uint256 execBefore = usdc.balanceOf(executor);
+        uint256 sideBefore = usdc.balanceOf(client);
+        uint256 treasBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
-        // Confirm the tally really is a tie before resolving.
+        vm.prank(a2);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr); // overturn
+        vm.prank(a3);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
+
+        // Confirm the count really is short of the bar before resolving, and
+        // that nothing landed on the dead field.
         (uint256 uphold, uint256 overturnVotes) = ArbiterVaultFacet(address(diamond)).getAppealVotes(agr);
-        assertEq(uphold, 1);
-        assertEq(overturnVotes, 1);
+        assertEq(uphold, 0);
+        assertEq(overturnVotes, 2);
 
         vm.expectRevert(ArbiterRegistryFacet.AppealWindowNotClosed.selector);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
         vm.warp(block.timestamp + 4 days + 1);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
-        // Tie with a panel seated -> uphold path taken: the ruling arbiter is
-        // not penalized, and the two who did sit are paid $10 each out of the
-        // $20, with nothing left over for the vault.
-        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "two votes divide $20 with no remainder");
-        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 10 * 10**6, "each of two voters is owed $10");
+        // Short of the bar: the ruling arbiter is not penalized, and nothing of
+        // the FEE moves at all, because no verdict was overturned and there is
+        // no forfeited share to send anywhere. What does move is the deposit,
+        // and it moves exactly as it would have on a win (the owner's decision
+        // of 17 October 2026) -- a wage that changed with the outcome would be
+        // a wage FOR the outcome.
+        //
+        // ⚠️ THE CROSSING HALF IS ABOLISHED (19 October 2026) AND THE PANEL'S
+        // WHOLE-POCKET WAGE WITH IT (19-20 October); see the argument beside
+        // the same numbers in
+        // testResolveAppeal_AVerdictLeftStandingStillCostsTheWholeDeposit.
+        // Derived by hand:
+        //   wage     = 30_000_000 * 3 / 4 = 22_500_000
+        //   each     = 22_500_000 / 2     = 11_250_000
+        //   the toll = 20_000_000 - 7_500_000 x 2 = 5_000_000 -> ACROSS, because
+        //              the verdict STOOD
+        assertEq(usdc.balanceOf(executor), execBefore, "the deposit came home to an appellant whose appeal fell short");
+        assertEq(usdc.balanceOf(client) - sideBefore, 7_500_000, "the toll that crossed to the party who did not appeal is not the quarter");
+        assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "the bank took a cut of an appeal that carried nothing");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), treasBefore, "the toll reached the treasury on a verdict that STOOD");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 11_250_000, "the first man who answered was not paid half of the deposit's three quarters");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a3), 11_250_000, "the second man who answered was not paid half of the deposit's three quarters");
+        assertEq(uint256(7_500_000 + 11_250_000 + 11_250_000), uint256(APPEAL_DEPOSIT), "arithmetic: the toll and the two wages are not the deposit");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
 
         // Original verdict stands — client (winner) gets paid at finalization, not the executor.
@@ -3904,36 +4501,101 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         assertEq(uint8(Agreement(agr).status()), uint8(Agreement.Status.RESOLVED));
     }
 
-    /// ⚠️ REWRITTEN ON PURPOSE, 17 September 2026 (the no-quorum refund).
-    /// Until then this asserted "the vault grows by $20": a man paid for a
-    /// review nobody gave, and the money went where it never comes back from.
-    /// The verdict still stands by default — but the deposit goes home whole,
-    /// and the lone voter is paid nothing, because no panel sat.
+    /// ⚠️ REWRITTEN ON PURPOSE TWICE. Until 17 September 2026 this asserted
+    /// "the vault grows by $20": a man paid for a review nobody gave, and the
+    /// money went where it never comes back from. Then the deposit went home
+    /// whole and the lone voter was paid nothing, because no panel sat.
+    ///
+    /// The owner's decision of 17 OCTOBER 2026 moved both halves of that. The
+    /// verdict still stands by default — and:
+    ///
+    ///   • the deposit does NOT go home, and no branch returns any of it to the
+    ///     man who paid.
+    ///   • the lone voter IS paid, because the rule reads "did anybody answer"
+    ///     and nothing else. One answer out of three summoned is still an
+    ///     answer.
+    ///
+    /// ⚠️ SO "NO QUORUM" NO LONGER MEANS "NO PANEL" WHERE THE MONEY IS
+    /// CONCERNED, and that is the distinction worth holding on to: the bar
+    /// decides the VERDICT, and answering decides the WAGE. One vote is short
+    /// of the first and enough for the second. The name is kept because what it
+    /// claims -- the verdict is upheld by default at the window's close -- is
+    /// exactly what still happens.
+    ///
+    /// ⚠️ THE FIFTH MOVE, 19 October 2026: THE CROSSING HALF IS ABOLISHED, so
+    /// the lone voter was paid the WHOLE deposit and not the half of it. ONE
+    /// SEAT ON THE PANEL RECOVERED THE WHOLE DEPOSIT, and the sentence that
+    /// stood here before -- "one seat cannot recover more than half, so the
+    /// half is a wall" -- was false in both halves.
+    ///
+    /// ⚠️ AND THE SIXTH MOVE, 19-20 October 2026, PUT A WALL BACK -- a quarter
+    /// of one, and this is the scene where that is measured. The owner's
+    /// decision: the panel takes THREE QUARTERS and the last quarter is a TOLL
+    /// that leaves the appellant's circle. The reason is exactly the hole this
+    /// scene exposed: a junk appeal answered by the attacker's OWN seat
+    /// returned him the whole pocket as a WAGE, so his cost was NOUGHT at one
+    /// seat and no refund rule could reach him. The quarter is the same quarter
+    /// at any turnout -- which is what decision 174 demands of a defence, since
+    /// the size of the corps is a number nobody knows -- and AT ONE SEAT IT IS
+    /// THE WHOLE COST OF THE ATTACK. So the lone voter is paid 22_500_000 of
+    /// the 20_000_000 he put down, and the 5_000_000 that crosses is what the
+    /// attack costs.
+    ///
+    /// The round trip is left visible rather than tidied: this wall has now
+    /// been a half, then nothing, then a quarter, and the mark is kept where
+    /// each one stood.
     function testResolveAppeal_NoQuorumUpholdsByDefaultAtWindowClose() public {
         (address a2,,) = _addAppealQuorumArbiters();
         address agr = _disputeToVerdict(client, executor, true);
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
         uint256 execBefore  = usdc.balanceOf(executor);
+        uint256 sideBefore  = usdc.balanceOf(client);
+        uint256 treasBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
         // Only 1 of 3 needed votes cast — quorum never reached.
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
         vm.warp(block.timestamp + 4 days + 1); // APPEAL_REVIEW_WINDOW closes
 
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
+        // Derived by hand from the rule:
+        //   wage     = 30_000_000 * 3 / 4 = 22_500_000
+        //   each     = 22_500_000 / 1     = 22_500_000 to the only man who answered
+        //   the toll = 30_000_000 - 22_500_000 = 7_500_000 -> ACROSS, because the
+        //              verdict STOOD
+        //   and 7_500_000 + 22_500_000 = 30_000_000, the deposit
         assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore, "the vault takes nothing from an unheard appeal");
-        assertEq(usdc.balanceOf(executor) - execBefore, 20 * 10**6, "the whole deposit goes back to the appellant");
-        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 0, "a lone vote is not a panel and is not paid");
+        assertEq(usdc.balanceOf(executor), execBefore, "the deposit went back to the appellant");
+        assertEq(usdc.balanceOf(client) - sideBefore, 7_500_000, "the toll that crossed to the party who did not appeal is not the quarter");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), treasBefore, "the toll reached the treasury on a verdict that STOOD");
+        assertEq(ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 22_500_000, "a lone answer was not paid the deposit's three quarters");
+        assertEq(uint256(7_500_000 + 22_500_000), uint256(APPEAL_DEPOSIT), "arithmetic: the toll and the lone wage are not the deposit");
+        // ⚠️ THE WALL IS A QUARTER AND THIS IS WHERE IT IS MEASURED. One seat
+        // that answers recovers three quarters and NOT the whole, so a circle
+        // holding one seat pays 7_500_000 per appeal it raises -- that is the
+        // cost of the attack, in one number, at the turnout where the attacker
+        // controls everything. Locked as equality on BOTH sides, so that the
+        // day the wall is taken away again, or moved to a different fraction,
+        // the lock reds instead of staying satisfied.
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 22_500_000,
+            "one seat's recovery moved -- the wall was taken away or its fraction changed, and this scene did not notice"
+        );
+        assertEq(
+            uint256(APPEAL_DEPOSIT) - ArbiterVaultFacet(address(diamond)).getAppealShareOwed(agr, a2), 7_500_000,
+            "what one self-seated appeal costs its author is no longer the quarter"
+        );
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 0);
         assertTrue(ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).clientWins, "the verdict stands by default");
     }
@@ -3944,16 +4606,17 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true); // only 1 of 3
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr); // only 1 of 3
 
         vm.expectRevert(ArbiterRegistryFacet.AppealWindowNotClosed.selector);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
     }
 
     // Brief's Step 5 only exercises the AppealWindowNotClosed guard. resolveAppeal() has two
@@ -3964,7 +4627,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // NoAppeal: nobody ever called raiseAppeal on this verdict.
         address agrNoAppeal = _disputeToVerdict(client, executor, true);
         vm.expectRevert(ArbiterRegistryFacet.NoAppeal.selector);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agrNoAppeal);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agrNoAppeal);
 
         // AppealAlreadyResolved: resolve once successfully via quorum, then try again.
         (address a2, address a3, address a4) = _addAppealQuorumArbiters();
@@ -3972,22 +4635,23 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         usdc.mint(executor, 100 * 10**6);
         vm.prank(executor);
-        usdc.approve(address(diamond), 20 * 10**6);
+        usdc.approve(address(diamond), APPEAL_DEPOSIT);
         vm.prank(executor);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
         vm.prank(a2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
         vm.prank(a4);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false); // uphold
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr); // resolves fine
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr); // resolves fine
 
         vm.expectRevert(ArbiterRegistryFacet.AppealAlreadyResolved.selector);
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr); // second call must revert
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr); // second call must revert
     }
 
     /// The bond behind a hand-given seat (8 September 2026).

@@ -326,7 +326,13 @@ contract UpgradePaidArbitrationSelectorsTest is Test {
         // of the same rule, getHandoverReadiness(), is on
         // ArbiterAccountabilityFacet, which is not among the eleven groups this
         // sum covers at all.
-        assertEq(total, 184, "post-upgrade diamond should route exactly 184 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
+        // 184 -> 189 on 12 October 2026, the deal cap: FactoryFacet gained five
+        // doors (liftDealCap, getDealCap, getAgreementPotCeiling,
+        // getSettledVolume, isDealCapLifted), and the factory is one of the
+        // nine facets this sum reads LIVE from DeployFull, so its growth lands
+        // here although this archived script never touched it. The 31 July
+        // delivery of 63 is unchanged.
+        assertEq(total, 189, "post-upgrade diamond should route exactly 189 selectors across all 11 facets (this script's 31 July 2026 delivery of 63, plus nine facets read live from DeployFull)");
 
         bytes4[] memory flat = new bytes4[](total);
         uint256 k = 0;

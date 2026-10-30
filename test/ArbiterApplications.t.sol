@@ -65,6 +65,7 @@ import {MinimalForwarder} from "../src/MinimalForwarder.sol";
 import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract MockUSDCApplications {
     mapping(address => uint256) public balanceOf;
@@ -136,7 +137,7 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     bytes32 constant ARB_BASE = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     /// The literal seven days, written out here and NOWHERE derived from the
@@ -187,7 +188,8 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
             address(new ArbiterApplicationsFacet()),
             address(new TreasuryLinkFacet()),
             address(new JobReceiptFacet()),
-            address(new ReputationFacet())
+            address(new ReputationFacet()),
+            address(new ArbiterAppealFacet())
         );
         IDiamondCut(address(diamond)).diamondCut(rest, address(0), "");
 
@@ -512,6 +514,22 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     /// slot in silence — every scene here would then test a candidate with no
     /// record at all, and the ones that expect a refusal would still pass.
     function _seedRecord(address who, uint256 xp, uint256 streak) internal {
+        // ⚠️ AND THE CLOCK UNDER THE RUN (12 October 2026). `applyAsArbiter`
+        // now also asks that the run be at least sixteen days old
+        // (`MIN_STREAK_SPAN_TO_REGISTER`), measured from
+        // `ReputationStorage.streakClockStartedAt` -- field 14, appended that
+        // day. A streak written straight into storage carries NO start, and an
+        // unrecorded start is refused outright (`CleanStreakTooYoung(0, ...)`),
+        // so without these two lines every scene in this file that expects a
+        // seating fails for a reason that is not its subject. The rule itself
+        // is measured in test/CleanStreakCostsSixDollars.t.sol; here it is only
+        // got out of the way, as early and as plainly as possible.
+        if (block.timestamp <= 17 days) vm.warp(17 days + 1);
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(who, uint256(REP_BASE) + 14)),
+            bytes32(uint256(1))
+        );
         vm.store(address(diamond), keccak256(abi.encode(who, uint256(REP_BASE) + SLOT_XP)), bytes32(xp));
         vm.store(
             address(diamond),
@@ -596,11 +614,12 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
             value: 0,
             gas:   1_000_000,
             nonce: forwarder.getNonce(vm.addr(pk)),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
 
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",

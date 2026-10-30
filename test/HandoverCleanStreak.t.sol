@@ -68,6 +68,8 @@ import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {pullAppealLot} from "./AppealLotRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract MockUSDCCleanStreak {
     mapping(address => uint256) public balanceOf;
@@ -111,6 +113,10 @@ contract HandoverCleanStreakTest is Test {
     address constant JUDGE_A = address(0xA1);
     address constant JUDGE_B = address(0xB2);
     address constant JUDGE_C = address(0xC3);
+    // ⚠️ A FOURTH SEAT SINCE DECISION 177 (14 October 2026). An overturn
+    // takes three votes and the judge under appeal may not sit on his own
+    // panel, so a bench of three leaves only two who can vote.
+    address constant JUDGE_D = address(0xD4);
 
     uint256 constant AMOUNT   = 100 * 10 ** 6;
     uint256 constant DEADLINE = 7;
@@ -165,7 +171,8 @@ contract HandoverCleanStreakTest is Test {
 
         IDiamondCut.FacetCut[] memory remainingCuts = deploy.buildRemainingCuts(
             address(jobBoard), address(serviceBoard), address(arbiterFacet), address(vaultFacet),
-            address(accFacet), address(appFacet), address(metaFacet), address(receiptFacet), address(repFacet)
+            address(accFacet), address(appFacet), address(metaFacet), address(receiptFacet), address(repFacet),
+            address(new ArbiterAppealFacet())
         );
         IDiamondCut(address(diamond)).diamondCut(remainingCuts, address(0), "");
 
@@ -180,6 +187,7 @@ contract HandoverCleanStreakTest is Test {
         _seat(JUDGE_A);
         _seat(JUDGE_B);
         _seat(JUDGE_C);
+        _seat(JUDGE_D);
     }
 
     // ---------- the bench's own doors ----------
@@ -280,14 +288,15 @@ contract HandoverCleanStreakTest is Test {
         vm.prank(appellant);
         usdc.approve(address(diamond), APPEAL_DEPOSIT_MAX);
         vm.prank(appellant);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agreementAddr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agreementAddr);
+        pullAppealLot(address(diamond), agreementAddr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
-        address[3] memory bench = [JUDGE_A, JUDGE_B, JUDGE_C];
-        for (uint256 i = 0; i < 3; i++) {
+        address[4] memory bench = [JUDGE_A, JUDGE_B, JUDGE_C, JUDGE_D];
+        for (uint256 i = 0; i < bench.length; i++) {
             if (bench[i] == ruling) continue;
             vm.prank(bench[i]);
-            ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agreementAddr, true);
+            ArbiterAppealFacet(address(diamond)).voteToOverturn(agreementAddr);
         }
 
         // Anyone may settle it, and nobody in particular does — the votes
@@ -295,7 +304,7 @@ contract HandoverCleanStreakTest is Test {
         // that is deliberate and costs nothing, because this door is not one of
         // the three that mark a dispute as touched by governance. If it ever
         // becomes one, this scene is where it will show.
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agreementAddr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agreementAddr);
     }
 
     /// The whole clean road, start to finish, by one judge.

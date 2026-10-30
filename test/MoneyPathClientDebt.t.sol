@@ -128,10 +128,16 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
         uint256 d0 = usdc.balanceOf(address(diamond));
         _submitAndFinalize(a, false); // executor wins
 
-        assertEq(usdc.balanceOf(executor) - e0, 97_000_000, "$97 = $100 pot less the 3% fee");
+        // ⚠️ THE POT REACHES THE WINNER WHOLE SINCE 20 OCTOBER 2026, and the fee
+        // is not part of this arithmetic any more. It was taken at the dispute
+        // DOOR, out of the opener's own wallet, and has sat on the diamond ever
+        // since; nothing is subtracted from the escrow at the verdict. The
+        // figures that stood here -- $97 of a $100 pot, $3 to the diamond --
+        // were the fee cut out of the escrow at settlement.
+        assertEq(usdc.balanceOf(executor) - e0, 100_000_000, "$100 = the whole pot");
         assertEq(
-            usdc.balanceOf(address(diamond)) + caseBond - d0, 3_000_000,
-            "the fee reached the diamond, and the bond went home with the verdict"
+            usdc.balanceOf(address(diamond)) + caseBond - d0, 0,
+            "the diamond gained money at the verdict -- the fee was supposed to be there from the door"
         );
         assertEq(a.undeliveredRefund(), EXTRA_BACK, "$10.50 booked to the client");
         assertEq(usdc.balanceOf(address(a)), EXTRA_BACK, "and only that is left behind");
@@ -459,12 +465,31 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
         _submitAndFinalize(a, false); // executor wins
 
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the verdict landed");
-        assertEq(a.undeliveredPayout(), 97_000_000, "pot less the 3% fee, owed");
+        assertEq(a.undeliveredPayout(), 100_000_000, "the whole pot, owed");
 
         usdc.setBlacklisted(executor, false);
         uint256 e0 = usdc.balanceOf(executor);
         vm.prank(stranger); a.withdrawUndeliveredPayout();
-        assertEq(usdc.balanceOf(executor) - e0, 97_000_000, "the winner was paid, late");
+        // ⚠️ THE WHOLE POT, 21 OCTOBER 2026, and the line read 97_000_000 --
+        // which disagreed with the line four above it in this same scene,
+        // where `undeliveredPayout` is already asserted at 100_000_000. The two
+        // are the same money read twice, the ledger and then the payout, so one
+        // of them was simply missed when the fee moved to the dispute's door on
+        // 20 October. A scene that contradicts itself is worth saying out loud:
+        // it was not measuring a disagreement, it was failing on one.
+        //
+        // Worked out by hand, retired figure first:
+        //     the retired fee  100_000_000 x 300 / 10_000 = 3_000_000
+        //     paid out         100_000_000 - 3_000_000    = 97_000_000
+        // -- the literal that stood here, reproduced, so the subtraction was
+        // the right subtraction while the fee came out of the pot. It does not
+        // any more: the levy left the opener's wallet at `raiseDispute` and the
+        // escrow pays the winner the pot WHOLE.
+        //
+        // The two lines are asserted against ONE term now, so they cannot
+        // drift apart again.
+        assertEq(usdc.balanceOf(executor) - e0, AMOUNT, "the winner was paid, late -- and the whole pot, because the levy was taken at the door");
+        assertEq(a.undeliveredPayout(), 0, "the ledger still owes something after it was paid out whole");
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
     }
 
@@ -487,7 +512,10 @@ contract MoneyPathClientDebtTest is MoneyPathBase {
         emit DisputeSplitNoVerdict(AMOUNT / 2, 0);
         vm.prank(executor); a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - c0, AMOUNT / 2, "the client got their half and no more");
+        // ⚠️ THE HALF PLUS THE DOOR CHARGE COMING HOME (20 October 2026): the
+        // client opened the dispute and paid `disputeFee()`, and no verdict was
+        // written, so the timeout returns it. `c0` is read after the charge.
+        assertEq(usdc.balanceOf(client) - c0, AMOUNT / 2 + 10_000_000, "the client got their half and the door charge back, no more");
         assertEq(a.undeliveredPayout(), AMOUNT / 2, "the executor's half is owed to the executor");
         assertEq(a.undeliveredRefund(), 0, "and nothing to the client");
     }

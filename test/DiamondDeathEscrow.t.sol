@@ -14,6 +14,52 @@ import "./DiamondDeathEscrowBase.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 
 contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
+
+    // ════════════════════════════════════════════════════════════
+    //  THE DISPUTE FEE'S DOOR CHARGE, AND WHY IT IS NOT A CONSTANT
+    //  OF THIS FILE  (21 October 2026)
+    // ════════════════════════════════════════════════════════════
+    //
+    // The dispute fee is taken when the DISPUTE is opened since the owner's
+    // decision of 20 October 2026, and it is returned when the dispute ends
+    // with no verdict. Every timeout road in this file ends with no verdict, so
+    // on every one of them the opener -- the CLIENT in each scene below -- is
+    // owed his charge back on top of whatever share of the pot he gets.
+    //
+    // Worked out by hand on this base's deal. The charge is
+    // `max( 3% of the pot, the $10 floor )` and here, unlike the $100 fixtures
+    // elsewhere in the tree, the PERCENTAGE decides and not the floor:
+    //     3% of the deal   1_000_000_000 x 300 / 10_000 = 30_000_000
+    //     the floor                                       10_000_000
+    //     the charge       max( 30_000_000, 10_000_000 ) = 30_000_000
+    // -- which is worth writing out because a reader who has seen the ten
+    // dollar figure in the other money files would carry it over, and on a
+    // $1000 deal it is three times that.
+    uint256 constant DOOR_CHARGE = 30_000_000;
+
+    // ⚠️ AND IT ONLY COMES HOME IF THE DIAMOND CAN STILL ANSWER, WHICH IS WHY
+    // THE EXPECTATION IS A FUNCTION OF THE KILL MODE AND NOT A CONSTANT. The
+    // clone asks for the refund through
+    // `try IArbiterRegistryFacet(diamond).settleDisputeFee{gas: …}(false)` and
+    // skips the call entirely when the diamond has no code -- deliberately, so
+    // that a dead diamond cannot take the escrow's exit down with it. The
+    // consequence is an asymmetry this file is the only place to see: on
+    // SELECTORS_REMOVED, FACET_REVERTS and NO_CODE the hatch still opens and
+    // the pot still comes out, but the opener's charge does NOT come back in
+    // that transaction. It is not burnt -- it stays in `disputeFeeHeld` on the
+    // diamond and a revived diamond could still settle it -- but nothing in the
+    // escrow's own exit returns it.
+    //
+    // ⚠️ THIS WAS MEASURED, NOT ASSUMED: the three ALIVE rows were the only ones
+    // of this file's timeout rows that reddened, and the dead-diamond rows were
+    // green against the un-refunded figure throughout. It is reported to the
+    // owner as a finding rather than treated as settled here, because whether a
+    // charge that cannot be returned should block the hatch is his call and not
+    // this file's.
+    function _doorChargeComesHome(Kill mode) internal pure returns (uint256) {
+        return mode == Kill.ALIVE ? DOOR_CHARGE : 0;
+    }
+
     // ============================================================
     //  1. THE EXTCODESIZE FINDING  (mode C is not mode A/B)
     // ============================================================
@@ -276,8 +322,10 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
         ok = _callAs(client, a, "triggerArbiterTimeout()");
 
         if (ok) {
-            // both sides showed up -> pot split in half
-            assertEq(usdc.balanceOf(client)   - before.clientBal,   DEAL_HALF, "client half");
+            // both sides showed up -> pot split in half, and the client's own
+            // door charge comes back on top where the diamond can still serve
+            // it (see `_doorChargeComesHome`).
+            assertEq(usdc.balanceOf(client)   - before.clientBal,   DEAL_HALF + _doorChargeComesHome(mode), "client half, and his door charge if the diamond could return it");
             assertEq(usdc.balanceOf(executor) - before.executorBal, DEAL_HALF, "executor half");
             assertEq(usdc.balanceOf(address(a)), 0, "escrow must be empty");
         } else {
@@ -327,7 +375,7 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
         ok = _callAs(client, a, "triggerArbiterTimeout()");
 
         if (ok) {
-            assertEq(usdc.balanceOf(client) - before.clientBal, DEAL, "arbiter at fault -> all to client");
+            assertEq(usdc.balanceOf(client) - before.clientBal, DEAL + _doorChargeComesHome(mode), "arbiter at fault -> all to client, and his door charge if the diamond could return it");
             assertEq(usdc.balanceOf(address(a)), 0, "escrow must be empty");
         } else {
             assertEq(usdc.balanceOf(address(a)), before.escrowBal, "escrow untouched on revert");
@@ -410,42 +458,69 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
         _assertHatchIsTheOnlyDoorAndItOpens(Kill.NO_CODE);
     }
 
-    /// A party can still raise a dispute while the diamond is down —
-    /// raiseDispute reaches the diamond only through _updateRegistry, which is
-    /// tolerated. That used to be a trap: entering DISPUTED during an outage
-    /// meant entering a state with no exit, and nothing warned anyone. It is
-    /// no longer a trap, and this measures exactly that: raise it mid-outage,
-    /// then walk back out with the money.
-    function _assertDisputeRaisedMidOutageStillHasAWayOut(Kill mode) internal {
-        // Handed in before the outage: this scene is about getting back out of a
-        // dispute raised while the diamond is deaf, not about delivery.
+    /// ⚠️ A PARTY CAN NO LONGER ENTER A DISPUTE WHILE THE DIAMOND IS DOWN, AND
+    /// THAT SIGN CHANGED ON 20 OCTOBER 2026. THE SCENE IS KEPT, INVERTED, WITH
+    /// ITS OWN HISTORY, BECAUSE THE THING IT MEASURES IS NOW THE OTHER HALF OF
+    /// THE SAME QUESTION.
+    ///
+    /// What it used to say: `raiseDispute` reached the diamond only through
+    /// `_updateRegistry`, which is tolerated, so the door opened mid-outage.
+    /// That had itself been a trap once -- entering DISPUTED during an outage
+    /// meant entering a state with no exit -- and the fix of 22 August 2026
+    /// made the exit work, after which the open door was a feature.
+    ///
+    /// What changed: the dispute fee is taken AT THE DOOR now, by the diamond
+    /// (`ArbiterVaultFacet.holdDisputeFee`), and that call is HARD. No fee, no
+    /// dispute -- because a tolerated charge is not a charge, and an
+    /// unchargeable dispute is the free junk dispute the floor was introduced
+    /// to price. So a deaf diamond closes this door.
+    ///
+    /// ⚠️ WHAT IS GIVEN UP AND WHAT IS KEPT, NAMED RATHER THAN LEFT IN THE
+    /// DIFF. GIVEN UP: a party who wants a verdict during an outage cannot ask
+    /// for one and must wait for the diamond. KEPT, and it is the whole subject
+    /// of this file: the escrow is never stuck. A deal that could not enter
+    /// DISPUTED is still ACTIVE, and `triggerDeadlineTimeout` and
+    /// `triggerAutoApprove` are both clone-only doors that work with the
+    /// diamond dead -- measured in the sections above this one. The trap that
+    /// the August work removed cannot come back by this road either, because
+    /// the state with no exit can no longer be entered at all.
+    ///
+    /// This scene measures both halves: the door refuses, and the deal is left
+    /// exactly as it was with its ordinary exits open.
+    function _assertDisputeCannotBeEnteredMidOutageAndTheEscrowIsNotStuck(Kill mode) internal {
+        // Handed in before the outage, as before: the subject is the dispute
+        // door and not delivery.
         Agreement a = _markedDone();
         _kill(mode);
         _assertDiamondReallyDeaf(mode);
 
-        assertTrue(_callAs(client, a, "raiseDispute()"), "a party can still enter a dispute during an outage");
+        assertFalse(
+            _callAs(client, a, "raiseDispute()"),
+            "a dispute was opened while the diamond could not take the fee -- the charge at the door has become tolerated"
+        );
+        assertEq(a.disputedAt(), 0, "and the clone recorded a dispute it was not paid for");
 
-        vm.prank(executor);
-        a.respondToDispute();
-        vm.warp(block.timestamp + DISPUTE_WINDOW + 1);
-
+        // ── AND THE MONEY IS NOT STUCK, which is what this file is for. The
+        //    deal is still ACTIVE, so the hand-in's own exit is the one that
+        //    opens -- a clone-only door, with no diamond call on its money
+        //    path. ──
         Snap memory before = _snap(a);
-        assertTrue(_callAs(client, a, "triggerArbiterTimeout()"), "and can get back out again");
-        assertEq(usdc.balanceOf(client)   - before.clientBal,   DEAL_HALF, "client half");
-        assertEq(usdc.balanceOf(executor) - before.executorBal, DEAL_HALF, "executor half");
-        assertEq(usdc.balanceOf(address(a)), 0, "pot released");
+        vm.warp(block.timestamp + AUTO_APPROVE_WINDOW + 1);
+        assertTrue(_callAs(client, a, "triggerAutoApprove()"), "the hand-in's own exit must still open");
+        assertEq(usdc.balanceOf(executor) - before.executorBal, DEAL, "the executor was not paid the whole pot");
+        assertEq(usdc.balanceOf(address(a)), 0, "escrow must be empty");
     }
 
-    function testDisputeRaisedMidOutageStillHasAWayOut_SelectorsRemoved() public {
-        _assertDisputeRaisedMidOutageStillHasAWayOut(Kill.SELECTORS_REMOVED);
+    function testDisputeCannotBeEnteredMidOutage_SelectorsRemoved() public {
+        _assertDisputeCannotBeEnteredMidOutageAndTheEscrowIsNotStuck(Kill.SELECTORS_REMOVED);
     }
 
-    function testDisputeRaisedMidOutageStillHasAWayOut_FacetReverts() public {
-        _assertDisputeRaisedMidOutageStillHasAWayOut(Kill.FACET_REVERTS);
+    function testDisputeCannotBeEnteredMidOutage_FacetReverts() public {
+        _assertDisputeCannotBeEnteredMidOutageAndTheEscrowIsNotStuck(Kill.FACET_REVERTS);
     }
 
-    function testDisputeRaisedMidOutageStillHasAWayOut_NoCode() public {
-        _assertDisputeRaisedMidOutageStillHasAWayOut(Kill.NO_CODE);
+    function testDisputeCannotBeEnteredMidOutage_NoCode() public {
+        _assertDisputeCannotBeEnteredMidOutageAndTheEscrowIsNotStuck(Kill.NO_CODE);
     }
 
     // ============================================================
@@ -767,7 +842,13 @@ contract DiamondDeathEscrowTest is DiamondDeathEscrowBase {
         );
 
         assertTrue(ok, "a capped read cannot be starved into taking the whole transaction");
-        assertEq(usdc.balanceOf(client)   - before.clientBal,   DEAL_HALF, "client half");
+        // ⚠️ THE DOOR CHARGE COMES HOME ON THIS ROAD, and that is the point of
+        // the scene rather than an incidental: only ONE facet was replaced by a
+        // gas burner, so the diamond is alive everywhere else and the refund's
+        // own capped call goes through. A starved refund would show up here as
+        // the client being exactly DOOR_CHARGE short while every other line
+        // stayed green.
+        assertEq(usdc.balanceOf(client)   - before.clientBal,   DEAL_HALF + DOOR_CHARGE, "client half, and his door charge back past the gas burner");
         assertEq(usdc.balanceOf(executor) - before.executorBal, DEAL_HALF, "executor half");
         assertEq(usdc.balanceOf(address(a)), 0, "escrow emptied");
     }

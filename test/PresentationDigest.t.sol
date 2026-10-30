@@ -375,7 +375,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
     // through".
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     function test_DigestThroughRealForwarder_CreditsHumanNotForwarder() public {
@@ -397,6 +397,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
             value: 0,
             gas:   500_000,
             nonce: fwd.getNonce(human),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  abi.encodeWithSelector(
                 ArbiterRegistryFacet.recordPresentationDigest.selector, agr, digest
             )
@@ -533,7 +534,7 @@ contract PresentationDigestTest is Test, ArbiterTwoFacetBench {
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",

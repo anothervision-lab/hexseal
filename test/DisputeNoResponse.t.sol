@@ -492,7 +492,7 @@ contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
     // not go through".
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     function test_RecordNoResponse_ThroughRealForwarder_CreditsHumanNotForwarder() public {
@@ -512,6 +512,7 @@ contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
             value: 0,
             gas:   500_000,
             nonce: fwd.getNonce(arb),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  abi.encodeWithSelector(ArbiterRegistryFacet.recordNoResponse.selector, agreement)
         });
 
@@ -594,7 +595,7 @@ contract DisputeNoResponseTest is Test, ArbiterTwoFacetBench {
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",

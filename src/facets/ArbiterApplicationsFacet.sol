@@ -618,12 +618,12 @@ contract ArbiterApplicationsFacet {
     //
     // ⚠️ THE ONE FORM OF SERVICE THE CHAIN CANNOT COUNT PER PERSON, said out
     // loud rather than left to be discovered: an APPEAL VOTE.
-    // `ArbiterRegistryFacet.voteOnAppeal` records only
+    // `ArbiterRegistryFacet.voteToOverturn` records only
     // `hasVotedAppeal[deal][arbiter]` — a flag per pair, with no counter per
     // arbiter and no way to total it on chain. An arbiter whose entire record
     // is appeal votes therefore reads as unproven here and can be filtered out
     // by this door. Counting them needs a new counter incremented inside
-    // `voteOnAppeal`, and that function lives in `ArbiterRegistryFacet`, which
+    // `voteToOverturn`, and that function lives in `ArbiterRegistryFacet`, which
     // stood 44 bytes clear of the EIP-170 ceiling when this was written
     // (measured 11 September 2026, `forge build --sizes`). It does not fit.
     // What it costs if it is ever pressed: he loses a seat he was given and
@@ -808,15 +808,32 @@ contract ArbiterApplicationsFacet {
         d.arbiterBond[arbiter] = 0;
         d.isArbiter[arbiter]   = false;
 
-        // The roster, spliced the way both existing exit doors splice it. The
-        // loop is copied rather than shared because sharing it means editing
-        // `ArbiterRegistryStorage`, and every internal-library edit re-emits
-        // into `ArbiterRegistryFacet`, which has 44 bytes of room.
+        // The roster, emptied the way both other exit doors empty it: the slot
+        // goes to zero and the array KEEPS ITS LENGTH.
+        //
+        // ⚠️ AND IT IS SHARED NOW, WHICH REVERSES WHAT THIS COMMENT SAID UNTIL
+        // 16 OCTOBER 2026. It said the loop was copied rather than shared
+        // because an edit to `ArbiterRegistryStorage` re-emits into
+        // `ArbiterRegistryFacet`, the facet nearest the EIP-170 wall — true,
+        // and right for a body that was one assignment. Decision 185 made the
+        // exit do two things: zero the slot AND file its index on
+        // `vacantSeats`, so the next arbiter in can sit here. A door that does
+        // the first and forgets the second loses that index for ever and
+        // nothing about the roster looks wrong afterwards, which is why all
+        // three doors now call one `burySeat` instead of carrying one copy
+        // each. The wall was measured rather than argued about.
+        //
+        // ⚠️ IT WAS SWAP-AND-POP UNTIL 14 OCTOBER 2026, in all three doors, and
+        // the splice was a lever on the appeal lot: the lot's indices are
+        // decided when an appeal is RAISED and the addresses are read at the
+        // DRAW, so moving the last arbiter into a departing man's index moved a
+        // man the seed never chose onto the panel. The argument, the
+        // measurement and what it costs are written once, at
+        // ArbiterRegistryFacet.resignAsArbiter.
         uint256 len = d.arbiterList.length;
         for (uint256 i = 0; i < len; i++) {
             if (d.arbiterList[i] == arbiter) {
-                d.arbiterList[i] = d.arbiterList[len - 1];
-                d.arbiterList.pop();
+                ArbiterRegistryStorage.burySeat(d, i);
                 break;
             }
         }

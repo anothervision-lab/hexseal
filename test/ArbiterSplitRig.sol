@@ -55,6 +55,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {DeployFull} from "../script/DeployFull.s.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
 
 /// One address that answers all fifty-nine arbiter selectors, the way Base
@@ -70,6 +71,12 @@ import {IDiamondCut, IDiamondLoupe} from "../src/DiamondProxy.sol";
 contract PreSplitArbiterDispatcher {
     address public immutable registryImpl;
     address public immutable vaultImpl;
+    /// ⚠️ A THIRD IMPLEMENTATION SINCE 15 OCTOBER 2026, when the appeal became
+    /// a facet of its own. Without it the six appeal selectors fell through to
+    /// `registryImpl`, which no longer implements them, and every stand that
+    /// conforms its rig to a PRE-SPLIT census would have answered a revert from
+    /// a fallback where the chain of that day answered an appeal.
+    address public immutable appealImpl;
 
     /// ⚠️ THE ROUTING TABLE LIVES IN CODE, NOT IN STORAGE, AND THAT IS THE
     /// WHOLE TRICK. The first version of this file kept a
@@ -80,33 +87,78 @@ contract PreSplitArbiterDispatcher {
     /// double refused every selector. Immutables are compiled into the
     /// bytecode, so they survive the delegatecall the same way a constant does.
     ///
-    /// Five words hold up to forty four-byte selectors. Four words (thirty-two)
-    /// held the vault's twenty-eight at the split; the appeal economics of
-    /// 17 September 2026 brought the vault to thirty-four and the table was
-    /// widened by one word. A selector found here goes to the vault, anything
-    /// else to the registry.
+    /// Six words hold up to forty-eight four-byte selectors. Four words
+    /// (thirty-two) held the vault's twenty-eight at the split; the appeal
+    /// economics of 17 September 2026 brought the vault to thirty-four and the
+    /// table was widened by one word; the dispute fee taken at the door
+    /// (20 October 2026) brought it to forty-one and the table was widened by
+    /// one more. A selector found here goes to the vault, anything else to the
+    /// registry.
+    ///
+    /// ⚠️ THE REQUIRE BELOW IS THE WHOLE REASON THIS HISTORY IS WRITTEN OUT.
+    /// The table does not grow itself, and a vault that outgrows it fails every
+    /// scene on this rig with one message -- 62 of them on 20 October 2026 --
+    /// which reads like a broken rig rather than like "add a word".
     bytes32 private immutable v0;
     bytes32 private immutable v1;
     bytes32 private immutable v2;
     bytes32 private immutable v3;
     bytes32 private immutable v4;
+    bytes32 private immutable v5;
     uint256 private immutable vaultCount;
 
-    constructor(address registry_, address vault_, bytes4[] memory, bytes4[] memory vaultSels) {
+    /// One word holds up to eight four-byte selectors; the appeal has six.
+    bytes32 private immutable p0;
+    uint256 private immutable appealCount;
+
+    constructor(
+        address registry_,
+        address vault_,
+        bytes4[] memory,
+        bytes4[] memory vaultSels,
+        address appeal_,
+        bytes4[] memory appealSels
+    ) {
         registryImpl = registry_;
         vaultImpl = vault_;
-        require(vaultSels.length <= 40, "PreSplitArbiterDispatcher: more than 40 moved selectors, widen the table");
+        appealImpl = appeal_;
+        require(appealSels.length <= 8, "PreSplitArbiterDispatcher: more than 8 appeal selectors, widen the table");
+        appealCount = appealSels.length;
+        p0 = _packOneWord(appealSels);
+        require(vaultSels.length <= 48, "PreSplitArbiterDispatcher: more than 48 moved selectors, widen the table");
         vaultCount = vaultSels.length;
 
-        bytes32[5] memory w;
-        for (uint256 i = 0; i < vaultSels.length; i++) {
-            w[i / 8] |= bytes32(vaultSels[i]) >> ((i % 8) * 32);
-        }
+        // ⚠️ THE TWO LOOPS LIVE IN FUNCTIONS OF THEIR OWN AND THAT IS NOT A
+        // TIDY-UP, 20 OCTOBER 2026. Written inline, this constructor went ONE
+        // SLOT too deep for via_ir the moment the table grew its sixth word:
+        //
+        //   Error: Variable memPtr_112 is 1 too deep in the stack
+        //
+        // and the message names no file, which is the expensive part. The loop
+        // index, the memory pointer of the `bytes4[]`, the six words and the
+        // three addresses were all live in one frame. Moving each loop into its
+        // own frame costs a jump and takes its locals with it.
+        bytes32[6] memory w = _packWords(vaultSels);
         v0 = w[0];
         v1 = w[1];
         v2 = w[2];
         v3 = w[3];
         v4 = w[4];
+        v5 = w[5];
+    }
+
+    /// Eight four-byte selectors into one word, in the order they were given.
+    function _packOneWord(bytes4[] memory sels) private pure returns (bytes32 word) {
+        for (uint256 i = 0; i < sels.length; i++) {
+            word |= bytes32(sels[i]) >> (i * 32);
+        }
+    }
+
+    /// Up to forty-eight into six words, eight to a word.
+    function _packWords(bytes4[] memory sels) private pure returns (bytes32[6] memory w) {
+        for (uint256 i = 0; i < sels.length; i++) {
+            w[i / 8] |= bytes32(sels[i]) >> ((i % 8) * 32);
+        }
     }
 
     fallback() external payable {
@@ -124,7 +176,16 @@ contract PreSplitArbiterDispatcher {
     /// Public so a stand can assert the double routes where it claims to,
     /// rather than taking it on trust.
     function _routeOf(bytes4 sel) public view returns (address) {
-        bytes32[5] memory w = [v0, v1, v2, v3, v4];
+        // The appeal is asked FIRST and it is the cheapest of the three: six
+        // comparisons out of one word. The order cannot change an answer —
+        // nothing in this repository claims a selector twice, and
+        // DeployFullSelectors.testNoSelectorCollisionsAcrossFacets holds all
+        // fifteen groups against each other — so this is about gas, not about
+        // precedence.
+        for (uint256 i = 0; i < appealCount; i++) {
+            if (bytes4(p0 << (i * 32)) == sel) return appealImpl;
+        }
+        bytes32[6] memory w = [v0, v1, v2, v3, v4, v5];
         for (uint256 i = 0; i < vaultCount; i++) {
             if (bytes4(w[i / 8] << ((i % 8) * 32)) == sel) return vaultImpl;
         }
@@ -174,15 +235,34 @@ abstract contract ArbiterSplitRig {
         DeployFull deployFull = new DeployFull();
         bytes4[] memory regSels = deployFull.arbiterRegistryFacetSelectors();
         bytes4[] memory vaultSels = deployFull.arbiterVaultFacetSelectors();
+        // ⚠️ AND THE SIX THE APPEAL TOOK WITH IT ON 15 OCTOBER 2026. Before the
+        // split they were part of `arbiterRegistryFacetSelectors()` and arrived
+        // here for free; now they are a group of their own, and leaving them out
+        // would leave the new facet's address standing beside the conformed host
+        // — the facet count off by one, which is the measured failure this
+        // helper's docstring describes.
+        bytes4[] memory appealSels = deployFull.arbiterAppealFacetSelectors();
 
         host = address(
             new PreSplitArbiterDispatcher(
-                address(new ArbiterRegistryFacet()), address(new ArbiterVaultFacet()), regSels, vaultSels
+                address(new ArbiterRegistryFacet()),
+                address(new ArbiterVaultFacet()),
+                regSels,
+                vaultSels,
+                address(new ArbiterAppealFacet()),
+                appealSels
             )
         );
 
         bytes4[] memory mounted = _splitRigMountedOnly(
-            diamond, _splitRigConcat(_splitRigConcat(regSels, vaultSels), verdictHandDoors())
+            diamond,
+            _splitRigConcat(
+                _splitRigConcat(
+                    _splitRigConcat(_splitRigConcat(regSels, vaultSels), appealSels),
+                    verdictHandDoors()
+                ),
+                removedAppealVoteDoors()
+            )
         );
         if (mounted.length == 0) return host;
 
@@ -301,6 +381,23 @@ abstract contract ArbiterSplitRig {
         s[2] = bytes4(0x69315118);
     }
 
+    /// THE APPEAL VOTE DOOR AS IT WAS NAMED UNTIL DECISION 177, by its bytes.
+    ///
+    /// `voteOnAppeal(address,bool)` 0xc9bb9cdd. A literal, hand-computed with
+    /// `cast sig`: on 14 October 2026 the vote lost its second direction, the
+    /// door became `voteToOverturn(address)` 0xbff14b7f, and there is nothing
+    /// left in the tree to take the old four bytes from — which is the point.
+    ///
+    /// ⚠️ THE CHAIN STILL ROUTES THE OLD SELECTOR UNTIL A CUT REMOVES IT, so
+    /// every census read before that cut holds it and a stand rehearsing a past
+    /// cut has to mount it itself. The cut that carries this work names it in a
+    /// `Remove` group and the new bytes in an `Add` group — the two cannot be
+    /// one group, and `Replace` on either of them reverts.
+    function removedAppealVoteDoors() internal pure returns (bytes4[] memory s) {
+        s = new bytes4[](1);
+        s[0] = bytes4(0xc9bb9cdd);
+    }
+
     /// THE THREE DOORS THIS CHECKOUT NO LONGER BUILDS AND THE CHAIN NO LONGER
     /// ROUTES, put back so a rig can still be the diamond its census describes.
     ///
@@ -328,6 +425,55 @@ abstract contract ArbiterSplitRig {
     /// Only what the census actually holds and the rig does not already route is
     /// added, so this is a no-op on a census read after the cut. The caller must be
     /// able to prank the diamond's owner.
+    /// THE APPEAL VOTE DOOR THIS CHECKOUT NO LONGER BUILDS, put back so a rig can
+    /// still be the diamond its census describes.
+    ///
+    /// Decision 177 of 14 October 2026 took the second direction off the appeal vote
+    /// and the door's name and selector with it. `script/DeployFull.s.sol` follows
+    /// the tree, so it mounts `voteToOverturn(address)` and not
+    /// `voteOnAppeal(address,bool)` — but every census read before the cut that
+    /// carries this work holds the old four bytes, and a stand rehearsing a PAST cut
+    /// has to mount them itself.
+    ///
+    /// Same shape, same host and the same two warnings as
+    /// `_mountRemovedVerdictHandDoors` below: mounted on the arbiter registry that is
+    /// already there so the facet COUNT does not move, and a press of it lands in
+    /// that facet's fallback and reverts — which is honest, because no stand here
+    /// presses a door that was renamed; what they need is the ROUTING TABLE's shape.
+    ///
+    /// Only what the census actually holds and the rig does not already route is
+    /// added, so this is a no-op on a census read after that cut.
+    function _mountRemovedAppealVoteDoors(address diamond, bytes4[] memory census)
+        internal
+        returns (uint256 mounted)
+    {
+        bytes4[] memory gone = removedAppealVoteDoors();
+
+        // `finalizeVerdict(address)` 0x49b6a9a5 — see the sibling below for why the
+        // host is found through the loupe rather than deployed.
+        address host = IDiamondLoupe(diamond).facetAddress(bytes4(0x49b6a9a5));
+        if (host == address(0)) return 0;
+
+        bytes4[] memory scratch = new bytes4[](gone.length);
+        for (uint256 i = 0; i < gone.length; i++) {
+            if (IDiamondLoupe(diamond).facetAddress(gone[i]) != address(0)) continue;
+            bool inCensus;
+            for (uint256 j = 0; j < census.length; j++) {
+                if (census[j] == gone[i]) { inCensus = true; break; }
+            }
+            if (inCensus) scratch[mounted++] = gone[i];
+        }
+        if (mounted == 0) return 0;
+
+        bytes4[] memory add = new bytes4[](mounted);
+        for (uint256 i = 0; i < mounted; i++) add[i] = scratch[i];
+
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](1);
+        cut[0] = IDiamondCut.FacetCut(host, IDiamondCut.FacetCutAction.Add, add);
+        _vm.prank(_splitRigOwner(diamond));
+        IDiamondCut(diamond).diamondCut(cut, address(0), "");
+    }
+
     function _mountRemovedVerdictHandDoors(address diamond, bytes4[] memory census)
         internal
         returns (uint256 mounted)

@@ -1281,15 +1281,51 @@ contract ArbiterAccountabilityFacet {
         // A DIFFERENT namespace (ReputationStorage), a different counter, and a
         // different reason from the line above it; they are adjacent only
         // because both belong to the moment of removal.
-        ReputationStorage.data().cleanStreak[arbiter] = 0;
+        //
+        // ⚠️ AND THE CLOCK UNDER IT, since 12 October 2026. The entrance also
+        // asks that a run be at least sixteen days old
+        // (`MIN_STREAK_SPAN_TO_REGISTER`), and that age is measured from
+        // `streakClockStartedAt`. Zeroing the count while leaving the date would
+        // mean a removed arbiter's NEXT run — five ticks, however fast — counted
+        // as sixteen days old from the moment it started, which is the one
+        // reading of this rule that gives a punished man a faster road back than
+        // a newcomer has.
+        ReputationStorage.Data storage rs = ReputationStorage.data();
+        rs.cleanStreak[arbiter]          = 0;
+        rs.streakClockStartedAt[arbiter] = 0;
 
         d.suspendedUntil[arbiter] = block.timestamp + ArbiterRegistryStorage.SUSPENSION_WINDOW;
 
+        // The seat is emptied and the roster is NOT shortened — a grave, not a
+        // hole somebody else falls into. The argument in full is at
+        // ArbiterRegistryFacet.resignAsArbiter; the short of it is that the
+        // appeal lot reads `arbiterList[r]` at the DRAW while its indices were
+        // decided at the RAISE, so any splice moves a man the seed did not
+        // choose onto a panel.
+        //
+        // ⚠️ THIS DOOR IN PARTICULAR, because it is the CHEAP end of that
+        // lever: `executeChainRemoval` is permissionless once the pause has
+        // passed, so whoever wanted a substitution did not have to spend a seat
+        // on it — a ripe proposal plus the gas to press at a chosen moment was
+        // the whole price. Fixing only the voluntary door would have left this
+        // one open and cheaper.
+        //
+        // All three exits are spelled out in one place rather than three:
+        // ArbiterRegistryFacet.resignAsArbiter.
+        //
+        // ⚠️ AND SINCE 16 OCTOBER 2026 THE EXIT ALSO FILES THE INDEX, so the
+        // next arbiter in can sit in this grave (decision 185). This door is
+        // again the cheap end of the lever it is being defended against —
+        // `executeChainRemoval` is permissionless once the pause has passed —
+        // so getting the filing wrong here is worth more to an attacker than
+        // getting it wrong in the voluntary door. The body is shared
+        // (`burySeat`) rather than copied for exactly that reason; what keeps
+        // a refilled grave from carrying a man the seed never chose onto a
+        // panel is `seatTakenAtBlock`, read at the draw.
         uint256 len = d.arbiterList.length;
         for (uint256 i = 0; i < len; i++) {
             if (d.arbiterList[i] == arbiter) {
-                d.arbiterList[i] = d.arbiterList[len - 1];
-                d.arbiterList.pop();
+                ArbiterRegistryStorage.burySeat(d, i);
                 break;
             }
         }
@@ -2215,8 +2251,74 @@ contract ArbiterAccountabilityFacet {
     /// from, and a single code would lose the distinction exactly where it is
     /// needed.
     ///
+    /// `appealVoteFee` / `appealVoteFreeAt` — WHAT HIS NEXT VOTE ON AN APPEAL
+    /// COSTS HIM, and when his run goes cold so that it is free again
+    /// (17 October 2026, the owner's decision on the price of repetition). The
+    /// price is a fact about where this man stands at a door of the corps,
+    /// exactly as `suspendedUntil` is a door shut on him and `openClaims` is
+    /// what he is already carrying — so the card is where it belongs, and the
+    /// name over it still says what the tuple holds.
+    ///
+    /// ⚠️⚠️ AND SINCE 18 OCTOBER 2026 THESE TWO WORDS ANSWER A NARROWER
+    /// QUESTION THAN THEIR NAMES DO, WHICH IS WRITTEN OUT HERE BECAUSE A
+    /// HALF-TRUE NUMBER ON A CARD IS WORSE THAN A MISSING ONE. The price moved
+    /// onto the PAIR (voter, the judge he votes against); this view is handed
+    /// an ADDRESS and nothing else — the browser calls it with no account and
+    /// no deal in hand — so it cannot name a pair. What it answers is the one
+    /// pair it can name without being told anything: THE PRICE OF HIS NEXT
+    /// VOTE AGAINST THE JUDGE HE VOTED AGAINST LAST, and the moment that one
+    /// run goes cold.
+    ///
+    ///   • a man who has never voted is quoted nought, which is true for every
+    ///     judge;
+    ///   • a man whose last vote is older than the silence window is quoted
+    ///     nought, which is true for THAT judge and for any judge he has not
+    ///     voted against — but NOT necessarily for a third man he was working
+    ///     on earlier in the window;
+    ///   • a man who voted twice against A and once against B is quoted B's
+    ///     rung. His next vote against A costs MORE than the card says.
+    ///
+    /// So the number can UNDERSTATE and cannot overstate, for the pair it
+    /// names. A screen that prints it as "your next vote costs $20" is saying
+    /// something not quite true; the honest wording names the man — "your next
+    /// vote against this judge" — and that is a browser change this facet
+    /// cannot make and does not pretend to have made.
+    ///
+    /// ⚠️ NO NEW SELECTOR WAS ADDED FOR THE COMPLETE ANSWER, AND THAT WAS A
+    /// DECISION. A view taking (voter, judge) would be exact, and one new door
+    /// on this diamond has already cost 126 red scenes across 18 rehearsal
+    /// stands and a day of work. The tuple here is unchanged in arity and in
+    /// order, so no reader of it moves at all.
+    ///
+    /// ⚠️ IT IS QUOTED THROUGH THE LADDER THAT CHARGES IT
+    /// (`ArbiterRegistryStorage.appealVoteQuoteFor`, which is
+    /// `appealVoteFeeAgainst` with the last target filled in) and never
+    /// recomputed here. A second copy of the ladder would be a threshold the
+    /// screen keeps its own copy of, which is the seam that parted once already
+    /// when a screen hid the overturn rate at four while the chain removed at
+    /// three.
+    ///
+    /// ⚠️ AND IT ANSWERS FOR THE ADDRESS IN THE ARGUMENT, NOT FOR THE CALLER.
+    /// That is the whole reason the quote lives on a view that already takes
+    /// the arbiter: the browser reads prices like this with no account — an
+    /// `eth_call` with no `from` arrives with a zero sender — so a quote keyed
+    /// on the sender would show nought to everybody while the charge stayed
+    /// real.
+    ///
+    /// ⚠️ ZERO IN `appealVoteFreeAt` MEANS "NOTHING TO WAIT FOR", not "free
+    /// now" and not "a date in the past": it is the answer whenever the next
+    /// vote is already free, which is the same shape `getAppealPanel` uses for
+    /// `seatsOpenAt`. A screen that printed the raw moment would show a man a
+    /// date he has already passed.
+    ///
     /// A function's selector does not depend on its return type — widening the
-    /// tuple leaves the deployment cascade alone.
+    /// tuple leaves the deployment cascade alone. What it does NOT leave alone,
+    /// measured rather than assumed: every Solidity caller that destructures
+    /// this tuple stops compiling until it is widened too (the arity has to
+    /// match exactly, so no reader can silently take one field for another),
+    /// and on the browser's side the ABI census that holds this return list
+    /// against this source goes red until the description there is widened as
+    /// well. Both halves of that seam have a lock; neither can move in silence.
     ///
     /// ⚠️ THIS USED TO SAY "the function has zero readers today (checked by grep
     /// over the web client's source), there is nothing to break" — and it went
@@ -2241,10 +2343,14 @@ contract ArbiterAccountabilityFacet {
         bool    hasLiveRemovalProposal,
         uint256 removalCount,
         uint256 lastRemovalAt,
-        uint8   lastRemovalCause
+        uint8   lastRemovalCause,
+        uint256 appealVoteFee,
+        uint256 appealVoteFreeAt
     ) {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         ReputationStorage.Data storage rep = ReputationStorage.data();
+        (uint256 voteFee, uint256 voteFreeAt) =
+            ArbiterRegistryStorage.appealVoteQuoteFor(d, arbiter);
         return (
             rep.xp[arbiter],
             rep.cleanStreak[arbiter],
@@ -2259,7 +2365,9 @@ contract ArbiterAccountabilityFacet {
             hasLiveProposal(arbiter),
             d.removalCount[arbiter],
             d.lastRemovalAt[arbiter],
-            d.lastRemovalCause[arbiter]
+            d.lastRemovalCause[arbiter],
+            voteFee,
+            voteFreeAt
         );
     }
 

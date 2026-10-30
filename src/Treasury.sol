@@ -576,7 +576,13 @@ contract Treasury {
         // transaction, and one gasleft() tells those apart. The same selector,
         // in the same transaction and the same state, could answer
         // vaultShortfall() honestly and then eat everything here - measured in
-        // test/TreasuryDiamondGasCaps.t.sol (OPEN-ITEMS item 115).
+        // test/TreasuryDiamondGasCaps.t.sol. The debt this contract still
+        // carries is the OTHER hand-off: distribute() funds the vault from
+        // inside itself with a raw call(gas(), ...), which hands the facet
+        // 63/64 of whatever is left. Measured on 4 September 2026 against a
+        // facet that expands memory instead of answering: an honest
+        // distribute() costs 128 033 gas, and against that burner it DIES at a
+        // 200 000-300 000 budget and eats 4 929 085 of a five-million one.
         uint256 vaultBefore = _requireDiamondWord(IHexsealDiamond.getVaultBalance.selector);
 
         // The reserve shrinks BEFORE the external call, and the quantity
@@ -828,8 +834,10 @@ contract Treasury {
     /// revert on a broken facet, which is the right verdict -- but only after
     /// the facet has already eaten 63/64 of the gas offered, and no revert
     /// gives that back. The verdict was right and the cost was unbounded; this
-    /// keeps the verdict and bounds the cost (OPEN-ITEMS item 115, the same
-    /// class as item 113 on Agreement).
+    /// keeps the verdict and bounds the cost. What is NOT bounded by it is the
+    /// raw call(gas(), ...) distribute() makes at the vault step, and the same
+    /// class of unbounded hand-off stands in Agreement; both are known and
+    /// neither is capped here.
     function _requireDiamondWord(bytes4 selector) private view returns (uint256) {
         (bool ok, uint256 word) = _readDiamondWord(selector);
         if (!ok) revert DiamondReadFailed(selector);

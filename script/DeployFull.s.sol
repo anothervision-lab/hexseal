@@ -186,6 +186,7 @@ import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import "../src/SVGRenderer.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract DeployFull is Script {
 
@@ -275,6 +276,7 @@ contract DeployFull is Script {
         ArbiterVaultFacet      vaultFacet   = new ArbiterVaultFacet();
         ArbiterAccountabilityFacet accFacet = new ArbiterAccountabilityFacet();
         ArbiterApplicationsFacet appFacet = new ArbiterApplicationsFacet();
+        ArbiterAppealFacet     appealFacet  = new ArbiterAppealFacet();
         TreasuryLinkFacet      treasuryLink = new TreasuryLinkFacet();
         JobReceiptFacet        receiptFacet = new JobReceiptFacet();
         ReputationFacet        repFacet     = new ReputationFacet();
@@ -292,6 +294,7 @@ contract DeployFull is Script {
         console.log("ArbiterVaultFacet:    ", address(vaultFacet));
         console.log("ArbiterAccountabilityFacet:", address(accFacet));
         console.log("ArbiterApplicationsFacet:", address(appFacet));
+        console.log("ArbiterAppealFacet:   ", address(appealFacet));
         console.log("TreasuryLinkFacet:    ", address(treasuryLink));
         console.log("JobReceiptFacet:      ", address(receiptFacet));
         console.log("ReputationFacet:      ", address(repFacet));
@@ -352,7 +355,8 @@ contract DeployFull is Script {
             address(appFacet),
             address(treasuryLink),
             address(receiptFacet),
-            address(repFacet)
+            address(repFacet),
+            address(appealFacet)
         );
 
         IDiamondCut(address(diamond)).diamondCut(cuts2, address(0), "");
@@ -455,9 +459,15 @@ contract DeployFull is Script {
         address applicationsFacetAddr,
         address treasuryLinkFacetAddr,
         address receiptFacetAddr,
-        address reputationFacetAddr
+        address reputationFacetAddr,
+        // ⚠️ APPENDED AT THE END ON 15 OCTOBER 2026, and the position is the
+        // whole point: thirty-nine call sites in thirty-seven test files pass
+        // these addresses POSITIONALLY, so a tenth parameter anywhere but last
+        // would have silently re-bound nine of them. Appended, every existing
+        // call gains one argument and keeps the nine it had.
+        address appealFacetAddr
     ) public pure returns (IDiamondCut.FacetCut[] memory cuts) {
-        cuts = new IDiamondCut.FacetCut[](9);
+        cuts = new IDiamondCut.FacetCut[](10);
         cuts[0] = _cut(jobBoardAddr,             IDiamondCut.FacetCutAction.Add, jobBoardFacetSelectors());
         cuts[1] = _cut(serviceBoardAddr,         IDiamondCut.FacetCutAction.Add, serviceBoardFacetSelectors());
         cuts[2] = _cut(arbiterFacetAddr,         IDiamondCut.FacetCutAction.Add, arbiterRegistryFacetSelectors());
@@ -469,6 +479,9 @@ contract DeployFull is Script {
         // The money and the plain reads (16 September 2026). A group of its own
         // because a FacetCut element carries exactly ONE address.
         cuts[8] = _cut(arbiterVaultFacetAddr,    IDiamondCut.FacetCutAction.Add, arbiterVaultFacetSelectors());
+        // The appeal (15 October 2026). A group of its own for the same reason
+        // the vault has one: a FacetCut element carries exactly ONE address.
+        cuts[9] = _cut(appealFacetAddr,          IDiamondCut.FacetCutAction.Add, arbiterAppealFacetSelectors());
     }
 
     // ── Per-facet selector arrays (ground truth: `forge inspect <Facet> methodIdentifiers`) ──
@@ -540,9 +553,11 @@ contract DeployFull is Script {
     // is now a debt to the protocol rather than a person's locked refund;
     // 23 -> 27 on 3 September 2026: the emergency brake, decision 17;
     // 27 -> 28 on 3 September 2026: MAX_FEE_BPS, the fee ceiling that used to be
-    // a bare literal written twice — item 138)
+    // a bare literal written twice — item 138;
+    // 28 -> 33 on 12 October 2026: the deal cap, a growing ceiling on one
+    // deal's escrow — see the five lines at the end of the list)
     function factoryFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](28);
+        sels = new bytes4[](33);
         sels[0]  = FactoryFacet.initFactory.selector;
         sels[1]  = FactoryFacet.deployAgreement.selector;
         sels[2]  = FactoryFacet.deployAndFund.selector;
@@ -591,6 +606,25 @@ contract DeployFull is Script {
         // is what goes stale on the next cut. Same spelling-out as the line
         // above, and for the same reason.
         sels[27] = bytes4(keccak256("MAX_FEE_BPS()"));
+        // ---- THE DEAL CAP, 12 October 2026 ----
+        //
+        // A fresh diamond has to carry all five, and ONE OF THEM IS NOT A
+        // CONVENIENCE: `getAgreementPotCeiling` is staticcalled by every
+        // Agreement clone on every top-up, and a clone that cannot read its own
+        // ceiling refuses the top-up by name (`PotCeilingUnavailable`) --
+        // because a non-answer must LOCK, never OPEN. A diamond that mounted
+        // the other four and forgot this one would take top-ups from nobody,
+        // on any deal, and EIP-1167 means no later implementation reaches the
+        // clones already alive.
+        //
+        // `liftDealCap` is the one-way button: nothing in this repository
+        // writes the flag back to false, so undoing it takes a visible
+        // `diamondCut` rather than a quiet setter.
+        sels[28] = FactoryFacet.liftDealCap.selector;
+        sels[29] = FactoryFacet.getDealCap.selector;
+        sels[30] = FactoryFacet.getAgreementPotCeiling.selector;
+        sels[31] = FactoryFacet.getSettledVolume.selector;
+        sels[32] = FactoryFacet.isDealCapLifted.selector;
     }
 
     // JobBoardFacet — 16 selectors (13 -> 16 on 18 September 2026, "an arbiter
@@ -649,7 +683,17 @@ contract DeployFull is Script {
     }
 
     // ArbiterRegistryFacet — count by the `new bytes4[](n)` literal below, not by
-    // this line. 59 → 31 on 16 September 2026: twenty-eight selectors moved to
+    // this line.
+    //
+    // 33 → 27 on 15 OCTOBER 2026: the appeal became a facet of its own because
+    // this one stood at 23 107 bytes with 1 469 left under EIP-170. Six
+    // selectors moved to `arbiterAppealFacetSelectors()`, NOT ONE SIGNATURE
+    // CHANGED, and the diamond's total is unmoved (272 before, 272 after) —
+    // only the address behind those six does. The tree therefore has FIFTEEN
+    // facets while the chain has fourteen, which is what
+    // `DeployFullMatchesChain._pendingFacetSplits()` exists to say out loud.
+    //
+    // 59 → 31 on 16 September 2026: twenty-eight selectors moved to
     // ArbiterVaultFacet (the EIP-170 split — the facet stood 44 bytes under the
     // ceiling). NOT ONE SIGNATURE CHANGED, so the diamond's total is the same
     // before and after; only the address behind those twenty-eight moved.
@@ -685,7 +729,7 @@ contract DeployFull is Script {
         // `ArbiterSplitRig._mountRemovedVerdictHandDoors`. Those censuses are older
         // than the cut and route all three for ever, which is why that is a permanent
         // reconciliation and not an allowance waiting to be deleted.
-        sels = new bytes4[](30);
+        sels = new bytes4[](27);
 
         // DAO mode
         sels[0] = ArbiterRegistryFacet.activateDAO.selector;
@@ -705,7 +749,7 @@ contract DeployFull is Script {
         // 18 September 2026). It sits beside the two doors above because it is
         // the third answer to "who ends a claim": its owner inside the window,
         // the deal on a finalized verdict, and — past the window — anybody.
-        sels[28] = ArbiterRegistryFacet.abandonClaim.selector;
+        sels[25] = ArbiterRegistryFacet.abandonClaim.selector;
 
         // The verdict
         sels[9] = ArbiterRegistryFacet.submitVerdict.selector;
@@ -713,17 +757,20 @@ contract DeployFull is Script {
         sels[11] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
         sels[12] = ArbiterRegistryFacet.clearStuckVerdict.selector;
 
-        // The appeal
-        sels[13] = ArbiterRegistryFacet.raiseAppeal.selector;
-        sels[14] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        sels[15] = ArbiterRegistryFacet.resolveAppeal.selector;
+        // ⚠️ THE APPEAL IS NOT HERE ANY MORE (15 October 2026). Six selectors
+        // moved to `arbiterAppealFacetSelectors()` below — raiseAppeal,
+        // voteToOverturn, resolveAppeal, getAppealPanel, summonAppealPanel and
+        // getAppealSummons — and the indices of this array were renumbered to
+        // 0..26 with them. NOT ONE SIGNATURE CHANGED, so the diamond's total is
+        // the same before and after and the cut that lands it is Replace plus
+        // Replace; only the address behind those six moves.
 
         // Handing over the DAO address in two steps (26 August 2026): this is the
         // PROPOSAL, and the rights pass only when the named address sends
         // acceptDAOAddress() itself. The two READS of that handover
         // (getDAOAddress, getPendingDAOAddress) moved to ArbiterVaultFacet.
-        sels[16] = ArbiterRegistryFacet.setDAOAddress.selector;
-        sels[17] = ArbiterRegistryFacet.acceptDAOAddress.selector;
+        sels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
+        sels[14] = ArbiterRegistryFacet.acceptDAOAddress.selector;
 
         // The three CONSTANT getters that did not move with the rest of the reads,
         // and that is not an oversight: each reads a private constant that this
@@ -733,33 +780,84 @@ contract DeployFull is Script {
         // while the live rule applies the original. Same reasoning as the
         // 16 August split, same five constants, written out in the VIEWS header of
         // the facet itself.
-        sels[18] = ArbiterRegistryFacet.isDaoActive.selector;
-        sels[19] = ArbiterRegistryFacet.getMinXPToRegister.selector;
-        sels[20] = ArbiterRegistryFacet.getDaoThreshold.selector;
-        sels[21] = ArbiterRegistryFacet.getMaxArbiterMistakes.selector;
-        sels[22] = ArbiterRegistryFacet.getNoResponseFloor.selector;
-        sels[23] = ArbiterRegistryFacet.getMaxClaimsPerArbiter.selector;
+        sels[15] = ArbiterRegistryFacet.isDaoActive.selector;
+        sels[16] = ArbiterRegistryFacet.getMinXPToRegister.selector;
+        sels[17] = ArbiterRegistryFacet.getDaoThreshold.selector;
+        sels[18] = ArbiterRegistryFacet.getMaxArbiterMistakes.selector;
+        sels[19] = ArbiterRegistryFacet.getNoResponseFloor.selector;
+        sels[20] = ArbiterRegistryFacet.getMaxClaimsPerArbiter.selector;
 
         // getChiefBloc calls the private _chiefBloc that addArbiter holds; moving
         // it would cost a second copy of the body.
-        sels[24] = ArbiterRegistryFacet.getChiefBloc.selector;
+        sels[21] = ArbiterRegistryFacet.getChiefBloc.selector;
 
         // The arbiter's chat keys (9 August 2026) — the WRITE. The reads live in
         // ArbiterAccountabilityFacet.
-        sels[25] = ArbiterRegistryFacet.setArbiterChatKey.selector;
+        sels[22] = ArbiterRegistryFacet.setArbiterChatKey.selector;
 
         // The record "asked, got no answer" and the presentation digest
         // (14 August 2026) — again only the WRITES; five readers of the group moved
         // to ArbiterAccountabilityFacet on 16 August 2026.
-        sels[26] = ArbiterRegistryFacet.recordNoResponse.selector;
-        sels[27] = ArbiterRegistryFacet.recordPresentationDigest.selector;
+        sels[23] = ArbiterRegistryFacet.recordNoResponse.selector;
+        sels[24] = ArbiterRegistryFacet.recordPresentationDigest.selector;
 
-        // What an appeal needs from the corps: eligible, required, cast
-        // (18 September 2026). It stays in this facet rather than moving to the
-        // reads in ArbiterVaultFacet because it shares the private eligibility
-        // count with raiseAppeal, and a second copy of that count is exactly
-        // the mirror this rule must not have.
-        sels[29] = ArbiterRegistryFacet.getAppealPanel.selector;
+        // The second half of the entry test, readable BEFORE the button is
+        // pressed (12 October 2026). The entrance stopped asking only "how
+        // many clean closes" and started asking "and how long did the run
+        // take" — and `MIN_STREAK_SPAN_TO_REGISTER` is private while
+        // `streakClockStartedAt` is written by ReputationFacet and read by
+        // nothing outside the diamond. Without this selector a candidate with
+        // five clean closes saw "5 of 5" and a button that refused him, which
+        // is the refusal nobody could predict that the deal cap taught us to
+        // stop shipping. It sits on THIS facet, beside the door it describes,
+        // so the screen's two numbers and the door's two numbers come from one
+        // constant and one field and cannot part.
+        sels[26] = ArbiterRegistryFacet.getStreakClock.selector;
+
+    }
+
+    // ArbiterAppealFacet — 6 selectors, carved out of ArbiterRegistryFacet on
+    // 15 October 2026 for room under EIP-170 (23 107 bytes, 1 469 to spare;
+    // 18 014 and 6 684 after, with 6 562 and 17 892 to spare).
+    //
+    // ⚠️ EVERY SIGNATURE IS UNCHANGED, and that is the point: a selector is
+    // derived from the signature, so `ArbiterAppealFacet.raiseAppeal.selector`
+    // here and the keccak literal every historical script in this folder now
+    // spells it with are the same four bytes. The frontend, the relayer
+    // and the subgraph see no difference at all — a facet is a row in the
+    // proxy's routing table, not an endpoint.
+    //
+    // The line is one sentence: THE REGISTRY KEEPS EVERY DOOR THAT DECIDES A
+    // DISPUTE OR CHANGES WHO IS AN ARBITER; THIS FACET TAKES THE DOORS OF
+    // ONE APPEAL. What they still share with the registry — requireNotSuspended,
+    // softTransfer, recordArbiterMistake, suspendAndAccuse, FINALIZE_DELAY and
+    // MAX_ARBITER_MISTAKES — lives in `ArbiterRegistryStorage`, in one
+    // declaration, so neither facet can drift from the other.
+    //
+    // ⚠️ SEVEN SINCE 17 OCTOBER 2026, AND IT WAS SIX FOR TWO DAYS. The panel
+    // got a second thing it can do — `replyNoOverturn`, the answer that asks
+    // for no overturn — and a door the fresh deploy does not mount is a door
+    // nobody can press on a chain built from this script. Every signed cut in
+    // this folder that carries the appeal facet in a `Replace` group counts
+    // these by hand, so the pins in their rehearsals moved in the same commit.
+    function arbiterAppealFacetSelectors() public pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](7);
+
+        // Raising it, and the lot that summons the panel. The lot's two doors
+        // were the newest selectors on the registry (decision 177, 14 October
+        // 2026) and they are a day old here.
+        sels[0] = ArbiterAppealFacet.raiseAppeal.selector;
+        sels[1] = ArbiterAppealFacet.summonAppealPanel.selector;
+        sels[2] = ArbiterAppealFacet.getAppealSummons.selector;
+
+        // Voting, reading the panel, and settling.
+        sels[3] = ArbiterAppealFacet.voteToOverturn.selector;
+        sels[4] = ArbiterAppealFacet.getAppealPanel.selector;
+        sels[5] = ArbiterAppealFacet.resolveAppeal.selector;
+
+        // Answering the summons without asking for an overturn — the act the
+        // panel's wage is paid for just as much as a vote (17 October 2026).
+        sels[6] = ArbiterAppealFacet.replyNoOverturn.selector;
     }
 
     // ArbiterVaultFacet — count by the `new bytes4[](n)` literal below.
@@ -778,7 +876,7 @@ contract DeployFull is Script {
     // subgraph see no difference at all — a facet is a row in the proxy's routing
     // table, not an endpoint.
     function arbiterVaultFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](37);
+        sels = new bytes4[](41);
 
         // Rewards
         sels[0] = ArbiterVaultFacet.withdrawArbiterReward.selector;
@@ -839,6 +937,20 @@ contract DeployFull is Script {
         sels[34] = ArbiterVaultFacet.withdrawCaseBond.selector;
         sels[35] = ArbiterVaultFacet.getCaseBond.selector;
         sels[36] = ArbiterVaultFacet.getJudgingCount.selector;
+        // What that bond COSTS, quoted before the case is taken (20 October
+        // 2026). `getCaseBond` above reads the record a claim already wrote and
+        // answers nought until then, so until this door there was no way to ask
+        // what the claim would charge — and the screen that had to ask read the
+        // APPEAL PRICE instead, which is a different number below a 20 USDC pot.
+        sels[37] = ArbiterVaultFacet.quoteCaseBond.selector;
+        // The dispute fee taken AT THE DOOR (20 October 2026): the clone's two
+        // calls — take it from the opener, and send it where the dispute's
+        // ending sends it — plus the read a screen needs to say whose money is
+        // sitting here. Neither of the first two is callable by a wallet: both
+        // refuse anything but a registered agreement.
+        sels[38] = ArbiterVaultFacet.holdDisputeFee.selector;
+        sels[39] = ArbiterVaultFacet.settleDisputeFee.selector;
+        sels[40] = ArbiterVaultFacet.getHeldDisputeFee.selector;
     }
 
     // ArbiterAccountabilityFacet — 35 selectors (the number on this line read "31"

@@ -47,6 +47,14 @@ contract AgreementPackingGasTest is PackingFixture {
         a.markDone();
         total += g - gasleft();
 
+        // ⚠️ THE DOOR CHARGE IS ARMED OUTSIDE THE MEASUREMENT, AND THE CALL
+        // ITSELF IS NOT (20 October 2026). `raiseDispute` now pulls the dispute
+        // fee through the diamond, so the figure this step contributes grew by
+        // a cold `transferFrom` plus the stub's two writes. The mint and the
+        // approve are the party's own earlier transactions and belong outside
+        // the window; the pull is part of pressing the button and belongs
+        // inside it.
+        _armDoorCharge(CLIENT);
         vm.cool(address(a));
         vm.prank(CLIENT);
         g = gasleft();

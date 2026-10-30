@@ -35,6 +35,7 @@ import "../src/facets/DealMetadataFacet.sol";
 import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract AgreementHandInSignalUpgradeTest is Test {
     UpgradeAgreementHandInSignal internal upgrade;
@@ -178,7 +179,8 @@ contract AgreementHandInSignalUpgradeTest is Test {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

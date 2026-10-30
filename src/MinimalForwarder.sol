@@ -13,11 +13,17 @@ contract MinimalForwarder is EIP712 {
         uint256 value;
         uint256 gas;
         uint256 nonce;
+        /// The last block timestamp at which this request may still execute.
+        /// `uint48` rather than `uint256` on purpose: it is the width
+        /// OpenZeppelin's `ERC2771Forwarder` uses for the same field, so a
+        /// signature produced for one shape is at least shaped like the other,
+        /// and 2^48 seconds reaches the year 8.9 million.
+        uint48 deadline;
         bytes data;
     }
 
     bytes32 private constant _TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     /// The maximum number of bytes copied out of the callee's return data.
@@ -45,6 +51,7 @@ contract MinimalForwarder is EIP712 {
                 req.value,
                 req.gas,
                 req.nonce,
+                req.deadline,
                 keccak256(req.data)
             ))
         ).recover(signature);
@@ -54,6 +61,27 @@ contract MinimalForwarder is EIP712 {
     function execute(ForwardRequest calldata req, bytes calldata signature)
         external payable returns (bool success, bytes memory retdata)
     {
+        // ⚠️ FIRST, AND BEFORE ecrecover, BECAUSE IT IS THE ONLY GATE THAT COSTS
+        // NOTHING. A request whose window has closed is refused on one calldata
+        // load and one comparison, so a stranger spraying expired requests at
+        // this contract cannot buy a signature recovery with them.
+        //
+        // WHAT THIS CHECK IS FOR, and the nonce does NOT already do it. The
+        // counter only guarantees that a signature dies once the signer's NEXT
+        // gasless action lands. Somebody who signs and then walks away -- closes
+        // the tab, loses the phone, changes his mind -- never takes that next
+        // action, so his signature stayed executable by whoever held it for as
+        // long as the forwarder lived. That is the hole this field closes, and
+        // the reason the typehash changed with it: a signature made over the old
+        // six-field shape does not recover to its signer here any more, which is
+        // not a side effect of the fix but half of it.
+        //
+        // `<=` and not `<`: the deadline is the LAST second at which the request
+        // is still good, not the first at which it is stale. Same reading as
+        // `ERC2771Forwarder._validate` (`request.deadline >= block.timestamp`),
+        // and an off-by-one the other way would refuse a request signed a
+        // moment ago. Locked by testD2RequestAtItsExactDeadlineStillPasses.
+        require(block.timestamp <= req.deadline, "MinimalForwarder: request expired");
         require(verify(req, signature), "MinimalForwarder: signature does not match request");
         require(_nonces[req.from] == req.nonce, "MinimalForwarder: nonce mismatch");
         // Without this check a call with req.value > msg.value is paid out of the

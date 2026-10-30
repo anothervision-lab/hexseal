@@ -131,6 +131,9 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// are not touched. What changed is only the question "what does the
     /// registry facet implement", and since the split the honest answer is the
     /// UNION of the two, which is byte for byte the set the single facet had.
+    string internal constant APPEAL_ARTIFACT =
+        "out/ArbiterAppealFacet.sol/ArbiterAppealFacet.json";
+
     string internal constant VAULT_ARTIFACT =
         "out/ArbiterVaultFacet.sol/ArbiterVaultFacet.json";
 
@@ -455,8 +458,26 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// either way. Read out of the two artifacts rather than frozen as a
     /// literal, so a function the registry gains before the split cut lands is
     /// still noticed.
+    /// ⚠️ THREE ARTIFACTS SINCE 15 OCTOBER 2026, WHERE THE PARAGRAPH ABOVE
+    /// SAYS TWO, and the move is the one that paragraph already sanctions: this
+    /// function was widened from ONE artifact to TWO after the September split
+    /// for exactly this reason, and it reads "what the facet THIS CUT MOUNTED
+    /// implements today" rather than a frozen literal. The appeal became
+    /// ArbiterAppealFacet -- six selectors carved out of ArbiterRegistryFacet,
+    /// which stood 1 469 bytes under EIP-170 -- and those six are part of what
+    /// the group this cut mounted implements today, on a third contract. Left
+    /// at two, every allowance naming one of the six would read as stale.
+    ///
+    /// ⚠️ WIDENING AN ABI SOURCE BUYS THE RISK THAT IT STOPS
+    /// DISCRIMINATING. The probe for that is in the stand:
+    /// test_APhantomInTheWidenedAbiSourceIsStillRefused requires a selector no
+    /// facet implements to be refused by the same arm, and one of the six to be
+    /// found, so the widening cannot be a blanket pass.
     function registryFacetAbi() public view returns (bytes4[] memory) {
-        return _concat(artifactSelectors(REGISTRY_ARTIFACT), artifactSelectors(VAULT_ARTIFACT));
+        return _concat(
+            _concat(artifactSelectors(REGISTRY_ARTIFACT), artifactSelectors(VAULT_ARTIFACT)),
+            artifactSelectors(APPEAL_ARTIFACT)
+        );
     }
 
     function artifactSelectors(string memory artifactPath) public view returns (bytes4[] memory out) {
@@ -752,9 +773,17 @@ contract UpgradeDisputeVaultDiscount is Script {
         sels[15] = ArbiterRegistryFacet.clearStuckVerdict.selector;
 
         // Appeal
-        sels[16] = ArbiterRegistryFacet.raiseAppeal.selector;
-        sels[17] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        sels[18] = ArbiterRegistryFacet.resolveAppeal.selector;
+        sels[16] = bytes4(keccak256("raiseAppeal(address)"));
+        // ⚠️ THE OLD FOUR BYTES, AS A LITERAL, BECAUSE THIS SCRIPT IS A
+        // RECORD OF A CUT THAT WENT ON CHAIN. The door was
+        // `voteOnAppeal(address,bool)` 0xc9bb9cdd when this group was
+        // signed; decision 177 renamed it to `voteToOverturn(address)`
+        // on 14 October 2026 and the chain will not route the new bytes
+        // until the cut that carries them. A `Replace` group naming a
+        // selector the diamond does not route REVERTS AND TAKES THE
+        // WHOLE CUT, so this line may not follow the tree's symbol.
+        sels[17] = bytes4(0xc9bb9cdd);
+        sels[18] = bytes4(keccak256("resolveAppeal(address)"));
 
         // Rewards
         sels[19] = ArbiterVaultFacet.withdrawArbiterReward.selector;
@@ -913,7 +942,7 @@ contract UpgradeDisputeVaultDiscount is Script {
     // ════════════════════════════════════════════════════════════════════
 
 
-    /// ⚠️ THE THREE DOORS THIS FACET LOST AFTER THIS CUT WAS SIGNED
+    /// ⚠️ THE FOUR DOORS THIS FACET HAS LOST SINCE THIS CUT WAS SIGNED
     /// (9 October 2026): `overturnVerdict(address,bool)`, `freezeVerdict(address)`
     /// and `unfreezeVerdict(address)`, the governance hand over a verdict.
     ///
@@ -927,8 +956,18 @@ contract UpgradeDisputeVaultDiscount is Script {
     /// leaving still reds, and so does one of these three coming back without
     /// this exception going with it. The bytes are written out because there is
     /// no `.selector` left to take -- the functions are not in this checkout.
-    function sinceRemovedFromRegistry() public pure returns (bytes4[3] memory s) {
-        s = [bytes4(0x42a71c6c), bytes4(0x5533316c), bytes4(0x69315118)];
+    ///
+    /// ⚠️ AND THE FOURTH, 14 OCTOBER 2026 (decision 177):
+    /// `voteOnAppeal(address,bool)` 0xc9bb9cdd. The appeal vote lost its second
+    /// direction, so the door was renamed `voteToOverturn(address)` and its
+    /// selector changed with its signature. The chain still routes the old four
+    /// bytes -- they leave it only in the cut that carries this facet, which
+    /// therefore needs a `Remove` group and an `Add` group where this one had
+    /// neither. The exception is extended rather than the Replace list being
+    /// rewritten, which is what the paragraph above says to do when a fourth
+    /// door leaves.
+    function sinceRemovedFromRegistry() public pure returns (bytes4[4] memory s) {
+        s = [bytes4(0x42a71c6c), bytes4(0x5533316c), bytes4(0x69315118), bytes4(0xc9bb9cdd)];
     }
 
     /// `_assertSameSet` with that one exception allowed on the Replace/Add list.
@@ -936,10 +975,10 @@ contract UpgradeDisputeVaultDiscount is Script {
         internal
         pure
     {
-        bytes4[3] memory gone = sinceRemovedFromRegistry();
+        bytes4[4] memory gone = sinceRemovedFromRegistry();
         require(
             mine.length == theirs.length + gone.length,
-            string.concat("pre-flight: ", label, " - this cut and the compiled facet disagree on how many functions it has, beyond the three doors removed on 9 October 2026")
+            string.concat("pre-flight: ", label, " - this cut and the compiled facet disagree on how many functions it has, beyond the four doors this facet has lost since")
         );
         for (uint256 i = 0; i < theirs.length; i++) {
             bool found;

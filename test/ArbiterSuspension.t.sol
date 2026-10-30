@@ -677,7 +677,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
             uint256 removalCount,
             uint256 lastRemovalAt,
             uint8   lastRemovalCause
-        ) = acc.getArbiterStanding(arbiter);
+        , , ) = acc.getArbiterStanding(arbiter);
 
         assertEq(xp, 0);
         assertEq(cleanStreak, 0);
@@ -772,7 +772,7 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
             uint256 removalCount,
             uint256 lastRemovalAt,
             uint8   lastRemovalCause
-        ) = acc.getArbiterStanding(arbiter);
+        , , ) = acc.getArbiterStanding(arbiter);
 
         assertEq(xp, 501, "xp");
         assertEq(cleanStreak, 502, "cleanStreak");
@@ -1041,6 +1041,123 @@ contract ArbiterSuspensionTest is Test, ArbiterTwoFacetBench {
         // hand the press back by way of the automatic write.
         vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
         acc.suspendArbiter(arbiter);
+    }
+
+    // ============================================================
+    //  THE HOLD ON A VERDICT HAS AN END (owner's decision, 16 October 2026)
+    //
+    //  The gate in `finalizeVerdict` asks about THE VERDICT'S arbiter, and until
+    //  today it asked with no clock on the answer. The lever is bounded in
+    //  PRESSES and not in time: three presses end to end are nine days of a
+    //  stranger's escrow held, then four days open while HAND_SUSPENSION_SILENCE
+    //  runs out, and the cycle repeats for as long as a hand keeps pressing. The
+    //  parties have no second way out -- `Agreement.triggerArbiterTimeout`
+    //  refuses while a verdict is in flight -- so this door is the only one that
+    //  releases the money, and it was the one with no end on it.
+    //
+    //  ⚠️ EVERY NUMBER BELOW IS TYPED OUT BY HAND, as in the section above, and
+    //  here that is load-bearing rather than tidy. The gate reads
+    //  `block.timestamp < submittedAt + X`; a scene that asked the contract for
+    //  its own X would be green at every X, including an X so large that the
+    //  ceiling does not exist. 144 hours is FINALIZE_DELAY (72) plus the hold
+    //  (72), both typed, and if the code moves away from them these two scenes
+    //  must say so.
+    //
+    //  ⚠️ THE PRESSES ARE SET AS LATE AS THE LEVER ALLOWS, which is what makes
+    //  these scenes measure a CEILING rather than a suspension that ran out by
+    //  itself: at 0, 71 and 142 hours after the verdict, every gap inside the
+    //  week of silence, so all three land and the mark they leave reaches
+    //  t0 + 214 hours -- 70 hours PAST the ceiling. Both scenes therefore stand
+    //  on a live suspension, and both assert that rather than assume it.
+    // ============================================================
+
+    /// FINALIZE_DELAY (72 h) + the hold (72 h), from the SUBMISSION of the
+    /// verdict. Typed by hand -- see the banner.
+    uint256 constant HOLD_CEILING = 144 hours;
+
+    /// Where the third press leaves the mark: 142 hours + SUSPENSION_WINDOW
+    /// (72 h). Typed by hand, and deliberately past HOLD_CEILING.
+    uint256 constant HELD_UNTIL = 214 hours;
+
+    /// A submitted verdict with the hand lever spent on its arbiter, pressed as
+    /// late as the ceiling of three allows. Returns the deal and the moment the
+    /// verdict was submitted -- every assertion in both scenes is relative to it.
+    function _verdictHeldByThreePresses()
+        internal
+        returns (MockAgreementForFinalize agreement, uint256 submittedAt)
+    {
+        _makeArbiterReg(arbiter);
+        agreement = new MockAgreementForFinalize(address(0xC9), address(0xE9));
+        _advanceToSubmittedVerdict(agreement, bytes32(uint256(79)));
+        submittedAt = vm.getBlockTimestamp();
+
+        acc.suspendArbiter(arbiter);                 // 1, on the verdict itself
+        vm.warp(submittedAt + 71 hours);
+        acc.suspendArbiter(arbiter);                 // 2
+        vm.warp(submittedAt + 142 hours);
+        acc.suspendArbiter(arbiter);                 // 3, the last one the lever has
+
+        assertEq(
+            acc.getSuspendedUntil(arbiter),
+            submittedAt + HELD_UNTIL,
+            "wrong scene: the third press must leave a mark 70 hours past the ceiling"
+        );
+
+        // The lever is spent, so from here on the only thing that can hold this
+        // verdict is the clock -- and the only thing that can release it, too.
+        vm.expectRevert(bytes(HAND_CEILING_REFUSAL));
+        acc.suspendArbiter(arbiter);
+    }
+
+    /// THE DESIGNATED LOCK for the ceiling itself.
+    ///
+    /// Pressed to the limit, the mark still live and reaching 70 hours further
+    /// -- and the verdict executes. What is proved is THE CLOCK: not that a
+    /// suspension expired (it has not), not that the lever ran out of presses
+    /// (the mark it wrote is still in the future), and not that the press came
+    /// too early to matter (the last one landed two hours before the ceiling).
+    function test_AMaximallyHeldVerdictFinalizesWhenTheCeilingPasses() public {
+        (MockAgreementForFinalize agreement, uint256 submittedAt) = _verdictHeldByThreePresses();
+
+        vm.warp(submittedAt + HOLD_CEILING);
+
+        // The mark is LIVE at this moment, and that is the whole scene: the money
+        // is released by the ceiling, not by the suspension letting go of the man.
+        assertTrue(acc.isSuspended(arbiter), "wrong scene: the suspension must still stand at the ceiling");
+        assertGt(
+            acc.getSuspendedUntil(arbiter),
+            vm.getBlockTimestamp(),
+            "wrong scene: the mark must reach past the ceiling"
+        );
+
+        reg.finalizeVerdict(address(agreement));
+
+        // By CONSEQUENCE and not by a flag, the device the auto-demotion scenes
+        // above use: the verdict really went through.
+        assertEq(acc.getCleanVerdicts(arbiter), 1, "at the ceiling the verdict executes in the ordinary way");
+    }
+
+    /// THE OBVERSE, and without it the scene above does not tell a BOUNDED check
+    /// from a DELETED one.
+    ///
+    /// One second short of the ceiling -- with FINALIZE_DELAY three days past, so
+    /// the suspension is the only thing left in the way -- the money is still
+    /// held, and the refusal carries the arbiter's own deadline, which is what a
+    /// screen reads. The two scenes stand on either side of one second: nothing
+    /// changes between them but the clock this work added.
+    function test_OneSecondShortOfTheCeilingTheSuspensionStillHolds() public {
+        (MockAgreementForFinalize agreement, uint256 submittedAt) = _verdictHeldByThreePresses();
+
+        vm.warp(submittedAt + HOLD_CEILING - 1);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ArbiterRegistryFacet.ArbiterSuspendedError.selector, submittedAt + HELD_UNTIL
+            )
+        );
+        reg.finalizeVerdict(address(agreement));
+
+        assertEq(acc.getCleanVerdicts(arbiter), 0, "nothing executed: the refusal is the whole outcome");
     }
 
     /// Searches `haystack` for `needle`. Used by the refusal test above, because

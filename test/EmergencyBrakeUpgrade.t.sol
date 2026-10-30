@@ -59,6 +59,7 @@ import "../script/DeployFull.s.sol";
 import {UpgradeEmergencyBrake} from "../script/UpgradeEmergencyBrake.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
     UpgradeEmergencyBrake upgrade;
@@ -136,12 +137,38 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
         sels[2] = bytes4(keccak256("getAppliedJobIds(address)"));
     }
 
+    /// THE FIVE THE FACTORY GREW ON 12 OCTOBER 2026, by SIGNATURE TEXT and
+    /// never read off FactoryFacet or any later script's list -- the same
+    /// device as the job board's allowance above, introduced for the same
+    /// reason and on the same terms.
+    ///
+    /// The deal cap: a growing ceiling on one deal's escrow, with a one-way
+    /// button, the three reads an interface needs, and the per-deal ceiling an
+    /// Agreement clone staticcalls on every top-up. This cut is the RECORD of
+    /// what went on chain on 3 September; demanding it mount functions written
+    /// six weeks later would be demanding that the past match the present.
+    /// Leaving them unnamed instead would let the coverage lock below call a
+    /// FactoryFacet with five unmounted functions complete -- five dead doors,
+    /// present in the ABI, routed nowhere, found by the first person whose
+    /// button did nothing.
+    function _grownFactoryAfterThisCut() internal pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](5);
+        sels[0] = bytes4(keccak256("liftDealCap()"));
+        sels[1] = bytes4(keccak256("getDealCap()"));
+        sels[2] = bytes4(keccak256("getSettledVolume()"));
+        sels[3] = bytes4(keccak256("isDealCapLifted()"));
+        sels[4] = bytes4(keccak256("getAgreementPotCeiling(address)"));
+    }
+
     /// The coverage claim with that growth named rather than folded in.
     function _assertListsCoverTheCompiledFacetsAllowingLaterGrowth() internal view {
         _assertSameSet(
-            _concat(upgrade.factoryReplaceSelectors(), upgrade.factoryAddSelectors()),
+            _concat(
+                _concat(upgrade.factoryReplaceSelectors(), upgrade.factoryAddSelectors()),
+                _grownFactoryAfterThisCut()
+            ),
             upgrade.artifactSelectors("out/FactoryFacet.sol/FactoryFacet.json"),
-            "FactoryFacet"
+            "FactoryFacet (this cut's two groups plus the named later growth)"
         );
         _assertSameSet(
             _concat(upgrade.jobBoardReplaceSelectors(), _grownJobBoardAfterThisCut()),
@@ -230,9 +257,18 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
     /// chain census on the other. The script's own list is not consulted, which
     /// is why this test survives a script that files a selector in the wrong
     /// group.
-    function test_TheCompiledFactoryGainsExactlyTheFiveSelectorsThisCutAdds() public view {
+    /// ⚠️ RENAMED AND REWRITTEN ON 12 OCTOBER 2026, and the rename is the
+    /// point rather than tidiness. It used to be called
+    /// `...GainsExactlyTheFiveSelectorsThisCutAdds`, and that premise stopped
+    /// being true: the compiled facet now exposes TEN functions the chain does
+    /// not route -- this cut's five and the deal cap's five, written six weeks
+    /// later. Keeping the old name and widening the number would have left a
+    /// test whose name asserts one thing and whose body checks another, which
+    /// is the shape of lie this whole file exists to catch.
+    function test_TheCompiledFactoryGainsThisCutsFivePlusTheNamedLaterGrowth() public view {
         bytes4[] memory fromArtifact = upgrade.artifactSelectors("out/FactoryFacet.sol/FactoryFacet.json");
         bytes4[] memory mounted = _censusAt(".factorySelectors", ".factoryCount");
+        bytes4[] memory grown = _grownFactoryAfterThisCut();
 
         uint256 unmounted;
         for (uint256 i = 0; i < fromArtifact.length; i++) {
@@ -243,8 +279,29 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
             if (!found) unmounted++;
         }
         assertEq(
-            unmounted, ADDED_SELECTORS,
-            "the compiled FactoryFacet gains a different number of functions than this cut adds"
+            unmounted, ADDED_SELECTORS + grown.length,
+            "the compiled FactoryFacet gains a different number of functions than this cut adds plus the named later growth"
+        );
+
+        // ⚠️ A COUNT AGREES ON A SWAP, so the surplus is also asked BY NAME:
+        // every function the artifact has beyond the census must be one this
+        // cut adds or one this file has named as later growth, and every one of
+        // those must really be in the surplus. That second direction is what
+        // kills a stale allowance instead of letting it sit here forever,
+        // covering the next thing of the same size.
+        bytes4[] memory surplus = new bytes4[](unmounted);
+        uint256 k;
+        for (uint256 i = 0; i < fromArtifact.length; i++) {
+            bool found;
+            for (uint256 j = 0; j < mounted.length; j++) {
+                if (fromArtifact[i] == mounted[j]) { found = true; break; }
+            }
+            if (!found) surplus[k++] = fromArtifact[i];
+        }
+        _assertSameSet(
+            surplus,
+            _concat(upgrade.factoryAddSelectors(), grown),
+            "the artifact's surplus over the census"
         );
     }
 
@@ -381,9 +438,12 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
     function test_TheCutAndTheFreshDeployMountTheSameSets() public {
         DeployFull deploy = new DeployFull();
         _assertSameSet(
-            _concat(upgrade.factoryReplaceSelectors(), upgrade.factoryAddSelectors()),
+            _concat(
+                _concat(upgrade.factoryReplaceSelectors(), upgrade.factoryAddSelectors()),
+                _grownFactoryAfterThisCut()
+            ),
             deploy.factoryFacetSelectors(),
-            "Factory vs DeployFull"
+            "Factory vs DeployFull (plus the named later growth)"
         );
         _assertSameSet(
             _concat(upgrade.jobBoardReplaceSelectors(), _grownJobBoardAfterThisCut()),
@@ -946,6 +1006,10 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
         // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
         // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
         _mountRemovedVerdictHandDoors(address(d), census);
+        // And the appeal vote door under its old name, which left the facet on
+        // 14 October 2026 with decision 177 and leaves the chain in the cut that
+        // carries it. Same reason, same shape: ArbiterSplitRig.
+        _mountRemovedAppealVoteDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(
@@ -1043,7 +1107,8 @@ contract EmergencyBrakeUpgradeTest is BoardsFixture, ArbiterSplitRig {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

@@ -176,6 +176,8 @@ contract AgreementPackingBoundsTest is PackingFixture {
         Agreement a = _fundedClone(365);
         vm.prank(EXECUTOR);
         a.activate();
+        // The dispute door charges its opener since 20 October 2026.
+        _armDoorCharge(CLIENT);
         vm.prank(CLIENT);
         a.raiseDispute();
 
@@ -221,6 +223,7 @@ contract AgreementPackingIndependenceTest is PackingFixture {
         a.markDone();
 
         vm.warp(t3);
+        _armDoorCharge(CLIENT);
         vm.prank(CLIENT);
         a.raiseDispute();
 
@@ -262,6 +265,7 @@ contract AgreementPackingIndependenceTest is PackingFixture {
         a.activate();
 
         vm.warp(t0 + 120);
+        _armDoorCharge(EXECUTOR);
         vm.prank(EXECUTOR);
         a.raiseDispute();
 
@@ -393,6 +397,7 @@ contract AgreementPackedSlotTest is PackingFixture {
         vm.prank(EXECUTOR);
         a.markDone();
         vm.warp(t3);
+        _armDoorCharge(CLIENT);
         vm.prank(CLIENT);
         a.raiseDispute();
         vm.prank(EXECUTOR);

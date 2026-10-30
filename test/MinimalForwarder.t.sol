@@ -58,7 +58,7 @@ contract MinimalForwarderTest is Test {
     address user;
 
     bytes32 constant TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     function setUp() public {
@@ -85,7 +85,7 @@ contract MinimalForwarderTest is Test {
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, digest);
@@ -101,6 +101,7 @@ contract MinimalForwarderTest is Test {
             value: value,
             gas:   1_000_000,
             nonce: forwarder.getNonce(user),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
     }

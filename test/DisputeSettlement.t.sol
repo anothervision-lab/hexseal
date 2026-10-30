@@ -24,6 +24,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/ReputationFacet.sol";
 import "../src/MinimalForwarder.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {DealCapOff} from "./DealCapOff.sol";
 
 // ---------- MOCK USDC ----------
 // Copied from Extras and extended with a per-address blocking switch (imitating
@@ -92,6 +93,51 @@ contract DisputeSettlementTest is Test {
     // getTreasurySlice are added — Extras was written before they existed.
     // DiamondCutFacet is needed for _removeSelectorFromDiamond.
 
+
+    /// ⚠️ ITS OWN FUNCTION SINCE 20 OCTOBER 2026, AND THE REASON IS THE STACK.
+    /// Inline in `setUp`, this list pushed the frame one slot past what via_ir
+    /// can hold once it grew the three doors of the dispute fee -- the error is
+    /// "Variable ... is 1 too deep in the stack" and it names no file. Moving
+    /// the longest list into a frame of its own takes its pointer and its
+    /// twenty-six stores with it. Same remedy, same error, as
+    /// test/Diamond.t.sol and test/MoneyPathBase.sol.
+    function _arbSelsVault() private pure returns (bytes4[] memory sels) {
+        sels = new bytes4[](26);
+        sels[0] = ArbiterVaultFacet.getChiefArbiter.selector;
+        sels[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        sels[2] = ArbiterVaultFacet.getArbiters.selector;
+        sels[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        sels[4] = ArbiterVaultFacet.getClaimCommitment.selector;
+        sels[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        sels[6] = ArbiterVaultFacet.fundVault.selector;
+        sels[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
+        sels[8] = ArbiterVaultFacet.getPendingVerdict.selector;
+        sels[9] = ArbiterVaultFacet.getVaultBalance.selector;
+        sels[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
+        sels[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        sels[12] = ArbiterVaultFacet.creditDisputeFee.selector;
+        sels[13] = ArbiterVaultFacet.getTreasurySlice.selector;
+        sels[14] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        sels[15] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        sels[16] = ArbiterVaultFacet.setArbiterFloor.selector;
+        sels[17] = ArbiterVaultFacet.getArbiterFloor.selector;
+        sels[18] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
+        sels[19] = ArbiterVaultFacet.fundDispute.selector;
+        sels[20] = ArbiterVaultFacet.getDisputeBounty.selector;
+        sels[21] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+        sels[22] = ArbiterVaultFacet.getRefundableBounty.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026), AND THESE
+        // THREE ARE NOT OPTIONAL ON ANY RIG THAT OPENS A DISPUTE.
+        // `Agreement.raiseDispute` calls `holdDisputeFee` and will not open the
+        // dispute if the call fails, so an unmounted selector turns every
+        // disputed scene on this stand into "Diamond: function not found" --
+        // measured on 20 October 2026 as 874 such failures across the tree
+        // before the fixtures were taught the doors.
+        sels[23] = ArbiterVaultFacet.holdDisputeFee.selector;
+        sels[24] = ArbiterVaultFacet.settleDisputeFee.selector;
+        sels[25] = ArbiterVaultFacet.getHeldDisputeFee.selector;
+    }
+
     function setUp() public {
         owner        = address(this);
         client       = address(0x1);
@@ -131,7 +177,7 @@ contract DisputeSettlementTest is Test {
         regSels[12] = RegistryFacet.registerOffer.selector;
         regSels[13] = RegistryFacet.notifyOfferAccepted.selector;
 
-        bytes4[] memory facSels = new bytes4[](14);
+        bytes4[] memory facSels = new bytes4[](15);
         facSels[0]  = FactoryFacet.initFactory.selector;
         facSels[1]  = FactoryFacet.deployAgreement.selector;
         facSels[2]  = FactoryFacet.setRegionFee.selector;
@@ -146,6 +192,13 @@ contract DisputeSettlementTest is Test {
         facSels[11] = FactoryFacet.getUsdc.selector;
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
+        // ⚠️ APPENDED 12 OCTOBER 2026, AND IT IS LOAD BEARING ON EVERY TOP-UP.
+        // `Agreement.proposeExtra` reads the ceiling its pot is held to by
+        // staticcalling this selector on the diamond, and a non-answer LOCKS
+        // the door on purpose (`PotCeilingUnavailable`). Without this line the
+        // pending-extras scene below reverts on the read rather than measuring
+        // what it is about.
+        facSels[14] = FactoryFacet.getAgreementPotCeiling.selector;
 
         bytes4[] memory arbSels = new bytes4[](16);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
@@ -164,30 +217,7 @@ contract DisputeSettlementTest is Test {
         arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
         arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
         arbSels[15] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](23);
-        arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
-        arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
-        arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
-        arbSelsVault[3] = ArbiterVaultFacet.getDisputeClaimer.selector;
-        arbSelsVault[4] = ArbiterVaultFacet.getClaimCommitment.selector;
-        arbSelsVault[5] = ArbiterVaultFacet.withdrawArbiterReward.selector;
-        arbSelsVault[6] = ArbiterVaultFacet.fundVault.selector;
-        arbSelsVault[7] = ArbiterVaultFacet.setRewardPerDispute.selector;
-        arbSelsVault[8] = ArbiterVaultFacet.getPendingVerdict.selector;
-        arbSelsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
-        arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
-        arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
-        arbSelsVault[12] = ArbiterVaultFacet.creditDisputeFee.selector;
-        arbSelsVault[13] = ArbiterVaultFacet.getTreasurySlice.selector;
-        arbSelsVault[14] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
-        arbSelsVault[15] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
-        arbSelsVault[16] = ArbiterVaultFacet.setArbiterFloor.selector;
-        arbSelsVault[17] = ArbiterVaultFacet.getArbiterFloor.selector;
-        arbSelsVault[18] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
-        arbSelsVault[19] = ArbiterVaultFacet.fundDispute.selector;
-        arbSelsVault[20] = ArbiterVaultFacet.getDisputeBounty.selector;
-        arbSelsVault[21] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
-        arbSelsVault[22] = ArbiterVaultFacet.getRefundableBounty.selector;
+        bytes4[] memory arbSelsVault = _arbSelsVault();
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -251,11 +281,68 @@ contract DisputeSettlementTest is Test {
         );
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
         _bondSeat(arbiterAddr);
+
+        // ⚠️ THIS SUITE IS NOT ABOUT THE DEAL CEILING. Its subject is what a
+        // verdict does to the money, and its scenes are written on $30,000 and
+        // $50,000 deals so that a 3% levy and an arbiter's cut come out as
+        // round readable numbers. The ceiling that landed on 12 October 2026
+        // refuses anything over $500 at birth, and those amounts are not
+        // retyped smaller: the expectations beside them are hand-typed
+        // literals, and retyping both halves to make a build pass is how an
+        // expectation stops being independent of the code. The ceiling is
+        // measured in test/DealCap.t.sol.
+        DealCapOff.thisSuiteIsNotAboutTheCeiling(address(diamond));
     }
 
     // ============================================================
     //  HELPERS
     // ============================================================
+
+    /// ⚠️ WHAT THE OPENER GETS BACK ON A TIMEOUT, AND WHY IT APPEARS IN TWENTY
+    /// EXPECTATIONS BELOW (20 October 2026). `raiseDispute` takes
+    /// `disputeFee()` from whoever opens the dispute, and on every road where
+    /// NO VERDICT was written the diamond sends it home again -- the owner's
+    /// decision of 19 October, that the fee is earned by a delivered verdict
+    /// and nothing else.
+    ///
+    /// So on a timeout the opener's purse ends with his share of the escrow
+    /// PLUS this ten dollars. It is written as a named SUM at each site, never
+    /// folded into the escrow figure: the escrow share is what the split rule
+    /// decides and this is his own money coming back, and a reader who cannot
+    /// tell them apart cannot check either.
+    uint256 constant DOOR_CHARGE_HOME = 10_000_000;   // Agreement.DISPUTE_FEE_FLOOR
+
+    /// ⚠️ WHAT THE TREASURY TAKES OUT OF A DISPUTE FEE, AND IT IS A NAMED
+    /// NOUGHT RATHER THAN A BARE `0` (21 October 2026). The owner's decision of
+    /// 20 October: the treasury takes nothing out of arbitration, the WHOLE fee
+    /// is the judge's. A bare zero at these sites reads as an empty counter
+    /// nobody has got round to filling; a name says a decision was taken.
+    ///
+    /// Worked out by hand, and the retired figure first so that the method can
+    /// be checked: on this file's $200 pot the fee used to be 3% of the pot,
+    /// 200_000_000 x 3 / 100 = 6_000_000, of which the treasury took a tenth,
+    /// 6_000_000 / 10 = 600_000 -- which is the literal that stood at every one
+    /// of these sites. The share is nought now, so the same subtraction gives
+    /// 6_000_000 - 6_000_000 = 0 to the treasury and the whole of the fee to
+    /// the judge. (On this pot the fee itself also moved, from 6_000_000 to the
+    /// ten dollar floor above it; the two changes are separate and are derived
+    /// separately at each site.)
+    uint256 constant TREASURY_TAKES_NOTHING = 0;
+
+    /// ⚠️ MINT AND APPROVE EXACTLY THE DOOR CHARGE, IMMEDIATELY BEFORE THE
+    /// PRESS (20 October 2026). `raiseDispute` pulls `disputeFee()` from the
+    /// opener through the diamond, and the parties in this fixture hold NOTHING
+    /// after the hire -- the mint is exactly the deal amount and `fund()` takes
+    /// all of it. Minting a standing float in the hire instead would shift
+    /// every absolute balance this file asserts; minting the exact charge here
+    /// leaves each purse where it was, because the door takes it straight back.
+    ///
+    /// Reading `disputeFee()` decides what to MINT and is never an expectation.
+    function _armTheDoor(address who, Agreement a) internal {
+        uint256 doorCharge = a.disputeFee();
+        usdc.mint(who, doorCharge);
+        vm.prank(who); usdc.approve(address(diamond), doorCharge);
+    }
 
     function _createFundedAgreement(uint256 dealAmount) internal returns (address) {
         vm.prank(client);
@@ -290,11 +377,28 @@ contract DisputeSettlementTest is Test {
     /// commit-reveal — claimDispute() requires a prior commitDisputeClaim() and at
     /// least one block between the commit and the claim (CommitmentTooEarly
     /// otherwise). raiseDispute() takes no arguments.
+    /// ⚠️ OPEN A DISPUTE AND PAY FOR IT, which since 20 October 2026 is one
+    /// act: `raiseDispute` pulls `disputeFee()` out of the opener's wallet
+    /// through the diamond and refuses to open the dispute without it.
+    ///
+    /// The ten dollars are minted and approved here rather than in the hire,
+    /// because the scenes in this file count a party's purse against hand
+    /// literals and an allowance sized for the hire alone answers
+    /// `DisputeFeeNotCovered` at this door.
+    ///
+    /// ⚠️ IT READS `disputeFee()` TO DECIDE WHAT TO MINT, WHICH IS MONEY THE
+    /// RIG SUPPLIES AND NEVER AN EXPECTATION. What the fee IS is measured
+    /// against hand literals in test/SmallDisputeFloor.t.sol; nothing here
+    /// asserts it.
+    function _openTheDispute(address who, Agreement a) internal {
+        _armTheDoor(who, a);
+        vm.prank(who); a.raiseDispute();
+    }
+
     function _activateAndDispute(Agreement a) internal {
         vm.prank(executor);
         a.activate();
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
 
         _claimByArbiter(a);
     }
@@ -378,6 +482,34 @@ contract DisputeSettlementTest is Test {
         }
     }
 
+    /// FeePaid fired with the amount the door took, and FeeSkipped not fired.
+    ///
+    /// ⚠️ THIS IS THE ORDINARY ENDING OF EVERY JUDGED DISPUTE SINCE THE FLOOR
+    /// LANDED (21 October 2026), which is why it needed a check of its own. The
+    /// helper above it describes a pot that pays NOTHING, and no pot reaches
+    /// that state any more: the fee's floor is ten dollars on a pot of 33 base
+    /// units as much as on a pot of $200. `_assertNoDisputeFeeEventEmitted` is
+    /// kept, with its reasoning, as the record of the premise that was retired
+    /// rather than disproved -- it is correct about what the two events mean,
+    /// and it is simply about a fee of nought that cannot now exist.
+    function _assertDisputeFeePaidEmitted(uint256 expectedAmount) internal {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 paidSig    = Agreement.DisputeFeePaid.selector;
+        bytes32 skippedSig = Agreement.DisputeFeeSkipped.selector;
+        bool found;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length == 0) continue;
+            if (logs[i].topics[0] == skippedSig) {
+                fail("DisputeFeeSkipped must not fire when the settlement went through");
+            }
+            if (logs[i].topics[0] == paidSig) {
+                found = true;
+                assertEq(abi.decode(logs[i].data, (uint256)), expectedAmount, "the paid amount must be the fee the door took");
+            }
+        }
+        assertTrue(found, "DisputeFeePaid must fire when the fee reaches the judge");
+    }
+
     // ============================================================
     //  disputeFee() — 3%, no floor, with a cap
     // ============================================================
@@ -385,13 +517,32 @@ contract DisputeSettlementTest is Test {
     /// 3% of the pot, no floor and no rounding up.
     function testDisputeFeeIsThreePercent() public {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
-        assertEq(a.disputeFee(), 6_000_000, "3% of 200 USDC");
+        // ⚠️ THE FLOOR DECIDES ON A $200 POT (20 October 2026): 3% of it is $6,
+        // under the ten dollar floor. The scene keeps its name because the
+        // PERCENTAGE is still the rule above the floor -- measured in
+        // test/SmallDisputeFloor.t.sol at the pot where it takes over -- and
+        // what it holds here is that this pot is not in that band.
+        assertEq(a.disputeFee(), 10_000_000, "the $10 floor decides on a $200 pot: 3% of it is only $6");
     }
 
-    /// There is no floor: on a small deal the fee is small, not $5.
-    function testDisputeFeeHasNoFloor() public {
+    /// ⚠️ THE SCENE WAS `testDisputeFeeHasNoFloor` UNTIL 20 OCTOBER 2026 AND
+    /// IT ASSERTED THE OPPOSITE OF WHAT NOW SHIPS. It read: "there is no floor:
+    /// on a small deal the fee is small, not $5", and held 300 000 -- 3% of a
+    /// $10 pot. The owner's flat price put a TEN DOLLAR floor under it, and the
+    /// floor is safe only because the fee no longer comes out of the escrow: it
+    /// is paid at the door by whoever opens the dispute. On a $10 pot the fee
+    /// is now the whole size of the deal, and none of it is the deal's money.
+    /// ⚠️ AND THE OLD NAME IS CITED OUTSIDE THIS FILE, which the rename does
+    /// not fix. Measured with `grep -rln` over docs/ .claude/ src/ test/
+    /// script/ frontend/ on 20 October 2026, `testDisputeFeeHasNoFloor`
+    /// appears in TWO working documents of the owner's -- a plan and a spec,
+    /// neither of which is in git -- and in nothing that ships. Both now
+    /// point at a scene name that does not exist. They are his documents, so
+    /// they were reported rather than edited; this paragraph is where whoever
+    /// follows either citation lands, instead of on nothing.
+    function testDisputeFeeFloorIsTenDollarsOnASmallDeal() public {
         Agreement a = Agreement(_createFundedAgreement(10_000_000));
-        assertEq(a.disputeFee(), 300_000, "3% of 10 USDC, not a 5 USDC floor");
+        assertEq(a.disputeFee(), 10_000_000, "the floor is ten dollars, where 3% of a $10 pot would be 30 cents");
     }
 
     /// The cap applies to the whole fee.
@@ -400,36 +551,65 @@ contract DisputeSettlementTest is Test {
         assertEq(a.disputeFee(), 500_000_000, "capped at 500 USDC");
     }
 
-    /// The invariant the removed runtime branch `fee < pot` rests on (Agreement.sol,
-    /// the comment above `if (fee > 0)` in resolveDispute): with BPS < 10_000 (100%),
-    /// floor(pot * BPS / 10_000) < pot for any pot >= 1, and DISPUTE_FEE_CAP only
-    /// reduces the fee. Pinned here statically instead of by an unreachable runtime
-    /// check that no input could exercise.
+    /// ⚠️ THE INVARIANT THIS PINNED IS GONE, AND THE PIN IS KEPT FOR A
+    /// NARROWER CLAIM (20 October 2026). It read: with BPS under 100%,
+    /// floor(pot * BPS / 10 000) < pot for any pot, so the removed runtime
+    /// branch `fee < pot` was unreachable. A TEN DOLLAR FLOOR breaks that
+    /// outright -- ten dollars is more than a five dollar pot -- and the branch
+    /// is not needed anyway, because nothing is subtracted from the pot any
+    /// more: `resolveDispute` pays the winner `pot` and the fee was taken at
+    /// the door. What is still worth pinning is the PERCENTAGE staying under
+    /// 100%, because a rate at or above it would make the fee grow without
+    /// bound with the pot.
     function testDisputeFeeBpsIsBelowOneHundredPercent() public {
         Agreement impl = new Agreement();
         assertLt(impl.DISPUTE_FEE_BPS(), 10_000, "BPS must stay under 100% or the removed fee<pot branch becomes reachable");
     }
 
-    /// The pot is so small (33 units) that 3% rounds to zero by floor — not a
-    /// minimum but an honest zero: floor(33 * 300 / 10_000) = 0. Without the
-    /// `fee > 0` gate this would call creditDisputeFee(0), catch ZeroAmount() in the
-    /// try/catch and emit a FALSE DisputeFeeSkipped(0) where nothing was in fact
-    /// skipped — no credit was ever attempted.
-    function testDisputeFeeFloorsToZeroSkipsBothEvents() public {
+    /// ⚠️ THE SCENE WAS `testDisputeFeeFloorsToZeroSkipsBothEvents` UNTIL
+    /// 20 OCTOBER 2026 AND ITS PREMISE NO LONGER EXISTS. It read: a pot of 33
+    /// units makes 3% round to zero by floor, so the fee is an honest nought
+    /// and the `fee > 0` gate stops a false `DisputeFeeSkipped(0)`. A fee of
+    /// nought is unreachable now -- the floor is ten dollars on any pot, and 33
+    /// base units of escrow carry the same ten dollar charge as any other deal.
+    /// What the scene holds instead is the pair that replaced it: the tiniest
+    /// pot that exists still charges the full floor, and the winner still gets
+    /// the whole of his 33 units because the fee never touches the escrow.
+    /// ⚠️ AND THE OLD NAME IS CITED OUTSIDE THIS FILE TOO. Measured the same
+    /// way on the same day, `testDisputeFeeFloorsToZeroSkipsBothEvents`
+    /// appears in one of those same two working documents -- the spec, not
+    /// the plan -- which now points at a name that does not exist. His
+    /// document, reported and not edited.
+    function testTheTiniestPotStillPaysTheFloorAndKeepsItsEscrow() public {
         Agreement a = Agreement(_createFundedAgreement(33));
-        assertEq(a.disputeFee(), 0, "3% of 33 units floors to zero");
+        assertEq(a.disputeFee(), 10_000_000, "33 base units of escrow still carry the ten dollar floor");
         _activateAndDispute(a);
 
         uint256 clientBefore = usdc.balanceOf(client);
 
         vm.recordLogs();
         _submitAndFinalize(a, true);
-        _assertNoDisputeFeeEventEmitted();
+        // ⚠️ THE EVENT PAIR THIS SCENE ASSERTED IS THE WRONG PAIR NOW
+        // (21 October 2026), AND IT IS THE PREMISE THAT MOVED, NOT THE EVENTS.
+        // It called `_assertNoDisputeFeeEventEmitted`, whose subject is a fee of
+        // NOUGHT: 3% of 33 base units is 33 x 300 / 10 000 = 0 by floor
+        // division, the `fee > 0` gate skipped the whole block, and neither
+        // event could fire. A ten dollar floor makes a fee of nought
+        // unreachable on any pot, so what fires here is FeePaid with the floor
+        // in it, and the old helper is kept for the record rather than called.
+        _assertDisputeFeePaidEmitted(10_000_000);
 
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute must still close");
-        assertEq(usdc.balanceOf(client) - clientBefore, 33, "no fee taken, winner gets the whole (tiny) pot");
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "nothing credited");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
+        assertEq(usdc.balanceOf(client) - clientBefore, 33, "the fee never touches the escrow, so the winner gets the whole (tiny) pot");
+        // Worked out by hand. Retired first: fee 3% of 33 = 0, of which 90% to
+        // the judge = 0 and a tenth to the treasury = 0 -- both noughts, and
+        // both for the same reason, which is what made this scene silent.
+        // Now: fee = max($10 floor, 3% of 33 = 0) = 10_000_000, the whole of it
+        // the judge's, 10_000_000 - 10_000_000 = 0 left for the treasury. The
+        // two noughts above have become one nought and one ten dollars, and
+        // they are asserted apart because they are no longer the same fact.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000, "the floor is the judge's whole and the smallest pot pays it like any other");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
     }
 
     // ============================================================
@@ -450,9 +630,22 @@ contract DisputeSettlementTest is Test {
         _submitAndFinalize(a, true);
         _assertDisputeFeeSkippedNotEmitted();
 
-        assertEq(usdc.balanceOf(client) - clientBefore, 194_000_000, "client gets 97%");
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 5_400_000, "arbiter 90% of the fee");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 600_000, "treasury 10% of the fee");
+        // ⚠️ THE WHOLE POT (20 October 2026): the fee left the opener's wallet
+        // at the door, so nothing is deducted at the verdict. It read
+        // 194_000_000 -- the pot less 3% of it.
+        assertEq(usdc.balanceOf(client) - clientBefore, 200_000_000, "client gets the whole pot");
+        // ⚠️ RE-DERIVED 20 OCTOBER 2026. It read 5_400_000 -- 90% of a $6 fee
+        // (3% of a $200 pot). The fee's floor is $10, which 3% of $200 does not
+        // reach, and the whole fee is the judge's.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000, "arbiter takes the whole ten dollar fee");
+        // ⚠️ AND THE TREASURY'S TENTH IS GONE WITH IT (21 October 2026), which
+        // the line above was re-derived without. Retired, to check the method:
+        // 200_000_000 x 3 / 100 = 6_000_000 of fee, 6_000_000 / 10 = 600_000 to
+        // the treasury -- the literal that stood here. The owner's share is
+        // nought now, so the subtraction is 10_000_000 - 10_000_000 = 0: the
+        // judge's figure above and this one are the SAME fee split two ways,
+        // and together they are the whole of it.
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
     }
 
     /// The same happy path, but the executor wins — the payout goes to them rather
@@ -468,9 +661,23 @@ contract DisputeSettlementTest is Test {
         _submitAndFinalize(a, false);
         _assertDisputeFeeSkippedNotEmitted();
 
-        assertEq(usdc.balanceOf(executor) - executorBefore, 194_000_000, "executor gets 97%");
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 5_400_000, "arbiter 90% of the fee");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 600_000, "treasury 10% of the fee");
+        // ⚠️ THE WHOLE POT, AND THE SISTER SCENE ABOVE WAS RE-DERIVED WHILE
+        // THIS ONE WAS NOT (21 October 2026). Retired, to check the method:
+        // 200_000_000 of pot less 3% of it, 200_000_000 x 3 / 100 = 6_000_000,
+        // gives 200_000_000 - 6_000_000 = 194_000_000 -- the literal that stood
+        // here, and the "97%" the message still named. The fee left the
+        // opener's wallet at the door, so nothing at all is deducted at the
+        // verdict and the subtraction is gone rather than changed: the winner
+        // gets 200_000_000. The message is corrected with the number, because
+        // "97%" is exactly the thing a reader would check against.
+        assertEq(usdc.balanceOf(executor) - executorBefore, 200_000_000, "the executor gets the whole pot -- the fee was paid at the door, not out of the escrow");
+        // ⚠️ RE-DERIVED 20 OCTOBER 2026. It read 5_400_000 -- 90% of a $6 fee
+        // (3% of a $200 pot). The fee's floor is $10, which 3% of $200 does not
+        // reach, and the whole fee is the judge's.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000, "arbiter takes the whole ten dollar fee");
+        // The treasury's tenth, 6_000_000 / 10 = 600_000, is nought now for the
+        // reason given at length on the sister scene above.
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
     }
 
     /// End to end: the counters mean nothing unless real USDC stand behind them on
@@ -483,14 +690,34 @@ contract DisputeSettlementTest is Test {
         _activateAndDispute(a);
         _submitAndFinalize(a, true);
 
+        // Worked out by hand, retired figure first so that the method can be
+        // checked: the fee was 3% of the pot, 200_000_000 x 3 / 100 = 6_000_000,
+        // of which the judge took 90%, 6_000_000 x 9 / 10 = 5_400_000 -- the
+        // literal that stood here. Now the fee is max($10, 6_000_000) =
+        // 10_000_000 and the whole of it is his, so 10_000_000 reaches his hand.
         uint256 arbBefore = usdc.balanceOf(arbiterAddr);
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
-        assertEq(usdc.balanceOf(arbiterAddr) - arbBefore, 5_400_000, "reward must actually reach the arbiter's wallet");
+        assertEq(usdc.balanceOf(arbiterAddr) - arbBefore, 10_000_000, "reward must actually reach the arbiter's wallet");
 
+        // ⚠️ AND THE TREASURY HALF OF THIS SCENE IS A REFUSAL NOW RATHER THAN A
+        // PAYMENT (21 October 2026), which is the only honest way to keep the
+        // claim the scene is named for. Retired: 6_000_000 / 10 = 600_000 of
+        // slice, pushed to the fee recipient. The owner's share is nought, so
+        // there is no slice to push and `withdrawTreasurySlice` answers
+        // `NothingToPush` by name.
+        //
+        // The refusal is asserted rather than skipped ON PURPOSE. Dropping the
+        // push would leave this file with no statement at all about where the
+        // treasury's end of a fee goes, and a counter that merely READS nought
+        // cannot tell "the decision holds" from "the credit silently failed and
+        // the money is sitting somewhere else". The balance of the fee
+        // recipient after the refused push is what rules the second out.
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
         uint256 recipientBefore = usdc.balanceOf(feeRecipient);
+        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-        assertEq(usdc.balanceOf(feeRecipient) - recipientBefore, 600_000, "treasury slice must actually reach the fee recipient");
+        assertEq(usdc.balanceOf(feeRecipient), recipientBefore, "not a base unit of a dispute fee may reach the fee recipient");
     }
 
     // ============================================================
@@ -504,30 +731,61 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         _activateAndDispute(a);
 
-        // creditDisputeFee is removed from the diamond — imitating a facet upgrade
-        // that broke the taking of the fee.
-        _removeSelectorFromDiamond(ArbiterVaultFacet.creditDisputeFee.selector);
+        // ⚠️ THE SELECTOR THIS SCENE BREAKS HAD MOVED AND THE SCENE WAS
+        // BREAKING A DOOR NOTHING WALKS THROUGH ANY MORE (21 October 2026).
+        // `resolveDispute` used to call `creditDisputeFee`, which took the fee
+        // out of the pot at the verdict; it calls `settleDisputeFee` now,
+        // because the money was taken at the door and only its DESTINATION is
+        // decided here. Removing `creditDisputeFee` therefore broke nothing at
+        // all, FeeSkipped never fired, and the scene went red on the one
+        // assertion that noticed -- which is the good outcome of a lock whose
+        // door was moved, and not the usual one.
+        _removeSelectorFromDiamond(ArbiterVaultFacet.settleDisputeFee.selector);
 
         uint256 clientBefore  = usdc.balanceOf(client);
         uint256 diamondBefore = usdc.balanceOf(address(diamond));
 
         vm.recordLogs();
         _submitAndFinalize(a, true);
-        _assertDisputeFeeSkippedEmitted(6_000_000);
+        // Worked out by hand, retired figure first: the fee was 3% of the pot,
+        // 200_000_000 x 3 / 100 = 6_000_000, and that whole figure was what the
+        // event announced as skipped. The fee has a ten dollar floor now and
+        // max(10_000_000, 6_000_000) = 10_000_000 is what the door took, so
+        // 10_000_000 is what cannot be settled.
+        _assertDisputeFeeSkippedEmitted(10_000_000);
 
         // The bond this case carries came home at finalization, so the
         // diamond's balance FELL by it while the fee never arrived. Named, or
         // the subtraction below underflows (22 September 2026).
         uint256 caseBondBack = 20_000_000;
 
-        // The credit failed, so the fee is NOT taken at all. The winner gets the
-        // whole pot and not a cent settles on the diamond: from there it could never
-        // be recovered, as there is no rescue function.
+        // ⚠️ AND WHAT A FAILED SETTLEMENT COSTS IS NOT WHAT A FAILED CREDIT
+        // COST (21 October 2026). The old sentence here was "the fee is NOT
+        // taken at all, the winner gets it instead": the credit happened at the
+        // verdict, so a broken credit left the money in the pot. The fee was
+        // taken at the DOOR now and is on the diamond before this scene starts,
+        // so a broken settlement cannot give it to anybody -- it STAYS, with
+        // its amount and its payer still written down, which is a recoverable
+        // state and the reason the ending is tolerated at all.
+        //
+        // So the two claims below are different claims. The winner still gets
+        // the whole pot -- for a new reason, the fee never being in it. And
+        // the diamond's balance must not MOVE either way: a cent appearing
+        // would be the pot leaking into it, and a cent leaving would be the
+        // failed settlement paying somebody after all.
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute must still close");
-        assertEq(usdc.balanceOf(client) - clientBefore, 200_000_000, "no fee taken, winner gets the whole pot");
-        assertEq(usdc.balanceOf(address(diamond)) + caseBondBack - diamondBefore, 0, "not a cent may be stranded on the diamond");
+        assertEq(usdc.balanceOf(client) - clientBefore, 200_000_000, "the fee was never in the pot, so the winner gets the whole of it");
+        assertEq(usdc.balanceOf(address(diamond)) + caseBondBack - diamondBefore, 0, "the failed settlement must move nothing in either direction");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "nothing credited");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "nothing credited");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "nothing credited");
+
+        // ⚠️ AND THE RECORD HAS TO SURVIVE, which is the whole of what makes
+        // this ending recoverable instead of a loss. Ten dollars with no name
+        // on them are ten dollars nobody can ever be paid.
+        (uint256 heldStill, address payerStill) =
+            ArbiterVaultFacet(address(diamond)).getHeldDisputeFee(address(a));
+        assertEq(heldStill, 10_000_000, "the held fee must still be recorded, or it can never be paid to anyone");
+        assertEq(payerStill, client, "and the man who put it down must still be named");
     }
 
     // ============================================================
@@ -549,9 +807,13 @@ contract DisputeSettlementTest is Test {
         _assertDisputeFeeSkippedNotEmitted();
 
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute must still close");
+        // Worked out by hand, retired figure first: fee 3% of the pot,
+        // 200_000_000 x 3 / 100 = 6_000_000, of which 90% was the judge's,
+        // 6_000_000 x 9 / 10 = 5_400_000. The fee is max($10, 6_000_000) =
+        // 10_000_000 now and the whole of it is his.
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
-            5_400_000,
+            10_000_000,
             "the reward stays credited and withdrawable later"
         );
 
@@ -583,8 +845,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
         // The other side turned up — and turning up is no longer worth anything on
         // its own. This is the whole point: attendance cannot manufacture money out
         // of work that was never handed in.
@@ -608,7 +869,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000, "the whole escrow home");
+        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000 + DOOR_CHARGE_HOME, "the whole escrow home, and the door charge with it");
         assertEq(usdc.balanceOf(executor) - eBefore, 0,           "nothing for work never handed in");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
@@ -622,8 +883,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
-        vm.prank(executor);
-        a.raiseDispute();
+        _openTheDispute(executor, a);
         assertEq(a.markedDoneAt(), 0, "setup: he never handed anything in");
         assertTrue(a.executorResponded(), "setup: raising it counts as turning up");
         assertFalse(a.clientResponded(),  "setup: the client stayed silent");
@@ -636,29 +896,80 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(executor) - eBefore, 0,           "the griefer gets nothing");
+        // ⚠️ HIS OWN TEN DOLLARS COME BACK AND NOTHING ELSE DOES (20 October
+        // 2026). He opened the dispute, so he paid `disputeFee()` at the door;
+        // no verdict was written, so it goes home. Of the ESCROW he still gets
+        // nothing, which is what this scene is named for -- and the two sums
+        // are asserted apart so that neither can cover the other.
+        assertEq(
+            usdc.balanceOf(executor) - eBefore, DOOR_CHARGE_HOME,
+            "the griefer kept something besides his own door charge"
+        );
         assertEq(usdc.balanceOf(client)   - cBefore, 200_000_000, "and the client is whole");
         assertEq(a.undeliveredPayout(), 0, "not even booked as a debt to him");
     }
 
-    /// A junk dispute is still FREE to open — that is measured here rather than
-    /// assumed, because "the payoff is gone" and "the entrance now costs something"
-    /// are two different statements and only the first one is true.
+    /// ⚠️ THE NAME SAYS "STILL FREE TO OPEN" AND THAT IS NOW HALF FALSE, AND
+    /// THE NAME IS KEPT ANYWAY. Measured with `grep -rln` across the whole
+    /// checkout on 20 October 2026, it is cited by name in the owner's own
+    /// working journal -- which does NOT travel to the public showcase, so the
+    /// path is deliberately not written here -- and renaming it from this side
+    /// would break a live citation in the document he reads. Whether the
+    /// name moves is his call; what this file owes him is a body that measures
+    /// the truth under the old name.
+    ///
+    /// The truth, in two halves that must not be collapsed:
+    ///
+    ///   OPENING IT IS NOT FREE. `raiseDispute` takes `disputeFee()` -- ten
+    ///   dollars on any pot -- out of the opener's own wallet, through the
+    ///   diamond, and will not open the dispute without it.
+    ///
+    ///   IT STILL COSTS HIM NOUGHT IN THE END, because this road is the one
+    ///   where no verdict is written and the fee goes home (the owner's
+    ///   decision of 19 October, kept on the 20th). So the sentence the old
+    ///   name carries -- "the payoff is gone but the entrance costs nothing" --
+    ///   survives as a statement about the NET and is false about the moment.
+    ///
+    /// ⚠️ AND THE SCENE WAS GREEN FOR THE WRONG REASON BEFORE THIS REWRITE,
+    /// which is the part worth reading twice. It called `_armTheDoor` -- the
+    /// helper that mints exactly the charge -- and then asserted the purse was
+    /// unchanged after the press. It was unchanged: the mint cancelled the
+    /// charge to the base unit, so the one scene written to measure whether
+    /// opening a dispute costs anything was reporting the rig's own mint.
+    /// It funds the opener with a KNOWN FLOAT instead, and reads his purse
+    /// after the float, so the debit is visible.
     function testAnEmptyDisputeIsStillFreeToOpenAndNowPaysNothing() public {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
 
+        // A float he already has, big enough for the charge and not equal to
+        // it: an equal float is what made the old reading unfalsifiable.
+        uint256 float_ = DOOR_CHARGE_HOME * 3;
+        usdc.mint(executor, float_);
+        vm.prank(executor); usdc.approve(address(diamond), float_);
+
         uint256 walletBefore = usdc.balanceOf(executor);
         vm.prank(executor);
         a.raiseDispute();
-        assertEq(usdc.balanceOf(executor), walletBefore, "opening a dispute moves no USDC - unchanged");
+
+        // ── HALF ONE: the press cost him the charge, out of money he had. ──
+        assertEq(
+            walletBefore - usdc.balanceOf(executor), DOOR_CHARGE_HOME,
+            "opening a dispute moved no USDC out of the opener's wallet -- the charge at the door is gone"
+        );
 
         vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
         vm.prank(executor);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(executor), walletBefore, "and it earns him nothing either");
+        // ── HALF TWO: and the end of it leaves him exactly where he began, so
+        //    the attempt is free on the net. This is the finding, not a defect
+        //    report: the owner was shown it and kept his decision. ──
+        assertEq(
+            usdc.balanceOf(executor), walletBefore,
+            "the door charge did NOT come home on a dispute nobody judged -- the junk attempt now has a price and this scene is the one to re-read"
+        );
     }
 
     /// THE BORDER OF "HANDED IN", top side: markDone is refused after the deadline
@@ -676,6 +987,7 @@ contract DisputeSettlementTest is Test {
         a.markDone();
         assertEq(a.markedDoneAt(), border, "the hand-in is stamped on the border second");
 
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -688,7 +1000,7 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
 
         assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "a border hand-in is a hand-in");
-        assertEq(usdc.balanceOf(client)   - cBefore, 100_000_000, "half each");
+        assertEq(usdc.balanceOf(client)   - cBefore, 100_000_000 + DOOR_CHARGE_HOME, "half each, and the opener's door charge home");
     }
 
     /// THE BORDER, one second past it: markDone is refused BY NAME, and so is the
@@ -751,6 +1063,7 @@ contract DisputeSettlementTest is Test {
 
         // Day one of a seven-day deal: the client goes to dispute before any
         // delivery, which used to be the whole attack.
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         assertEq(a.arbiter(), address(0), "setup: nobody has taken it on");
@@ -774,7 +1087,7 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
 
         assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "half to the executor, not nothing");
-        assertEq(usdc.balanceOf(client)   - cBefore, 100_000_000, "half to the client, not everything");
+        assertEq(usdc.balanceOf(client)   - cBefore, 100_000_000 + DOOR_CHARGE_HOME, "half to the client, not everything, plus his door charge");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
 
@@ -787,6 +1100,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -808,6 +1122,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -859,6 +1174,7 @@ contract DisputeSettlementTest is Test {
         a.activate();
         _seedStreak(executor, 5);
 
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -884,6 +1200,7 @@ contract DisputeSettlementTest is Test {
         _seedStreak(executor, 5);
 
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -909,6 +1226,7 @@ contract DisputeSettlementTest is Test {
         a.activate();
         _seedStreak(executor, 5);
 
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -919,7 +1237,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000, "the money arrives regardless");
+        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000 + DOOR_CHARGE_HOME, "the money arrives regardless, and the door charge with it");
         assertEq(usdc.balanceOf(address(a)), 0, "and the clone is emptied");
         assertEq(uint8(a.status()), uint8(Agreement.Status.REFUNDED), "the deal is closed, not stuck");
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 5,
@@ -939,6 +1257,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         byClient.activate();
         _seedStreak(executor, 5);
+        _armTheDoor(client, byClient);
         vm.prank(client);
         byClient.raiseDispute();
         vm.prank(executor);
@@ -958,6 +1277,7 @@ contract DisputeSettlementTest is Test {
         Agreement byExecutor = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         byExecutor.activate();
+        _armTheDoor(executor, byExecutor);
         vm.prank(executor);
         byExecutor.raiseDispute();
         vm.warp(vm.getBlockTimestamp() + byExecutor.DISPUTE_WINDOW() + 1);
@@ -965,7 +1285,14 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         byExecutor.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(executor) - eBefore2, 0, "nothing for empty hands");
+        // ⚠️ NAMED AS A SUM OF TWO THINGS THAT ARE NOT THE SAME MONEY, and the
+        // nought is written out rather than dropped. Nought of the ESCROW is
+        // what the split rule decides for a man who handed nothing in; the ten
+        // dollars are HIS OWN, paid at the door when he opened the dispute and
+        // sent home because no verdict was ever written. Folded into one
+        // literal the reader can check neither: he cannot tell a man paid
+        // nothing from a man paid ten dollars for walking away.
+        assertEq(usdc.balanceOf(executor) - eBefore2, 0 + DOOR_CHARGE_HOME, "nothing of the escrow for empty hands, and only his own door charge back");
         assertEq(ReputationFacet(address(diamond)).getCleanStreak(executor), 0,
                  "and the record says so: 5 -> 0");
     }
@@ -979,6 +1306,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -999,7 +1327,7 @@ contract DisputeSettlementTest is Test {
         uint256 cBefore = usdc.balanceOf(client);
         vm.prank(client);
         a.triggerArbiterTimeout();
-        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000, "whole pot to the client, once");
+        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000 + DOOR_CHARGE_HOME, "whole pot and door charge to the client, once");
 
         vm.prank(client);
         vm.expectRevert(Agreement.AlreadyFinalized.selector);
@@ -1012,6 +1340,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.warp(vm.getBlockTimestamp() + a.DISPUTE_WINDOW() + 1);
@@ -1060,7 +1389,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000, "whole pot to client");
+        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000 + DOOR_CHARGE_HOME, "whole pot to client, with his door charge");
         assertEq(usdc.balanceOf(executor) - eBefore, 0,           "executor gets nothing");
     }
 
@@ -1070,6 +1399,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.warp(block.timestamp + a.DISPUTE_WINDOW() + 1);
@@ -1088,6 +1418,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -1102,7 +1433,7 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
 
         assertEq(usdc.balanceOf(executor) - eBefore, 16, "floor half to executor");
-        assertEq(usdc.balanceOf(client)   - cBefore, 17, "remainder to the client");
+        assertEq(usdc.balanceOf(client)   - cBefore, 17 + DOOR_CHARGE_HOME, "remainder to the client, plus his door charge -- the charge is round, so it cannot hide the odd unit");
         assertEq(usdc.balanceOf(address(a)), 0, "not one unit may be stranded");
     }
 
@@ -1123,6 +1454,7 @@ contract DisputeSettlementTest is Test {
         // without a hand-in the timeout would pay the executor nothing at all
         // and this scene would stop being about the pending top-up.
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -1137,9 +1469,25 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        // 50 back whole, together with the $2.50 fee held on the top-up (nobody
-        // accepted it, so nobody earned it), plus half of 200.
-        assertEq(usdc.balanceOf(client) - cBefore,   152_500_000, "pending back whole, held fee with it, plus half the pot");
+        // Worked out by hand, as four named things rather than one literal:
+        //   50_000_000   the pending top-up back whole -- never accepted
+        //    2_500_000   the fee held on that top-up, 5% of 50_000_000, which
+        //                nobody earned because nobody accepted it
+        //  100_000_000   half of the 200_000_000 pot, both sides having shown up
+        //   10_000_000   his own door charge home, no verdict having been written
+        //  ------------
+        //  162_500_000
+        // ⚠️ THE FIRST THREE SUMMED TO THE RETIRED LITERAL, which is how the
+        // method was checked: 50_000_000 + 2_500_000 + 100_000_000 =
+        // 152_500_000, exactly what stood here. The message already said "held
+        // fee with it" and the number did not -- the fourth line is the only
+        // addition, and it is kept apart because it is the only one of the four
+        // that is not the deal's money.
+        assertEq(
+            usdc.balanceOf(client) - cBefore,
+            50_000_000 + 2_500_000 + 100_000_000 + DOOR_CHARGE_HOME,
+            "pending back whole, held fee with it, half the pot, and his door charge"
+        );
         assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "half of the pot only");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
@@ -1158,6 +1506,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.warp(block.timestamp + a.DISPUTE_WINDOW() + 1);
@@ -1169,7 +1518,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore, 150_000_000, "the client's own three quarters, no more");
+        assertEq(usdc.balanceOf(client) - cBefore, 150_000_000 + DOOR_CHARGE_HOME, "the client's own three quarters and his door charge, no more");
         assertEq(a.undeliveredPayout(), 50_000_000, "the executor's quarter is owed to the executor");
         assertEq(usdc.balanceOf(address(a)), 50_000_000, "and waits in the clone for them");
 
@@ -1187,6 +1536,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1212,6 +1562,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -1275,7 +1626,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000, "whole pot still to the client");
+        assertEq(usdc.balanceOf(client) - cBefore,   200_000_000 + DOOR_CHARGE_HOME, "whole pot still to the client, with his door charge");
         assertEq(usdc.balanceOf(executor) - eBefore, 0,           "the executor must gain nothing");
     }
 
@@ -1341,6 +1692,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         // The other side responded: halves now mean "both showed up".
@@ -1362,7 +1714,7 @@ contract DisputeSettlementTest is Test {
 
         vm.clearMockedCalls();
 
-        assertEq(usdc.balanceOf(client) - cBefore, 100_000_000, "the client's half went out");
+        assertEq(usdc.balanceOf(client) - cBefore, 100_000_000 + DOOR_CHARGE_HOME, "the client's half went out, and his door charge with it");
         assertEq(a.undeliveredPayout(), 100_000_000, "the short reply became a debt, not a revert");
         assertEq(usdc.balanceOf(address(a)), 100_000_000, "and is held for the executor");
     }
@@ -1375,6 +1727,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1387,6 +1740,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(executor, a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1398,6 +1752,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1412,6 +1767,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1428,6 +1784,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1440,6 +1797,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1466,6 +1824,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1482,6 +1841,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1499,6 +1859,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1527,6 +1888,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(200_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1546,6 +1908,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -1559,7 +1922,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore,   100_000_000, "half to client");
+        assertEq(usdc.balanceOf(client) - cBefore,   100_000_000 + DOOR_CHARGE_HOME, "half to client, plus his door charge");
         assertEq(usdc.balanceOf(executor) - eBefore, 100_000_000, "half to executor");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
@@ -1570,6 +1933,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1582,7 +1946,7 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
 
         assertEq(usdc.balanceOf(executor) - eBefore, 50_000_000,  "quarter to the silent executor");
-        assertEq(usdc.balanceOf(client)   - cBefore, 150_000_000, "three quarters to the client");
+        assertEq(usdc.balanceOf(client)   - cBefore, 150_000_000 + DOOR_CHARGE_HOME, "three quarters to the client, plus the door charge he paid");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
 
@@ -1593,6 +1957,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(executor, a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1605,7 +1970,7 @@ contract DisputeSettlementTest is Test {
         a.triggerArbiterTimeout();
 
         assertEq(usdc.balanceOf(client)   - cBefore, 50_000_000,  "quarter to the silent client");
-        assertEq(usdc.balanceOf(executor) - eBefore, 150_000_000, "three quarters to the executor");
+        assertEq(usdc.balanceOf(executor) - eBefore, 150_000_000 + DOOR_CHARGE_HOME, "three quarters to the executor, plus the door charge he paid");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
 
@@ -1617,6 +1982,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1632,8 +1998,14 @@ contract DisputeSettlementTest is Test {
         uint256 toClient   = usdc.balanceOf(client)   - cBefore;
 
         assertEq(toExecutor, 1, "floor(7/4) to the silent executor");
-        assertEq(toClient,   6, "remainder to the responder");
-        assertEq(toExecutor + toClient, 7, "not a single unit may vanish");
+        assertEq(toClient,   6 + DOOR_CHARGE_HOME, "remainder to the responder, plus the door charge he paid -- the charge is round, so it cannot hide the odd unit");
+        // The conservation claim, with the door charge named on the side it
+        // arrived on. 1 + (6 + 10_000_000) = 7 + 10_000_000: the pot is whole
+        // and the charge is the client's own money coming back on top of it.
+        // Folding the charge into the 7 would make the identity unreadable --
+        // the point of the scene is that the ODD UNIT is not lost, and a round
+        // ten million either side of it must not be able to hide one.
+        assertEq(toExecutor + toClient, 7 + DOOR_CHARGE_HOME, "not a single unit of the pot may vanish, and the door charge must not hide one");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
 
@@ -1646,6 +2018,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1663,7 +2036,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore, 150_000_000, "the responder's own three quarters");
+        assertEq(usdc.balanceOf(client) - cBefore, 150_000_000 + DOOR_CHARGE_HOME, "the responder's own three quarters, plus the door charge he paid");
         assertEq(a.undeliveredPayout(), 50_000_000, "the silent side's quarter is owed to them");
         assertEq(usdc.balanceOf(address(a)), 50_000_000, "held, not confiscated");
     }
@@ -1675,6 +2048,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(executor, a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1704,6 +2078,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
@@ -1728,6 +2103,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(executor, a);
         vm.prank(executor);
         a.raiseDispute();
 
@@ -1749,6 +2125,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(executor);
         a.activate();
         _handIn(a);
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
         vm.prank(executor);
@@ -1780,7 +2157,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000, "whole pot to the client");
+        assertEq(usdc.balanceOf(client) - cBefore, 200_000_000 + DOOR_CHARGE_HOME, "whole pot to the client, with his door charge");
         assertEq(usdc.balanceOf(executor) - eBefore, 0, "executor gets nothing on arbiter fault");
     }
 
@@ -1802,8 +2179,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(100_000_000));
         vm.prank(executor);
         a.activate();
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
 
         uint256 before_ = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
         ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
@@ -1812,26 +2188,60 @@ contract DisputeSettlementTest is Test {
         assertEq(after_ - before_, 10_000_000, "raising the floor by $10 raises the top-up by $10");
     }
 
-    /// A pot of $100: the fee is 3% = $3, 80% to the arbiter = $2.40, $7.60 short of $10.
+    /// ⚠️ RE-DERIVED 20 OCTOBER 2026, AND THE SCENE NEEDED A HIGHER FLOOR TO
+    /// SURVIVE AT ALL. It used to read: a pot of $100, fee 3% = $3, 90% to the
+    /// arbiter = $2.70, so $7.30 short of the $10 floor. Both halves of that
+    /// moved on the same day -- the fee gained a $10 floor of its own and the
+    /// arbiter now takes the WHOLE of it -- so on a $100 pot the fee already
+    /// IS the floor and the top-up is nought.
+    ///
+    /// A scene asserting nought there would prove nothing: it is the answer on
+    /// EVERY pot while the two floors are the same ten dollars. So this one
+    /// raises the arbiter floor to $20 by the owner's own door, which is the
+    /// only state in which a top-up exists at all now, and measures the
+    /// difference: $20 to find, $10 of it already in the fee, $10 left.
+    ///
+    /// ⚠️ AND THAT IS THE SENTENCE TO CARRY AWAY ABOUT THE DOOR: it is alive
+    /// exactly when the arbiter floor stands ABOVE the dispute fee. On a deal
+    /// cut from this implementation, with the floor at its default, it never
+    /// is. It stays for the sixteen clones already on Base Sepolia, whose fee
+    /// is 3% of the pot with nothing under it.
     function testQuoteTopUpOnSmallPot() public {
         Agreement a = Agreement(_createFundedAgreement(100_000_000));
         vm.prank(executor);
         a.activate();
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
 
-        assertEq(ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 7_300_000, "top-up to reach $10");
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 0,
+            "with the floor at its default a modern deal needs no top-up -- the fee already reaches it"
+        );
+
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 10_000_000,
+            "top-up to reach a $20 floor from a $10 fee"
+        );
     }
 
-    /// The pot is large enough — the arbiter gets $10 by themselves, so the top-up is
-    /// zero. $10 / 0.024 = $416.67, which is why at $420 no top-up is needed any more.
+    /// The pot is large enough that the arbiter reaches the floor by himself,
+    /// so the top-up is nought.
+    ///
+    /// ⚠️ RE-DERIVED 20 OCTOBER 2026, AND MEASURED AGAINST A RAISED FLOOR FOR
+    /// THE SAME REASON AS THE SCENE ABOVE. The old arithmetic was
+    /// $10 / 0.024 = $416.67, which is why $420 was the pot. With the whole fee
+    /// going to the judge and a $10 floor under it, every pot clears a $10
+    /// floor and this scene would be green on nothing. Against a $20 floor the
+    /// claim is real again: 3% reaches $20 at a pot of $666.666667, so
+    /// $700 clears it and $100 (above) does not.
     function testQuoteTopUpIsZeroOnLargePot() public {
-        Agreement a = Agreement(_createFundedAgreement(420_000_000));
+        Agreement a = Agreement(_createFundedAgreement(700_000_000));
         vm.prank(executor);
         a.activate();
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
 
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
+        assertEq(a.disputeFee(), 21_000_000, "setup: 3% of a $700 pot is $21, over the $20 floor this scene raises");
         assertEq(ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a)), 0, "big pot pays the arbiter by itself");
     }
 
@@ -1845,8 +2255,7 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(30_000_000_000));
         vm.prank(executor);
         a.activate();
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
 
         // ⚠️ $450 → $500 ON 22 SEPTEMBER 2026, and the scene keeps its point.
         // The arbiter's share went from 80% to 90%, so 90% of the CAPPED $500
@@ -1855,7 +2264,16 @@ contract DisputeSettlementTest is Test {
         // leaves $50 to find, while the raw 3% of a $30 000 pot ($900, 90% of
         // which is $810) would leave nothing: the two answers still differ, and
         // that difference is what this measures.
-        ArbiterVaultFacet(address(diamond)).setArbiterFloor(500_000_000);
+        // ⚠️ $500 → $550 ON 20 OCTOBER 2026, AND THE SCENE KEEPS ITS POINT A
+        // SECOND TIME. The arbiter's share went from 90% to the WHOLE fee, so
+        // the capped $500 fee now reaches a $500 floor exactly and that floor
+        // would need no top-up at all — the scene would pass on nought and
+        // prove nothing, which is the same accident the 22 September note
+        // describes one rung lower. At a $550 floor the capped fee leaves $50
+        // to find, while the raw 3% of a $30 000 pot ($900, all of which would
+        // be the judge's) would leave nothing: the two answers still differ by
+        // 50_000_000, and that difference is what this measures.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(550_000_000);
 
         assertEq(a.disputeFee(), 500_000_000, "setup: fee is capped at $500");
         assertEq(
@@ -1884,8 +2302,28 @@ contract DisputeSettlementTest is Test {
         // scenes about the top-up and the split rather than about delivery: with
         // no markDone the unclaimed timeout now pays the executor nothing.
         _handIn(a);
-        vm.prank(client);
-        a.raiseDispute();
+        _openTheDispute(client, a);
+
+        // ⚠️ AND THE ARBITER FLOOR IS RAISED ABOVE THE FEE, 20 OCTOBER 2026,
+        // BECAUSE OTHERWISE EVERY TOP-UP SCENE BELOW HAS NOTHING TO MEASURE.
+        // The top-up door exists to carry the difference between what the fee
+        // pays a judge and what the floor says he must receive. The fee's own
+        // floor is now the same ten dollars `DEFAULT_ARBITER_FLOOR` asks for,
+        // so on a deal cut from this implementation that difference is nought
+        // and `fundDispute` answers `TopUpNotNeeded` -- which is the correct
+        // answer and makes the door's machinery unreachable.
+        //
+        // Raising the floor to $20 by the owner's own door restores a real
+        // difference of $10 and leaves every scene below about what it was
+        // written for: the pull, the reservation, the discount, the refund.
+        // Nothing else in this file reads `getArbiterFloor`, so the raise
+        // touches the top-up quote and nothing more.
+        //
+        // ⚠️ THE DOOR IS NOT DEAD, which is why it is reached this way rather
+        // than deleted: the sixteen clones already on Base Sepolia take 3% of
+        // the pot with no floor under it, and on those the difference is real
+        // at the default floor.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
     }
 
     function testFundDisputePullsExactQuote() public {
@@ -2282,8 +2720,32 @@ contract DisputeSettlementTest is Test {
 
     /// On a large pot no top-up is needed — there is nothing to pay, and the
     /// function says so rather than silently accepting money.
+    ///
+    /// ⚠️ $420 → $700 ON 21 OCTOBER 2026, AND THE POT IS THE WHOLE OF THE FIX.
+    /// Derived by hand, retired figure first so that the method can be checked:
+    /// $420 was picked as $10 / 0.024, the rate 3% times the judge's share of
+    /// 80%, and it stayed correct when the share rose to 90% --
+    /// 420_000_000 x 3 / 100 = 12_600_000 of fee, x 9 / 10 = 11_340_000 to the
+    /// judge, which clears the $10 default floor, so the quote was nought and
+    /// the door answered `TopUpNotNeeded`.
+    ///
+    /// Two things moved underneath that. The judge takes the WHOLE fee, and
+    /// `_disputedAgreement` raises the arbiter floor to $20 -- which it must,
+    /// because at the default floor the fee's own ten dollar floor already
+    /// meets it on every pot and the top-up door is unreachable. Against a $20
+    /// floor a $420 pot is short: 12_600_000 of fee against 20_000_000 asked
+    /// leaves 20_000_000 - 12_600_000 = 7_400_000 to find, so the quote is NOT
+    /// nought, `fundDispute` goes on to pull money this scene never approved,
+    /// and the refusal it was watching for never comes. (That is exactly how
+    /// the scene failed: on the token's allowance, not on `TopUpNotNeeded` --
+    /// which is the measurement that confirms the arithmetic above.)
+    ///
+    /// 3% reaches $20 at a pot of 20_000_000 x 100 / 3 = 666_666_666.67, so
+    /// $700 clears it: 700_000_000 x 3 / 100 = 21_000_000, over the floor, and
+    /// the quote is nought again for the reason the scene is named for -- the
+    /// arbiter is paid enough by the deal itself.
     function testFundDisputeRevertsWhenTopUpIsZero() public {
-        Agreement a = _disputedAgreement(420_000_000);
+        Agreement a = _disputedAgreement(700_000_000);
         vm.prank(client);
         vm.expectRevert(ArbiterRegistryFacet.TopUpNotNeeded.selector);
         ArbiterVaultFacet(address(diamond)).fundDispute(address(a));
@@ -2318,7 +2780,16 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - before_ - 50_000_000, need, "bounty came back on top of the split half");
+        // Named as a sum of two refunds that are not the same money. `need` is
+        // the top-up he put in to attract an arbiter, back because no arbiter
+        // delivered; the door charge is what `raiseDispute` took from him,
+        // back because no verdict was written. The escrow half, 50_000_000 of
+        // the 100_000_000 pot, is subtracted on the left.
+        // ⚠️ THE LEFT SIDE ALONE REPRODUCED THE RETIRED LITERAL, which is how
+        // the method was checked: `need` was the whole of the right-hand side
+        // and the measurement printed 10_000_000 for it. What is new is only
+        // the second term.
+        assertEq(usdc.balanceOf(client) - before_ - 50_000_000, need + DOOR_CHARGE_HOME, "bounty and door charge both came back on top of the split half");
         assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared");
     }
 
@@ -2448,10 +2919,27 @@ contract DisputeSettlementTest is Test {
         Agreement a = Agreement(_createFundedAgreement(100_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
+        // ⚠️ THE ARBITER FLOOR ABOVE THE FEE, 21 OCTOBER 2026, for the reason
+        // `_disputedAgreement` sets out at length: the fee's own floor and the
+        // default arbiter floor are the same ten dollars, so on a deal cut from
+        // this implementation there is nothing to top up and `fundDispute`
+        // answers `TopUpNotNeeded` -- the correct answer, and one that makes
+        // this scene's whole subject unreachable. This fixture is built by hand
+        // rather than through `_disputedAgreement` (it has to claim the dispute
+        // AFTER the top-up), so it raises the floor itself.
+        //
+        // What that leaves to find, by hand: the floor asks 20_000_000; the fee
+        // on a $100 pot is max($10 floor, 100_000_000 x 3 / 100 = 3_000_000) =
+        // 10_000_000 and the whole of it is the judge's; 20_000_000 -
+        // 10_000_000 = 10_000_000 is the quote.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
+
         uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        assertEq(need, 10_000_000, "setup: $20 asked less the $10 fee leaves $10 to find");
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
@@ -2465,20 +2953,37 @@ contract DisputeSettlementTest is Test {
         assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared after payout");
     }
 
-    /// The verdict was overturned by the owner before finalisation — the top-up must
-    /// not go to the arbiter: on an overturn 80% of the fee already goes entirely to
-    /// the treasury (creditDisputeFee), and the top-up cannot be an exception. The
-    /// money goes back to the payer through claimable (refundableBounty) rather than
-    /// by a direct transfer — a hard transfer here could take the whole finalisation
-    /// down.
+    /// The verdict was overturned before finalisation — the top-up must not go to
+    /// the arbiter, and it goes back to the payer through claimable
+    /// (refundableBounty) rather than by a direct transfer: a hard transfer here
+    /// could take the whole finalisation down.
+    ///
+    /// ⚠️ THE REASON GIVEN HERE NAMED A DESTINATION THAT IS NOT THE DESTINATION
+    /// ANY MORE (21 October 2026). It read: "on an overturn 80% of the fee
+    /// already goes entirely to the treasury (creditDisputeFee), and the top-up
+    /// cannot be an exception". Both halves have moved. The treasury takes
+    /// nothing out of arbitration at all, and the fee an overturned judge
+    /// forfeits is the PANEL's -- the owner's decision of 20 October, measured
+    /// in test/AppealEconomics.t.sol, where it is the pocket the panel divides.
+    /// The conclusion the sentence was supporting is untouched: whatever the
+    /// forfeited fee pays for, it is not the man whose verdict fell, and
+    /// neither is the top-up.
     function testOverturnedVerdictRefundsBountyToPayer() public {
         Agreement a = Agreement(_createFundedAgreement(100_000_000));
         vm.prank(executor);
         a.activate();
+        _armTheDoor(client, a);
         vm.prank(client);
         a.raiseDispute();
 
+        // The arbiter floor above the fee, for the reason spelled out on
+        // testBountyGoesToArbiterOnVerdict just above: 20_000_000 asked less
+        // the 10_000_000 the fee pays the judge leaves 10_000_000 to find, and
+        // without the raise there is no top-up here to refuse to pay him.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
+
         uint256 need = ArbiterVaultFacet(address(diamond)).quoteDisputeTopUp(address(a));
+        assertEq(need, 10_000_000, "setup: $20 asked less the $10 fee leaves $10 to find");
         usdc.mint(client, need);
         vm.startPrank(client);
         usdc.approve(address(diamond), need);
@@ -2620,8 +3125,15 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        // The whole pot to the client, and the top-up on top of it to whoever paid it.
-        assertEq(usdc.balanceOf(client) - cBefore, 100_000_000 + need, "whole pot plus the refunded top-up");
+        // The whole pot to the client, the top-up on top of it to whoever paid
+        // it, and his door charge on top of that because no verdict was written.
+        // Three named things: the pot is what the claimed-timeout branch
+        // decides, `need` is money he put in to attract a judge, and the charge
+        // is what the door took to let him in.
+        // ⚠️ THE FIRST TWO REPRODUCED THE RETIRED EXPRESSION EXACTLY -- it was
+        // `100_000_000 + need` and the run printed 110_000_000 for it, so the
+        // measured `need` is 10_000_000 and the third term is the only addition.
+        assertEq(usdc.balanceOf(client) - cBefore, 100_000_000 + need + DOOR_CHARGE_HOME, "whole pot, the refunded top-up, and his door charge");
         assertEq(usdc.balanceOf(executor) - eBefore, 0, "the claimed branch does not split anything");
         assertEq(ArbiterVaultFacet(address(diamond)).getDisputeBounty(address(a)), 0, "bounty cleared");
         assertEq(ArbiterVaultFacet(address(diamond)).getRefundableBounty(client), 0, "the push refund succeeded, nothing left claimable");
@@ -2695,7 +3207,7 @@ contract DisputeSettlementTest is Test {
     MinimalForwarder relayForwarder;
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     /// Raises a dispute between two ADDRESSES WITH KEYS (the setup's global
@@ -2733,15 +3245,29 @@ contract DisputeSettlementTest is Test {
         // it is actually measuring.
         vm.prank(peer);
         a.markDone();
+        _armTheDoor(payer, a);
         vm.prank(payer);
         a.raiseDispute();
+
+        // ⚠️ THE ARBITER FLOOR ABOVE THE FEE, 21 OCTOBER 2026, and the same
+        // raise `_disputedAgreement` makes for the same reason: the fee's own
+        // ten dollar floor already meets the default arbiter floor, so the
+        // quote is nought on every pot and `fundDispute` -- which is the
+        // subject of both forwarder scenes built on this fixture -- answers
+        // `TopUpNotNeeded` before it can be measured at all.
+        //
+        // By hand, what the raise leaves to find on this fixture's $100 pot:
+        // the floor asks 20_000_000; the fee is max($10 floor,
+        // 100_000_000 x 3 / 100 = 3_000_000) = 10_000_000, the judge's whole;
+        // 20_000_000 - 10_000_000 = 10_000_000 is the quote.
+        ArbiterVaultFacet(address(diamond)).setArbiterFloor(20_000_000);
     }
 
     function _signFwd(uint256 pk, MinimalForwarder.ForwardRequest memory req)
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
@@ -2770,6 +3296,7 @@ contract DisputeSettlementTest is Test {
             value: 0,
             gas:   3_000_000,
             nonce: relayForwarder.getNonce(from),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
         return relayForwarder.execute(req, _signFwd(pk, req));
@@ -2811,10 +3338,18 @@ contract DisputeSettlementTest is Test {
         vm.prank(payer);
         a.triggerArbiterTimeout();
 
+        // Two refunds, named apart. `need` is the top-up the HUMAN paid through
+        // the forwarder, back because no arbiter delivered -- which is the
+        // whole subject of the scene, since a forwarder recorded as the payer
+        // would have taken it instead. The door charge is what `raiseDispute`
+        // took from him in the fixture, back because no verdict was written;
+        // it is his own money and is not evidence about who the payer is.
+        // ⚠️ `need` ALONE WAS THE RETIRED EXPRESSION, so the second term is
+        // the only addition here.
         assertEq(
             usdc.balanceOf(payer) - beforeTimeout - 50_000_000,
-            need,
-            "the refund went to the human payer on top of his split half"
+            need + DOOR_CHARGE_HOME,
+            "the refund went to the human payer on top of his split half, and his door charge with it"
         );
         assertEq(usdc.balanceOf(address(relayForwarder)), 0, "the forwarder got nothing back either");
     }

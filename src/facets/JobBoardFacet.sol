@@ -314,6 +314,15 @@ contract JobBoardFacet {
     /// Asked about a job id that was never handed out. Distinct from
     /// `JobNotOpen`, which is about a job that exists and is closed.
     error JobNotFound();
+    /// The factory refused the hire and gave no reason bytes at all.
+    ///
+    /// Everything the factory says by name now travels through this board
+    /// untouched (see `acceptApplicant`); this error covers only the case
+    /// where there was nothing to pass on -- a selector the diamond no longer
+    /// routes, or a reasonless `require`. It replaces the old
+    /// `"JobBoard: deploy failed"` string, which used to swallow every refusal
+    /// including the ones that carried numbers.
+    error JobBoardDeployFailed();
 
     // -------- REENTRANCY --------
 
@@ -659,7 +668,30 @@ contract JobBoardFacet {
                 job.region
             )
         );
-        require(ok, "JobBoard: deploy failed");
+        // ⚠️ THE FACTORY'S OWN REFUSAL IS PASSED THROUGH UNCHANGED, and it used
+        // to be thrown away here. The line was `require(ok, "JobBoard: deploy
+        // failed")`: every reason the factory could have for saying no -- the
+        // deal cap with both of its numbers in it, the paused brake, an active
+        // pair, a missing fee floor -- arrived in `ret` and was replaced by
+        // eleven characters that name nothing. A client who posted a job above
+        // the ceiling got "deploy failed" and no number to correct it to, which
+        // is the exact failure mode `DealAmountAboveCap` was given two
+        // arguments to avoid; the argument for carrying them is written out at
+        // the error's own declaration.
+        //
+        // `revert(add(ret, 0x20), mload(ret))` re-throws the callee's bytes
+        // verbatim -- past the length word, for the length -- so a custom error
+        // keeps its selector and its arguments and decodes at the relayer, in
+        // the frontend and in a test's `expectRevert` exactly as it would on the
+        // direct road.
+        if (!ok) {
+            // Empty returndata is a different accident and gets a name of its
+            // own: a bare `revert(ptr, 0)` would be indistinguishable from a
+            // plain out-of-gas and would say nothing at all. It is what a
+            // missing selector or a `require` with no reason comes back as.
+            if (ret.length == 0) revert JobBoardDeployFailed();
+            assembly { revert(add(ret, 0x20), mload(ret)) }
+        }
         agreementAddr = abi.decode(ret, (address));
         if (agreementAddr == address(0)) revert JobBoardZeroAddress();
 

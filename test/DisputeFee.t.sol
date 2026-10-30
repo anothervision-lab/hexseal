@@ -131,7 +131,7 @@ contract DisputeFeeTest is Test {
         arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
         arbSels[3] = ArbiterRegistryFacet.submitVerdict.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](6);
+        bytes4[] memory arbSelsVault = new bytes4[](9);
         arbSelsVault[0] = ArbiterVaultFacet.creditDisputeFee.selector;
         arbSelsVault[1] = ArbiterVaultFacet.getTreasurySlice.selector;
         arbSelsVault[2] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
@@ -140,6 +140,13 @@ contract DisputeFeeTest is Test {
         // Since 17 September 2026 an overturned arbiter's share lands in the
         // bank, and the scene that says so has to be able to read it.
         arbSelsVault[5] = ArbiterVaultFacet.getVaultBalance.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026).
+        // `Agreement.raiseDispute` calls `holdDisputeFee` HARD -- no fee, no
+        // dispute -- so a rig that opens a dispute must route it or every such
+        // scene answers "Diamond: function not found".
+        arbSelsVault[6] = ArbiterVaultFacet.holdDisputeFee.selector;
+        arbSelsVault[7] = ArbiterVaultFacet.settleDisputeFee.selector;
+        arbSelsVault[8] = ArbiterVaultFacet.getHeldDisputeFee.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -335,13 +342,25 @@ contract DisputeFeeTest is Test {
         ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 5_400_000, "arbiter 90%");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),        600_000, "treasury 10%");
+        // ⚠️ THE WHOLE FEE, AND THE TREASURY NOTHING, SINCE 20 OCTOBER 2026
+        // (`ARBITER_SHARE_BPS` = 10 000, the owner: the treasury takes nothing
+        // out of arbitration). It read 5_400_000 / 600_000 -- 90% and 10%.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 6_000_000, "arbiter takes the whole fee");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),                    0, "treasury takes nothing");
     }
 
-    /// The treasury's share is computed by subtraction, so no unit is lost on a
-    /// non-round amount. 1_000_003 * 9000 / 10000 = 900_002 (floor), remainder
-    /// 200_001.
+    /// The treasury's share is computed by SUBTRACTION, so no unit is lost on a
+    /// non-round amount.
+    ///
+    /// ⚠️ AND SINCE 20 OCTOBER 2026 THE SUBTRACTION YIELDS NOUGHT, which does
+    /// NOT make this scene vacuous and the difference is worth stating. The
+    /// share is the whole fee, so `total - toArbiter` is nought on any amount
+    /// and the odd 1_000_003 goes to the judge entire. What the scene still
+    /// holds is the IDENTITY -- that the parts sum to the whole -- and that is
+    /// the line which reddens the day the share becomes a fraction again and is
+    /// written as a second `* bps / 10_000` instead of a subtraction. The old
+    /// arithmetic it was written against: 1_000_003 * 9000 / 10000 = 900_002
+    /// (floor), remainder 100_001.
     function testCreditDisputeFeeLosesNoUnitOnOddAmount() public {
         address agreement = _createAgreement();
         address arb = address(0xA1);
@@ -355,7 +374,7 @@ contract DisputeFeeTest is Test {
 
         uint256 toArb = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb);
         uint256 toTre = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
-        assertEq(toArb, 900_002, "arbiter share floors");
+        assertEq(toArb, 1_000_003, "the arbiter's share is the whole odd amount");
         assertEq(toArb + toTre, 1_000_003, "parts must sum to the whole");
     }
 
@@ -382,9 +401,16 @@ contract DisputeFeeTest is Test {
         ArbiterVaultFacet(address(diamond)).creditDisputeFee(1_000_003);
         vm.stopPrank();
 
-        // 6_000_000 -> 5_400_000/600_000; 1_000_003 -> 900_002/100_001.
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 5_400_000 + 900_002, "arbiter reward must accumulate");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),        600_000 + 100_001, "treasury slice must accumulate");
+        // ⚠️ 6_000_000 -> 6_000_000/0 and 1_000_003 -> 1_000_003/0 SINCE
+        // 20 OCTOBER 2026; it was 5_400_000/600_000 and 900_002/100_001.
+        //
+        // ⚠️ AND THE TREASURY LINE IS KEPT AT NOUGHT RATHER THAN DELETED, which
+        // is the whole point of this scene: it exists because a review once
+        // replaced `+=` with `=` on BOTH counters and all 380 tests stayed
+        // green. A nought that is asserted still catches a `=` that writes
+        // something; a deleted line catches nothing.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 6_000_000 + 1_000_003, "arbiter reward must accumulate");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),                                 0, "treasury slice must stay at nought");
     }
 
     // ⚠️ `testCreditDisputeFeeOverturnedSendsTheForfeitedShareToTheBankNotTheTreasury` IS GONE (9 October 2026).
@@ -432,13 +458,58 @@ contract DisputeFeeTest is Test {
         vm.prank(arb);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
 
-        assertEq(usdc.balanceOf(arb) - before, 5_400_000, "reward must actually reach the arbiter's wallet");
+        // ⚠️ THE WHOLE SIX DOLLARS, 21 OCTOBER 2026, and the line read
+        // 5_400_000. `creditDisputeFee` is the LEGACY door -- the one the
+        // sixteen clones born before the door charge still use -- and it splits
+        // what it is handed by `ARBITER_SHARE_BPS`. The owner set that share to
+        // the whole of it: the treasury takes nothing out of arbitration, so
+        // there is no tenth to hold back, on the legacy road any more than on
+        // the new one.
+        //
+        // Worked out by hand, retired figure first so the method can be checked.
+        // The retired share was nine tenths:
+        //     6_000_000 x 9_000 / 10_000 = 5_400_000
+        // -- the literal that stood here, reproduced exactly, so the
+        // multiplication is the right multiplication. Today:
+        //     6_000_000 x 10_000 / 10_000 = 6_000_000
+        //     the treasury's cut           6_000_000 - 6_000_000 = 0
+        //
+        // ⚠️ AND THE SIX DOLLARS IS NOT A FEE ANY RULE WOULD QUOTE -- it is a
+        // figure this scene hands the legacy door directly, which is the point
+        // of the scene: the door divides what it is given without asking what
+        // the live fee would have been. So the nought below is the claim that
+        // matters, and it is asserted rather than left implied.
+        assertEq(usdc.balanceOf(arb) - before, 6_000_000, "reward must actually reach the arbiter's wallet -- the whole fee is his");
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0,
+            "the treasury took a cut of an arbitration fee on the legacy door"
+        );
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "counter must be cleared");
     }
 
     /// Paying out the treasury's share is open to anyone: the money goes only to
     /// feeRecipient anyway, so the right to call decides nothing, and being open
     /// means the payout does not depend on the owner remembering it.
+    ///
+    /// ⚠️ AND SINCE 20 OCTOBER 2026 THIS RIG CANNOT PUT A CENT IN THE SLICE,
+    /// WHICH IS WHY THE MONEY ARM IS GONE AND THE ACCESS ARM IS WHAT IS LEFT.
+    /// `ARBITER_SHARE_BPS` is 10 000 -- the treasury takes nothing out of
+    /// arbitration -- and `creditDisputeFee` is the only door this fixture
+    /// mounts that ever fed `treasurySlice`. The scene used to credit a $6 fee
+    /// and watch 600 000 reach the fee recipient; crediting any fee now books
+    /// nought there, so that assertion would be asserting nought reached him,
+    /// which is also what a CLOSED door produces.
+    ///
+    /// ⚠️ SO THE CLAIM IS HELD BY THE NAME OF THE REFUSAL INSTEAD, and that is
+    /// a real measurement rather than a weaker one: a stranger is refused
+    /// `NothingToPush` and NOT `NotOwner`. The first says the door looked at
+    /// the balance; the second would say it looked at HIM. Only one of those is
+    /// "open to anyone".
+    ///
+    /// Where the slice IS still fed, and where its money is measured: the toll
+    /// of a settled appeal (test/AppealEconomics.t.sol,
+    /// test/AppealWageIsOutcomeBlind.t.sol) and the whole price of an appeal
+    /// nobody answered. Neither road exists on this fixture.
     function testAnyoneCanPushTheTreasurySlice() public {
         address agreement = _createAgreement();
         address arb = address(0xA1);
@@ -450,14 +521,23 @@ contract DisputeFeeTest is Test {
         ArbiterVaultFacet(address(diamond)).creditDisputeFee(6_000_000);
         vm.stopPrank();
 
-        address recipient = FactoryFacet(address(diamond)).getFeeRecipient();
-        uint256 before = usdc.balanceOf(recipient);
+        // ── THE CONTROL FIRST: the fee really was credited, and really all of
+        //    it went to the judge. Without this the refusal below would be
+        //    green on a rig where nothing happened at all. ──
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 6_000_000,
+            "control: the fee was not credited, so this scene measures an empty rig"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0,
+            "the treasury kept a share of an arbitration -- the decision of 20 October is undone"
+        );
 
+        // ── AND THE DOOR IS OPEN TO A STRANGER: it refuses him for the BALANCE
+        //    and not for his address. ──
         vm.prank(address(0xBEEF));
+        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-
-        assertEq(usdc.balanceOf(recipient) - before, 600_000, "slice must reach the fee recipient");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "counter must be cleared");
     }
 
     /// Nothing to push — a revert rather than a transfer of zero.

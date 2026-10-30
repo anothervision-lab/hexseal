@@ -224,6 +224,9 @@ contract ServiceBoardFacet {
     error SelfRequest();
     error ActiveDealExists();
     error TooManyPendingRequests();
+    /// The factory refused the hire and gave no reason bytes at all. Twin of
+    /// `JobBoardFacet.JobBoardDeployFailed`; the reasoning is there.
+    error ServiceBoardDeployFailed();
 
     // -------- REENTRANCY --------
 
@@ -644,7 +647,15 @@ contract ServiceBoardFacet {
                 region
             )
         );
-        require(ok, "ServiceBoard: deploy failed");
+        // The factory's own refusal passed through unchanged. The full argument
+        // is written out at the twin line in JobBoardFacet.acceptApplicant and
+        // is not repeated: in short, `require(ok, "...")` threw away the
+        // factory's reason, so the deal cap's two numbers never reached the
+        // person who needed them.
+        if (!ok) {
+            if (ret.length == 0) revert ServiceBoardDeployFailed();
+            assembly { revert(add(ret, 0x20), mload(ret)) }
+        }
         agreementAddr = abi.decode(ret, (address));
 
         req.agreement = agreementAddr;

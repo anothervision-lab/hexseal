@@ -126,7 +126,7 @@ contract ExtrasTest is Test {
         regSels[12] = RegistryFacet.registerOffer.selector;
         regSels[13] = RegistryFacet.notifyOfferAccepted.selector;
 
-        bytes4[] memory facSels = new bytes4[](15);
+        bytes4[] memory facSels = new bytes4[](16);
         facSels[0]  = FactoryFacet.initFactory.selector;
         facSels[1]  = FactoryFacet.deployAgreement.selector;
         facSels[2]  = FactoryFacet.setRegionFee.selector;
@@ -142,6 +142,14 @@ contract ExtrasTest is Test {
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
         facSels[14] = FactoryFacet.deployAndFund.selector;
+        // ⚠️ APPENDED 12 OCTOBER 2026 AND THIS FIXTURE CANNOT DO ITS JOB
+        // WITHOUT IT. `Agreement.proposeExtra` reads the ceiling its pot is
+        // held to by staticcalling this selector on the diamond, and a
+        // non-answer LOCKS the door on purpose (`PotCeilingUnavailable`, and
+        // the argument for closing rather than opening is at the error). This
+        // suite is ABOUT top-ups: measured, all fifteen of its top-up scenes
+        // reverted PotCeilingUnavailable without this one line.
+        facSels[15] = FactoryFacet.getAgreementPotCeiling.selector;
 
         bytes4[] memory arbSels = new bytes4[](15);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
@@ -159,7 +167,7 @@ contract ExtrasTest is Test {
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
         arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
         arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](12);
+        bytes4[] memory arbSelsVault = new bytes4[](15);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
@@ -172,6 +180,13 @@ contract ExtrasTest is Test {
         arbSelsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
         arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
         arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026).
+        // `Agreement.raiseDispute` calls `holdDisputeFee` HARD -- no fee, no
+        // dispute -- so a rig that opens a dispute must route it or every such
+        // scene answers "Diamond: function not found".
+        arbSelsVault[12] = ArbiterVaultFacet.holdDisputeFee.selector;
+        arbSelsVault[13] = ArbiterVaultFacet.settleDisputeFee.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.getHeldDisputeFee.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -265,9 +280,28 @@ contract ExtrasTest is Test {
         extraId = Agreement(agr).nextExtraId() - 1;
     }
 
+
+    /// ⚠️ OPEN A DISPUTE AND PAY FOR IT, AND **DO NOT MINT** (20 October 2026).
+    /// `raiseDispute` pulls `disputeFee()` from the opener through the diamond.
+    /// The first draft of this helper minted exactly the charge, which is fatal
+    /// in a file whose whole subject is that the system's total never moves:
+    /// a mint CREATES money, and the invariant went red by exactly ten dollars
+    /// with nothing wrong in `src/`.
+    ///
+    /// So the opener pays out of the purse the fixture already gave him. His
+    /// having it is asserted rather than assumed: a short purse would otherwise
+    /// make the door refuse and the scene fail somewhere else.
+    function _openTheDisputeAs(address who, address agr) internal {
+        uint256 doorCharge = Agreement(agr).disputeFee();
+        assertGe(
+            usdc.balanceOf(who), doorCharge,
+            "rig: the opener cannot pay the door charge out of what the fixture gave him"
+        );
+        vm.prank(who); usdc.approve(address(diamond), doorCharge);
+        vm.prank(who); Agreement(agr).raiseDispute();
+    }
     function _claimDispute(address agr) internal {
-        vm.prank(client);
-        Agreement(agr).raiseDispute();
+        _openTheDisputeAs(client, agr);
         bytes32 commitment = keccak256(abi.encodePacked(agr, arbiter, SALT));
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).commitDisputeClaim(commitment);

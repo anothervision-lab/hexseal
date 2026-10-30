@@ -471,7 +471,7 @@ contract ArbiterRemovalForCauseTest is Test {
     /// `_performRemoval` and leave everything else alone.
     function test_ARemovalForCauseTakesTheKeyToTheCorps() public {
         _setCleanStreak(arbiter, 9);
-        (, uint256 before, , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
+        (, uint256 before, , , , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
         assertEq(before, 9, "setup: he carries a run long enough to open the door");
 
         _proposeAndWait(arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, PROPOSAL_WORDS);
@@ -481,7 +481,7 @@ contract ArbiterRemovalForCauseTest is Test {
 
         assertFalse(_isArbiterRaw(arbiter), "setup: the removal happened");
 
-        (, uint256 after_, , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
+        (, uint256 after_, , , , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
         assertEq(after_, 0, "a removal for cause takes the key to the corps");
     }
 
@@ -511,7 +511,7 @@ contract ArbiterRemovalForCauseTest is Test {
             arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST, address(0), PROPOSAL_WORDS
         );
 
-        (uint256 xp, , , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
+        (uint256 xp, , , , , , , , , , , , , , , ) = acc.getArbiterStanding(arbiter);
         assertEq(xp, 4_321, "the stage is history and history is not rewritten by a removal");
     }
 
@@ -2477,7 +2477,7 @@ contract ArbiterRemovalForCauseTest is Test {
 
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     /// The gasless path of THIS copy of _msgSender() in full: the signature, the
@@ -2531,6 +2531,7 @@ contract ArbiterRemovalForCauseTest is Test {
             value: 0,
             gas:   500_000,
             nonce: fwd.getNonce(arb),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             // ⚠️ The selector is taken FROM THE TYPE, so the compiler picks up the
             // change of signature (17 August 2026, the words of the reply) by itself;
             // there are two arguments now. Calldata assembled by hand from the old
@@ -2696,14 +2697,14 @@ contract ArbiterRemovalForCauseTest is Test {
             keccak256(abi.encode(who, uint256(REP_BASE) + SLOT_UNIQUE_ACTIVE_USERS + 1)),
             bytes32(n)
         );
-        (, uint256 readBack, , , , , , , , , , , , ) = acc.getArbiterStanding(who);
+        (, uint256 readBack, , , , , , , , , , , , , , ) = acc.getArbiterStanding(who);
         assertEq(readBack, n, "the cleanStreak offset in ReputationStorage.Data has moved");
     }
 
     /// xp is field 0 of ReputationStorage.Data — the namespace base itself.
     function _setXP(address who, uint256 n) internal {
         vm.store(address(acc), keccak256(abi.encode(who, uint256(REP_BASE))), bytes32(n));
-        (uint256 readBack, , , , , , , , , , , , , ) = acc.getArbiterStanding(who);
+        (uint256 readBack, , , , , , , , , , , , , , , ) = acc.getArbiterStanding(who);
         assertEq(readBack, n, "the xp offset in ReputationStorage.Data has moved");
     }
 
@@ -2814,7 +2815,7 @@ contract ArbiterRemovalForCauseTest is Test {
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",

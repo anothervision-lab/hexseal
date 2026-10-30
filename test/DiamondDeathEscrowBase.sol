@@ -67,6 +67,7 @@ import "../src/facets/ArbiterApplicationsFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {DealCapOff} from "./DealCapOff.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -258,7 +259,7 @@ abstract contract DiamondDeathEscrowBase is Test {
         regSels[13] = RegistryFacet.registerOffer.selector;
         regSels[14] = RegistryFacet.notifyOfferAccepted.selector;
 
-        bytes4[] memory facSels = new bytes4[](14);
+        bytes4[] memory facSels = new bytes4[](15);
         facSels[0]  = FactoryFacet.initFactory.selector;
         facSels[1]  = FactoryFacet.deployAgreement.selector;
         facSels[2]  = FactoryFacet.setRegionFee.selector;
@@ -273,6 +274,13 @@ abstract contract DiamondDeathEscrowBase is Test {
         facSels[11] = FactoryFacet.getUsdc.selector;
         facSels[12] = bytes4(0x220f72fc);
         facSels[13] = FactoryFacet.getFeeBps.selector;
+        // ⚠️ APPENDED 12 OCTOBER 2026, AND IT IS LOAD BEARING ON EVERY TOP-UP.
+        // `Agreement.proposeExtra` reads the ceiling its pot is held to by
+        // staticcalling this selector on the diamond, and a non-answer LOCKS
+        // the door on purpose (`PotCeilingUnavailable`). A rig that does not
+        // route it is a rig on which no top-up works at all -- which is not
+        // what this fixture is here to measure.
+        facSels[14] = FactoryFacet.getAgreementPotCeiling.selector;
 
         bytes4[] memory arbSels = new bytes4[](16);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
@@ -356,6 +364,20 @@ abstract contract DiamondDeathEscrowBase is Test {
         ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
 
         _postSeatBond(arbiterAddr);
+
+        // ⚠️ THIS FIXTURE IS NOT ABOUT THE DEAL CEILING, and the two suites on
+        // it say so in one line rather than in sixty-eight edited literals.
+        // Every scene in DiamondDeathEscrow and DiamondDeathGasCaps is written
+        // on $1,000 deals -- chosen years ago to make the split arithmetic
+        // readable -- and the ceiling that landed on 12 October 2026 refuses
+        // anything over $500 at birth. Measured: 68 of their scenes reverted
+        // `DealAmountAboveCap` before reaching the thing they measure.
+        //
+        // The amounts are NOT retyped smaller, because their expectations are
+        // hand-typed against them and an expectation retyped to make a build
+        // pass has stopped being independent of the code. What the ceiling does
+        // is measured where it belongs, in test/DealCap.t.sol.
+        DealCapOff.thisSuiteIsNotAboutTheCeiling(address(diamond));
     }
 
     /// The bond behind a hand-given seat (8 September 2026).
@@ -403,8 +425,26 @@ abstract contract DiamondDeathEscrowBase is Test {
     /// Every selector Agreement calls on the diamond. Hand-collected from
     /// src/Agreement.sol lines 495, 795, 827, 849, 875, 964, 1253, 1262,
     /// 1281, 1286 — not derived from anything the test also checks.
+    /// ⚠️ EVERY DIAMOND CALL THE CLONE MAKES, AND THE LIST IS HAND-KEPT, WHICH
+    /// IS THE ONE THING ABOUT IT A READER MUST KNOW. A door the clone learns to
+    /// call and this list does not learn about leaves the bench measuring a
+    /// HALF-DEAD diamond: the kill switch goes on reporting "deaf" while the
+    /// new door answers normally, and every payout figure in the file quietly
+    /// becomes the figure for a diamond that still works.
+    ///
+    /// ⚠️ TWO DOORS WERE ADDED ON 20 OCTOBER 2026 AND THAT IS EXACTLY WHAT
+    /// HAPPENED FIRST. `Agreement.raiseDispute` now takes the dispute fee
+    /// through `holdDisputeFee`, and both roads out of DISPUTED return or pay
+    /// it through `settleDisputeFee`. Until they were added here, the
+    /// SELECTORS_REMOVED and FACET_REVERTS arms left `settleDisputeFee`
+    /// answering, so the fee came HOME to the client across a timeout the file
+    /// had declared unreachable -- and the split assertions failed by exactly
+    /// the fee, $30 on this file's $1000 pot.
+    ///
+    /// By signature TEXT and not by `.selector`, like the seven before them, so
+    /// that a rename on the facet cannot drag the expected side after it.
     function _agreementCallSelectors() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](7);
+        sels = new bytes4[](9);
         sels[0] = bytes4(keccak256("updateStatus(address,uint8)"));
         sels[1] = bytes4(keccak256("autoAwardXP(address)"));
         sels[2] = bytes4(keccak256("notifyExecutorFault(address)"));
@@ -412,6 +452,8 @@ abstract contract DiamondDeathEscrowBase is Test {
         sels[4] = bytes4(keccak256("hasSubmittedVerdict(address)"));
         sels[5] = bytes4(keccak256("creditDisputeFee(uint256)"));
         sels[6] = bytes4(keccak256("clearDisputeClaim(address)"));
+        sels[7] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
+        sels[8] = bytes4(keccak256("settleDisputeFee(bool)"));
     }
 
     function _kill(Kill mode) internal {
@@ -583,9 +625,9 @@ abstract contract DiamondDeathEscrowBase is Test {
         return DiamondLoupeFacet(address(diamond)).facetAddress(sel);
     }
 
-    /// The twenty selectors of ArbiterVaultFacet this bench actually uses.
+    /// The twenty-six selectors of ArbiterVaultFacet this bench actually uses.
     function _mountArbiterVault() private {
-                bytes4[] memory sels = new bytes4[](23);
+                bytes4[] memory sels = new bytes4[](26);
         sels[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         sels[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         sels[2] = ArbiterVaultFacet.getArbiters.selector;
@@ -609,6 +651,14 @@ abstract contract DiamondDeathEscrowBase is Test {
         sels[20] = ArbiterVaultFacet.getDisputeBounty.selector;
         sels[21] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
         sels[22] = ArbiterVaultFacet.getRefundableBounty.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026), AND ON THIS
+        // BENCH IN PARTICULAR. `Agreement.raiseDispute` calls `holdDisputeFee`
+        // HARD -- no fee, no dispute -- so a bench that measures what happens
+        // when the diamond is unreachable has to be able to open a dispute
+        // while it IS reachable, or its control arm never runs.
+        sels[23] = ArbiterVaultFacet.holdDisputeFee.selector;
+        sels[24] = ArbiterVaultFacet.settleDisputeFee.selector;
+        sels[25] = ArbiterVaultFacet.getHeldDisputeFee.selector;
 
         IDiamondCut.FacetCut[] memory vaultCut = new IDiamondCut.FacetCut[](1);
         vaultCut[0] = IDiamondCut.FacetCut(

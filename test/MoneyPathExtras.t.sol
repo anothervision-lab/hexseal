@@ -400,8 +400,12 @@ contract MoneyPathExtrasTest is MoneyPathBase {
         uint256 e0 = usdc.balanceOf(executor);
         uint256 c0 = usdc.balanceOf(client);
         _submitAndFinalize(a, false); // executor wins
-        uint256 disputeFee = AMOUNT * 300 / 10_000;
-        assertEq(usdc.balanceOf(executor) - e0, AMOUNT - disputeFee, "$97, where it used to be $155.20");
+        // ⚠️ THE WHOLE BODY, NOT THE BODY LESS THE FEE (20 October 2026). The
+        // dispute fee is taken at the DOOR, out of the opener's own wallet, so
+        // nothing is subtracted from the escrow at the verdict. The figure read
+        // $97 -- the body less 3% of it -- and before the extras were excluded
+        // from the verdict it read $155.20.
+        assertEq(usdc.balanceOf(executor) - e0, AMOUNT, "$100, where it used to be $97 and before that $155.20");
         assertEq(usdc.balanceOf(client) - c0, 60_000_000 + _extraFee(60_000_000), "the proposal went home instead, unearned fee with it");
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
     }

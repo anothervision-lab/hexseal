@@ -31,6 +31,71 @@ error FeeNotConfigured();
 /// revert: quietly returning a stale number is worse than failing.
 error FeeNotRegional();
 
+// ---------- THE DEAL CAP (the owner's decision, 10 October 2026) ----------
+//
+// Until today the protocol had NO upper bound on a deal at all: the only size
+// check anywhere on the money doors was `amount == 0`. A first mainnet day
+// could therefore carry a single deal of any size, through code that has never
+// settled one, and the blast radius of any bug in it was "whatever somebody
+// was willing to escrow".
+//
+// The bound GROWS WITH THE PROTOCOL'S OWN TRACK RECORD and can be let go of
+// once, by hand:
+//
+//     cap = max( DEAL_CAP_FLOOR , settledVolume * k / 10_000 )
+//     k   = min( CAP_SHARE_BPS , feeBps / 2 )
+//
+// ⚠️ WHY `k` IS TIED TO THE FEE, AND WHY THAT TIE IS THE WHOLE POINT. The
+// counter it reads can be fed on purpose — anybody may run deals through the
+// protocol for no reason but to raise the ceiling. So the question is not "can
+// it be farmed" but "does farming pay". To lift the cap to `C` an attacker must
+// settle `C/k` of volume and hand over `f·C/k` in fees, where `f` is the fee
+// rate; what the raised cap then lets him take away in one deal is at most `C`.
+// So the climb costs `f/k` of every dollar of ceiling it buys, and the whole
+// exercise only pays while `k > f`. Keeping the share BELOW the fee rate makes
+// buying the ceiling cost strictly more than the ceiling is worth.
+//
+// `feeBps / 2` rather than a bare 200 because `setFeeBps` has NO lower bound —
+// it is checked against `MAX_FEE_BPS` and nothing else. With a flat share, an
+// owner (or a stolen owner key) who drops the fee to 1 bp would leave a 2%
+// share standing against a 0.01% fee and make farming profitable two hundred
+// times over, through a door that looks like an ordinary price change. Tying
+// the share to half the live rate means lowering the fee TIGHTENS the cap by
+// itself, with nobody having to remember.
+//
+// EDGE, AND IT IS CORRECT: `feeBps == 0` gives `k == 0`, the volume term
+// collapses, and the bare floor stands. A protocol that charges nothing earns
+// no ceiling.
+//
+// ⚠️ THE CAP MEASURES THE ESCROW, NOT THE ESCROW PLUS THE FEE. The client pays
+// the fee on top at the direct hire and the boards hold it from posting; the
+// number bounded here is the sum that gets locked in the Agreement, because
+// that is the sum at risk if the escrow misbehaves.
+
+// The floor under the cap: $500, in USDC's 6 decimals. A deal of exactly this
+// size passes on a protocol that has settled nothing at all.
+// (`//` and not `///`: solc refuses a doc tag on a file-level variable.)
+uint256 constant DEAL_CAP_FLOOR = 500_000_000;
+
+// The largest share of settled volume the cap will ever follow: 2%. The live
+// share is `min(this, feeBps / 2)` — see the argument above.
+uint256 constant CAP_SHARE_BPS = 200;
+
+/// The deal is larger than the protocol's current ceiling.
+///
+/// ⚠️ IT CARRIES BOTH NUMBERS ON PURPOSE. A bare refusal here is unreadable:
+/// the ceiling is not a constant a person can look up, it moves with the
+/// protocol's settled volume and with the fee rate, so "too big" without "too
+/// big compared to what" leaves somebody staring at a rejected deal with
+/// nothing to change it to. The owner walked into exactly that kind of
+/// numberless refusal himself today, over a title length.
+error DealAmountAboveCap(uint256 cap, uint256 amount);
+
+/// `liftDealCap` has already been pressed. Kept distinct from a silent
+/// no-op: the button is once-only, and a second press is a sign that somebody
+/// believes the cap is still on when it is not.
+error DealCapAlreadyLifted();
+
 // ---------- STORAGE ----------
 
 library FactoryStorage {
@@ -297,6 +362,244 @@ library FactoryStorage {
 
         if (!delivered) fs.undeliveredFee += amount;
     }
+
+    /// @notice The protocol's current ceiling on one deal's escrow, in USDC
+    ///         (6 decimals). The single implementation of the formula — same
+    ///         rule as `quote` and `newDealsPaused`, and for the same reason:
+    ///         FactoryFacet asks it on both birth doors and the views hand it
+    ///         to the interface, and two readings that drift apart by one
+    ///         comparison give a protocol that refuses a deal at one door and
+    ///         takes it at the next.
+    ///
+    /// @dev `feeBps` is read LIVE here rather than snapshotted anywhere,
+    ///      because the tie to the fee is the anti-farming argument itself (see
+    ///      the header above). A copy of the rate kept beside the cap would go
+    ///      stale on the next `setFeeBps` and quietly restore the hole.
+    function dealCap(Layout storage fs) internal view returns (uint256) {
+        uint256 k = fs.feeBps / 2;
+        if (k > CAP_SHARE_BPS) k = CAP_SHARE_BPS;
+
+        uint256 fromVolume = (DealCapStorage.data().settledVolume * k) / 10_000;
+        return fromVolume > DEAL_CAP_FLOOR ? fromVolume : DEAL_CAP_FLOOR;
+    }
+
+    /// @notice Refuses a deal whose escrow is above the ceiling. Called on
+    ///         every door where money is locked into an Agreement.
+    ///
+    /// @dev `>` and not `>=`: a deal of exactly the cap is INSIDE it. The cap
+    ///      is a maximum, and a maximum that refuses its own value is an
+    ///      off-by-one that would show up as "the number you told me is the
+    ///      limit does not work".
+    function requireUnderCap(Layout storage fs, uint256 amount) internal view {
+        if (DealCapStorage.data().capLifted) return;
+
+        uint256 cap_ = dealCap(fs);
+        if (amount > cap_) revert DealAmountAboveCap(cap_, amount);
+    }
+
+    /// @notice Writes the ceiling a newborn clone's POT will be held to, and is
+    ///         called on both birth doors immediately after `deploy()` returns.
+    ///
+    /// @dev ⚠️ WHAT IS STORED IS `dealCap(fs)` AND NOT `getDealCap()`, so a
+    ///      clone born while the button is already pressed gets the FORMULA's
+    ///      number frozen onto it rather than `type(uint256).max`. While the
+    ///      button stays pressed this is unreachable — every reader short-
+    ///      circuits on `capLifted` before it looks here. It becomes visible
+    ///      only in the one world `liftDealCap`'s own doc comment admits to:
+    ///      somebody cuts in a facet that puts the cap back. In that world a
+    ///      deal born unbounded finds its own `amount` already above its frozen
+    ///      ceiling and its top-ups refused. That is the SAFE direction, and it
+    ///      is the direction chosen on purpose: the protocol has just decided
+    ///      to put a ceiling back, and an oversized deal growing further is the
+    ///      thing it decided against. Storing `type(uint256).max` would have
+    ///      made the un-lift silently fail to bind exactly the largest deals
+    ///      alive.
+    function freezePotCeiling(Layout storage fs, address agreement) internal {
+        DealCapStorage.data().potCeiling[agreement] = dealCap(fs);
+    }
+
+    /// @notice The ceiling on ONE deal's pot — the single implementation of the
+    ///         rule, read by `FactoryFacet.getAgreementPotCeiling` and through
+    ///         it by the clone itself.
+    ///
+    /// @dev THE RULE IS `max(frozen, live)`, AND THE ASYMMETRY IS THE POINT.
+    ///      The house rule says a live read of a setting at calculation time is
+    ///      a defect, and it says so because such a read can take something
+    ///      away from somebody who already agreed to something else. This read
+    ///      CANNOT take anything away: `max` lets the live ceiling only WIDEN
+    ///      the room under a running deal and never narrow it. A rising global
+    ///      ceiling helps deals that are already going — which is what the
+    ///      owner asked for — and a falling one leaves them exactly where they
+    ///      were born. One-way, and that one direction is why the rule is not
+    ///      broken by it.
+    ///
+    /// @dev `capLifted` SHORT-CIRCUITS BEFORE `potCeiling` IS EVEN READ: the
+    ///      button is meant to take the ceiling off the protocol, and a button
+    ///      that freed new deals while leaving every running one pinned to the
+    ///      number it was born under would be a half-pressed button.
+    ///
+    /// @dev A ZERO IN `potCeiling` MEANS "BORN BEFORE THIS FIELD EXISTED", and
+    ///      the answer for such a deal is "no ceiling" rather than the live
+    ///      global one. On chain this changes nothing — a clone running on the
+    ///      old implementation never executes the new code at all, EIP-1167
+    ///      having welded it to the implementation it was cut from — but the
+    ///      interface will ask about those deals, and answering with the live
+    ///      global ceiling would paint a limit onto a deal that has none.
+    ///      Showing a restriction that does not exist is the lie that costs
+    ///      somebody a top-up they could have made.
+    function agreementPotCeiling(address agreement) internal view returns (uint256) {
+        DealCapStorage.Data storage d = DealCapStorage.data();
+        if (d.capLifted) return type(uint256).max;
+
+        uint256 frozen = d.potCeiling[agreement];
+        if (frozen == 0) return type(uint256).max;
+
+        uint256 live = dealCap(store());
+        return frozen > live ? frozen : live;
+    }
+}
+
+// ---------- DEAL CAP STORAGE ----------
+
+/// A namespace of its own rather than three fields appended to
+/// `FactoryStorage.Layout` or `ReputationStorage.Data`.
+///
+/// ⚠️ THE REASON IS THE LAYOUT RULE, NOT TIDINESS. Both of those structs are
+/// live on Base Sepolia, and the Agreement clones read their implementation's
+/// layout by slot; appending to a live struct is allowed, but it is allowed
+/// only while nothing above the new field ever moves, and every append spends
+/// some of that margin. This namespace touches no existing slot at all, and
+/// its first read on a diamond that has never seen it returns zeroes that mean
+/// exactly the right thing: nothing settled yet, and the button not pressed.
+///
+/// It is also the only sane home for the three fields, because they are written
+/// from one facet (ReputationFacet, which is where a deal is known to have
+/// finished) and read from another (FactoryFacet, which is where a deal is
+/// born). One fact, one place, both facets import it.
+library DealCapStorage {
+    /// @custom:storage-location erc7201:hexseal.dealcap.storage
+    /// keccak256(abi.encode(uint256(keccak256("hexseal.dealcap.storage")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 constant POSITION = 0xe929cfb4a1f8954061436b77f4064961c15721fa318c081a9ac97959c0b22f00;
+
+    struct Data {
+        /// Cumulative USDC settled by deals that closed CLEAN — COMPLETED, with
+        /// no dispute ever raised on them.
+        ///
+        /// ⚠️ DISPUTED DEALS ARE DELIBERATELY NOT IN HERE, and that is not
+        /// squeamishness. The counter exists to answer one question — "how much
+        /// has this protocol carried smoothly" — and a deal that needed an
+        /// arbiter has not answered it. Worse, counting them would open the
+        /// farming road this cap is built to close from a second side: a
+        /// griefer could run volume up through disputes he raises himself.
+        uint256 settledVolume;
+        /// The one-way button. Nothing in this repository writes `false` here.
+        bool capLifted;
+        /// agreement → its amount is already in `settledVolume`.
+        ///
+        /// ⚠️ THE LOAD-BEARING FIELD OF THE WHOLE COUNTER. `autoAwardXP` says
+        /// in its own comments that it may be called more than once for one
+        /// agreement, `_addXP` runs once per RECIPIENT rather than once per
+        /// deal, and the legacy `claimXP` door is called separately by each
+        /// side. A counter added anywhere near the XP arithmetic without a
+        /// per-deal latch counts a two-party deal twice and hands an attacker a
+        /// free doubling of the ratchet.
+        mapping(address => bool) volumeCounted;
+        /// agreement → the ceiling its POT was born under, frozen at creation.
+        ///
+        /// ⚠️ APPENDED AT THE END, and that is the only legal move on a struct
+        /// whose namespace is already live. Nothing above it shifts, and a
+        /// diamond that has never seen this field reads zero out of it — which
+        /// is the value `getAgreementPotCeiling` is written to understand as
+        /// "this deal predates the field", not as "this deal's ceiling is nil".
+        ///
+        /// ⚠️ WHY A FROZEN NUMBER AND NOT A LIVE READ. The owner's
+        /// requirement, 12 October 2026: an executor may be up to his neck in
+        /// the work while we shrink the room he has to manoeuvre in, and the
+        /// honest one must not be the one who pays for that.
+        ///
+        /// (TRANSLATED FROM THE OWNER'S OWN WORDS ON 12 OCTOBER 2026, and the
+        /// translation is not decoration: this repository is public, everything
+        /// in it is written in English by house rule, and
+        /// script/check-public-payload.sh refuses both Cyrillic and reported
+        /// speech in the payload. The sentence that stood here was the quote
+        /// itself, and it made that gate red.)
+        ///
+        /// The global ceiling CAN FALL, and not by accident — it is built to:
+        /// `k = min(CAP_SHARE_BPS, feeBps / 2)`, so lowering the fee tightens
+        /// the cap, which is the whole anti-farming argument. Without this
+        /// snapshot an owner who cut the fee would have narrowed the room under
+        /// every deal already running, and the standing house rule is that what
+        /// a person signed up to is what they get: a live read of a setting at
+        /// settlement time is a defect.
+        mapping(address => uint256) potCeiling;
+    }
+
+    function data() internal pure returns (Data storage d) {
+        bytes32 pos = POSITION;
+        assembly { d.slot := pos }
+    }
+}
+
+// ---------- DEAL ORIGIN STORAGE ----------
+
+/// Where a deal came FROM, recorded on the line where it is still known.
+///
+/// ⚠️ A NAMESPACE OF ITS OWN, FOR THE REASON DealCapStorage GIVES ABOVE AT
+/// LENGTH AND NOT OUT OF TIDINESS. `FactoryStorage.Layout` and
+/// `ReputationStorage.Data` are both live on Base Sepolia and are read by slot;
+/// appending to a live struct is legal only while nothing above the new field
+/// ever moves, and every append spends some of that margin. This namespace
+/// touches no existing slot at all, and its first read on a diamond that has
+/// never seen it returns `false` — which is the value the readers are written
+/// to understand, and the safe one.
+///
+/// It is also the only sane home for the fact, because it is written by ONE
+/// facet (FactoryFacet, where every deal in the protocol is born) and read by
+/// ANOTHER (ReputationFacet, where a deal is known to have finished). One fact,
+/// one place, both facets import it — the same shape as DealCapStorage, only
+/// with the two directions swapped.
+library DealOriginStorage {
+    /// @custom:storage-location erc7201:hexseal.dealorigin.storage
+    /// keccak256(abi.encode(uint256(keccak256("hexseal.dealorigin.storage")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 constant POSITION = 0x8af8477e0e077ee26f63142ef027bc2529698becdff8779c15420e375ae32a00;
+
+    struct Data {
+        /// agreement → this deal was born through the diamond's INTERNAL
+        /// deploy door, which is the boards' door and nobody else's.
+        ///
+        /// ⚠️ `false` IS AN ANSWER AND NOT A MISSING ENTRY, and the whole rule
+        /// rests on reading it that way. Two doors create deals in this
+        /// protocol: `deployAgreement`, which refuses every caller but the
+        /// diamond itself (`msg.sender != address(this)`) and is reached only
+        /// by `JobBoardFacet.acceptApplicant` and
+        /// `ServiceBoardFacet.acceptRequest`, and `deployAndFund`, the direct
+        /// hire, which refuses every caller but the client himself. The first
+        /// writes `true` here; the second writes NOTHING, because the default
+        /// already says what is true of it.
+        ///
+        /// ⚠️ AND EVERY DEAL BORN BEFORE THIS FIELD EXISTED READS `false`, ON
+        /// PURPOSE AND WITH NO BACKFILL. The owner ruled that out aloud: there
+        /// is no migration script and there will not be one. So the streak
+        /// rules below treat the whole of the protocol's history as "not found
+        /// through a board" — which moves nobody's recorded streak, because
+        /// `cleanStreak` is a stored counter and not a view over history, and
+        /// only decides what deals settled from here on can do to it. The same
+        /// treatment `streakStalls` and `countedWins` describe for their own
+        /// first day.
+        ///
+        /// ⚠️ IT IS WRITTEN AT BIRTH AND READ AT SETTLEMENT, AND THOSE ARE
+        /// DIFFERENT TRANSACTIONS WITH DIFFERENT SENDERS. At the moment a deal
+        /// closes, `msg.sender` is whoever closed it — the clone, a party, a
+        /// relayer — and carries no trace of which door the deal came through.
+        /// Provenance cannot be worked out at the far end; it has to be
+        /// recorded here or not at all.
+        mapping(address => bool) bornOnBoard;
+    }
+
+    function data() internal pure returns (Data storage d) {
+        bytes32 pos = POSITION;
+        assembly { d.slot := pos }
+    }
 }
 
 // ---------- FACET ----------
@@ -448,6 +751,12 @@ contract FactoryFacet {
     /// arrived. Same shape and same reason as
     /// `ArbiterRegistryFacet.TreasurySlicePushed`.
     event UndeliveredFeesPushed(address indexed recipient, uint256 amount);
+
+    /// The deal cap was switched off for good. Carries the ceiling it stood at
+    /// and the settled volume behind it, because neither is recoverable from
+    /// state afterwards — `settledVolume` goes on growing and nothing else
+    /// remembers where the cap had got to.
+    event DealCapLifted(address indexed by, uint256 capAtLift, uint256 settledVolume);
 
     // -------- ERRORS --------
 
@@ -640,6 +949,15 @@ contract FactoryFacet {
         // percent, paid once per deal.
         if (FactoryStorage.newDealsPaused(fs)) revert FactoryPaused();
 
+        // THE DEAL CAP, on the same line the brake is on and for the same
+        // reason: this is one of exactly two places in the protocol where a
+        // deal is born, and a board written later cannot forget a gate that
+        // lives here. Both boards reach this function — they have no other way
+        // to create a deal, `msg.sender != address(this)` above having closed
+        // the direct road — so one check here covers `acceptApplicant`,
+        // `acceptRequest` and anything a third board does tomorrow.
+        FactoryStorage.requireUnderCap(fs, amount);
+
         if (IRegistry(fs.diamond).hasActivePair(client, executor)) revert ActiveDealExists();
 
         // Priced, not charged: the caller is a board, and the board has been
@@ -665,6 +983,40 @@ contract FactoryFacet {
         // without a zero check of its own must not slip silently into
         // register().
         if (agreementAddress == address(0)) revert FactoryZeroAddress();
+
+        // BIRTH DOOR ONE: freeze the ceiling this deal's POT is held to, now,
+        // while the number that made it creatable is still the number in force.
+        // Written on the same line as the birth and not in the boards, for the
+        // same reason the cap check sits here: a board written tomorrow cannot
+        // forget what it never had to remember.
+        FactoryStorage.freezePotCeiling(fs, agreementAddress);
+
+        // BORN OF A BOARD. One SSTORE, on the only line in the protocol where
+        // that is still knowable.
+        //
+        // ⚠️ WHY IT IS A FACT ABOUT THIS DOOR AND NOT A FACT ABOUT THE CALLER.
+        // The `msg.sender != address(this)` check thirty lines up closed this
+        // entrance to every wallet there is: the only way in is a facet of this
+        // diamond calling it through `address(this).call`, and the only two
+        // facets that do are `JobBoardFacet.acceptApplicant` and
+        // `ServiceBoardFacet.acceptRequest`. So "arrived here" and "was found
+        // through a board" are the same statement, by construction rather than
+        // by inspection — and a third board written tomorrow gets the mark for
+        // free, which is the same argument the deal cap and the emergency
+        // brake are placed on this line by.
+        //
+        // ⚠️ THE OTHER DOOR WRITES NOTHING, AND THAT IS NOT AN OMISSION. A
+        // direct hire (`deployAndFund`) leaves the default `false` standing,
+        // which already says exactly what is true of it; a second write of a
+        // value the slot already holds would cost gas to state the same thing,
+        // and the day somebody adds a third door the UNWRITTEN answer is the
+        // safe one. Absence here is an assertion, not a gap.
+        //
+        // ⚠️ AND IT CANNOT BE WORKED OUT LATER. At settlement `msg.sender` is
+        // whoever closed the deal and says nothing about where it came from,
+        // so a provenance test written in ReputationFacet would be reading the
+        // closer's address and calling it the origin.
+        DealOriginStorage.data().bornOnBoard[agreementAddress] = true;
 
         IRegistry(fs.diamond).register(agreementAddress, client, executor, amount);
 
@@ -732,6 +1084,16 @@ contract FactoryFacet {
         // percent, paid once per deal.
         if (FactoryStorage.newDealsPaused(fs)) revert FactoryPaused();
 
+        // THE DEAL CAP — the second of the two birth doors, the direct hire.
+        //
+        // Placed among the cheap checks, and NOT because the ordering protects
+        // the fee that leaves the client's wallet a few lines below: the revert
+        // rolls that transfer back from wherever this check stands. What the
+        // ordering buys is the gas, which on the gasless path is the relayer's
+        // money, spent on every attempt — the same argument `proposeExtra`
+        // makes for deciding EmptyTerms before it asks the diamond for a rate.
+        FactoryStorage.requireUnderCap(fs, amount);
+
         if (IRegistry(fs.diamond).hasActivePair(client, executor)) revert ActiveDealExists();
 
         uint256 fee = FactoryStorage.quote(fs, amount);
@@ -754,6 +1116,9 @@ contract FactoryFacet {
             fs.diamond, fs.usdc, fs.trustedForwarder, address(this)
         );
         if (agreementAddress == address(0)) revert FactoryZeroAddress();
+
+        // BIRTH DOOR TWO: the direct hire. Same line, same reason as above.
+        FactoryStorage.freezePotCeiling(fs, agreementAddress);
 
         // AN OFFER, NOT AN ASSIGNMENT (18 September 2026, the owner's
         // decision). This is the one road where the executor is named by
@@ -876,6 +1241,40 @@ contract FactoryFacet {
         emit MaxPendingRequestsUpdated(newMax);
     }
 
+    // -------- THE DEAL CAP: THE ONE-WAY BUTTON --------
+
+    /// @notice Switches the deal cap off, once and for all. After this the size
+    ///         of a deal is bounded by nothing in this protocol.
+    ///
+    /// @dev ⚠️ WHAT "IRREVERSIBLE" HONESTLY MEANS HERE. No function in this
+    ///      repository writes `capLifted = false`, so nothing the owner can
+    ///      call puts the cap back. It is NOT beyond recovery in an absolute
+    ///      sense: the owner of the diamond can always cut in a facet that
+    ///      writes that slot, and this one-way flag is no stronger than every
+    ///      other guarantee the proxy makes. What it is, and what makes it
+    ///      worth having, is that undoing it takes a `diamondCut` — a
+    ///      transaction on a public chain, in the loupe, visible to anyone
+    ///      watching the proxy — rather than a quiet setter nobody sees.
+    ///      Calling it "impossible" would be the lie; calling it "not without
+    ///      everybody being able to see it" is the truth.
+    ///
+    ///      Deliberately takes no argument and has no counterpart. A
+    ///      `setDealCapLifted(bool)` would be one typo away from being the
+    ///      quiet setter this is not.
+    ///
+    ///      The event carries the numbers the cap stood at as it was dropped,
+    ///      because afterwards they are unrecoverable from state: `settledVolume`
+    ///      keeps growing, and nothing records what the ceiling had reached.
+    function liftDealCap() external onlyOwner {
+        DealCapStorage.Data storage d = DealCapStorage.data();
+        if (d.capLifted) revert DealCapAlreadyLifted();
+
+        uint256 capAtLift = FactoryStorage.dealCap(FactoryStorage.store());
+        d.capLifted = true;
+
+        emit DealCapLifted(msg.sender, capAtLift, d.settledVolume);
+    }
+
     // -------- EMERGENCY BRAKE (decision 17) --------
     //
     // What it stops: the doors where money ENTERS the protocol — posting a job
@@ -957,6 +1356,63 @@ contract FactoryFacet {
     ///      built for an ordinary person.
     function newDealsPausedUntil() external view returns (uint256) {
         return FactoryStorage.store().newDealsPausedUntil;
+    }
+
+    // -------- THE DEAL CAP: READS --------
+
+    /// @notice The largest escrow a new deal may carry right now, in USDC
+    ///         (6 decimals). Zero is never returned while the cap is on — the
+    ///         floor is the smallest answer there is.
+    ///
+    /// @dev ⚠️ RETURNS `type(uint256).max` ONCE THE BUTTON HAS BEEN PRESSED,
+    ///      rather than reverting or returning zero. The interface has to put a
+    ///      number in front of a person BEFORE they start typing an amount, and
+    ///      both other answers make that number a lie in the dangerous
+    ///      direction: zero reads as "no deal of any size is allowed", which
+    ///      would be the exact opposite of the truth. `isDealCapLifted` is there
+    ///      for a screen that would rather say "no limit" in words than print a
+    ///      78-digit number.
+    function getDealCap() external view returns (uint256) {
+        if (DealCapStorage.data().capLifted) return type(uint256).max;
+        return FactoryStorage.dealCap(FactoryStorage.store());
+    }
+
+    /// @notice The largest POT one existing deal may ever hold, in USDC
+    ///         (6 decimals) — the number `Agreement.proposeExtra` refuses a
+    ///         top-up against, and the one an interface must show beside the
+    ///         top-up field.
+    ///
+    /// @dev THE CEILING ON A RUNNING DEAL IS NOT `getDealCap()`. That one moves
+    ///      with the protocol; this one was frozen when the deal was born and
+    ///      can only ever be widened afterwards. The two answers differ for
+    ///      every deal born before the fee was last lowered, and showing the
+    ///      global number on a deal screen would under-report the room a client
+    ///      actually has.
+    ///
+    /// @dev THE ONLY IMPLEMENTATION of the rule lives in
+    ///      `FactoryStorage.agreementPotCeiling` — the clone reads this
+    ///      selector rather than carrying a copy of the arithmetic, because a
+    ///      clone cannot be fixed and a second copy of a formula is a second
+    ///      formula.
+    ///
+    /// @dev Returns `type(uint256).max` for a deal the field has no entry for,
+    ///      which includes every deal created before this build. See the
+    ///      helper for why that is not the same as the live global ceiling.
+    function getAgreementPotCeiling(address agreement) external view returns (uint256) {
+        return FactoryStorage.agreementPotCeiling(agreement);
+    }
+
+    /// @notice Cumulative USDC settled by deals that closed clean — no dispute.
+    ///         The number the cap is computed from; disputed deals are not in
+    ///         it, deliberately (see DealCapStorage.settledVolume).
+    function getSettledVolume() external view returns (uint256) {
+        return DealCapStorage.data().settledVolume;
+    }
+
+    /// @notice Has the one-way button been pressed? Once true, never false
+    ///         again without a visible `diamondCut`.
+    function isDealCapLifted() external view returns (bool) {
+        return DealCapStorage.data().capLifted;
     }
 
     // -------- READ --------

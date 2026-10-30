@@ -47,6 +47,7 @@ import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {UpgradeJobBoardApplicantGate} from "../script/UpgradeJobBoardApplicantGate.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
     UpgradeJobBoardApplicantGate upgrade;
@@ -512,7 +513,8 @@ contract JobBoardApplicantGateUpgradeTest is BoardsFixture {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

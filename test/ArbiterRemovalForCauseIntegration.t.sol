@@ -48,6 +48,8 @@ import "../src/JobReceiptFacet.sol";
 import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
+import {pullAppealLot} from "./AppealLotRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract MockUSDCIntegration {
     mapping(address => uint256) public balanceOf;
@@ -89,7 +91,42 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     address arbiter;
 
     uint256 constant AMOUNT = 100 * 10 ** 6;
+
+    /// ⚠️ WHAT THE DIAMOND IS ALLOWED TO SPEND, AND WHY IT IS TWO TERMS SINCE
+    /// 20 OCTOBER 2026. The allowance a client grants the diamond used to cover
+    /// one thing -- the protocol's entrance fee on a hire. It now also covers
+    /// the DISPUTE FEE, because `Agreement.raiseDispute` takes that fee at the
+    /// door and the diamond is the puller (`ArbiterVaultFacet.holdDisputeFee`).
+    /// An allowance sized to the entrance fee alone answers "Allowance
+    /// exceeded" at the dispute door -- 21 scenes in this file on the day the
+    /// floor landed.
+    ///
+    /// It is a SUM of two named terms and not `type(uint256).max`, deliberately:
+    /// an infinite allowance in a fixture hides the day a door starts pulling
+    /// more than it should, and this file has scenes about exactly that.
+    uint256 constant DISPUTE_DOOR_CHARGE = 10_000_000;   // Agreement.DISPUTE_FEE_FLOOR
+    /// The appeal price, for the same reason and with the same discipline: a
+    /// named term rather than an infinite allowance.
+    ///
+    /// ⚠️ TWO SCENES IN THIS FILE APPROVED `20 * 10 ** 6` FOR IT AS A BARE
+    /// LITERAL, with the comment "APPEAL_DEPOSIT is 20 USDC", and both answered
+    /// "Allowance exceeded" once the owner put the price at a flat $30 on
+    /// 20 October 2026. Worked out by hand, retired figure first:
+    ///     the retired price  max( 20_000_000, 3% of the $100 pot = $3 )
+    ///                      = 20_000_000
+    /// -- which is the twenty those two lines were written against, so the
+    /// literal was right for its day. The price is a flat floor now:
+    ///     the price          30_000_000
+    /// and the gap, 10_000_000, is exactly the allowance the two scenes were
+    /// short by.
+    uint256 constant APPEAL_PRICE = 30_000_000;          // ArbiterRegistryFacet.APPEAL_DEPOSIT_FLOOR
     uint256 constant DEADLINE = 7;
+
+    /// OVERTURN_STRIKE_SPACING in ArbiterRegistryStorage: the least time
+    /// between two overturns that both count against one arbiter's mistake
+    /// streak (item 301, 17 October 2026). A human literal, never read back
+    /// out of the contract under measurement.
+    uint256 constant OVERTURN_STRIKE_SPACING = 7 days;
     string constant TERMS = "test terms";
     bytes32 constant DISPUTE_SALT = bytes32("removal-integration-salt");
 
@@ -173,7 +210,8 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         IDiamondCut.FacetCut[] memory remainingCuts = deploy.buildRemainingCuts(
             address(jobBoard), address(serviceBoard), address(arbiterFacet), address(vaultFacet), address(accFacet),
-            address(appFacet), address(metaFacet), address(receiptFacet), address(repFacet)
+            address(appFacet), address(metaFacet), address(receiptFacet), address(repFacet),
+            address(new ArbiterAppealFacet())
         );
         IDiamondCut(address(diamond)).diamondCut(remainingCuts, address(0), "");
 
@@ -199,6 +237,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // four scenes do before they drive a run. See _ensureAppealPanel.
         _addFreshArbiter(PANEL_A);
         _addFreshArbiter(PANEL_B);
+        _addFreshArbiter(PANEL_C);
     }
 
     // ── Helpers (moved from test/Diamond.t.sol with minimal edits) ──
@@ -218,10 +257,23 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// ActiveDealExists), a dispute, a claim, a verdict, an overturn by the owner.
     /// After each call arbiterMistakeStreak[arbiter] grows by one — BY THE LIVE road,
     /// not by vm.store.
+    /// ⚠️ IT OPENS BY MOVING THE CLOCK A WEEK SINCE 17 OCTOBER 2026, and that
+    /// is the rule under measurement rather than a convenience.
+    /// `OVERTURN_STRIKE_SPACING` counts an overturn against an arbiter's mistake
+    /// streak at most once per seven days (item 301, "a strike as a weapon"), so
+    /// a helper that stages two overturns back to back stages ONE strike — and
+    /// the thirty-eight scenes in this file that drive a run of mistakes would
+    /// be measuring the throttle instead of the thresholds they were written
+    /// for. Seven days is a human literal here: a helper that asked the contract
+    /// for its own spacing would stay green at any spacing, including none.
+    ///
+    /// The scenes that measure the THROTTLE itself keep their own clocks and do
+    /// not come through here — test/ArbiterOverturnStrikeSpacing.t.sol.
     function _disputeAndOverturn(address cli, address exec) internal returns (address agreementAddr) {
+        vm.warp(block.timestamp + OVERTURN_STRIKE_SPACING);
         usdc.mint(cli, 1_000_000 * 10 ** 6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10 ** 6);
+        usdc.approve(address(diamond), 10 * 10 ** 6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0
@@ -266,7 +318,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// first attempt at this is why the warning is here. 0x9E1/0x9E2 looked free
     /// and are not: this file hands them to `_disputeAndOverturn` as the CLIENT
     /// and EXECUTOR of a deal in two scenes, so the panel found itself voting on
-    /// its own case and `voteOnAppeal` answered `CannotVoteOnOwnDeal`. Measured,
+    /// its own case and `voteToOverturn` answered `CannotVoteOnOwnDeal`. Measured,
     /// not reasoned about -- two reds named it. 0xAF01/0xAF02 appear nowhere else
     /// in this file; check again before changing them.
     ///
@@ -276,23 +328,54 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// drive a mistake run. Seating lazily made those four red. The cost is two
     /// extra seats in `arbiterList` for every scene in the file, which exactly
     /// one assertion looks at -- see test_RemovalForCausePrunesArbiterList.
+    /// ⚠️ A THIRD SEAT SINCE DECISION 177 (14 October 2026): an overturn
+    /// takes three votes, so two cannot stage one at all. 0xAF03 appears
+    /// nowhere else in this file -- checked the same way the first two were.
     address constant PANEL_A = address(0xAF01);
     address constant PANEL_B = address(0xAF02);
+    address constant PANEL_C = address(0xAF03);
 
-    function _ensureAppealPanel() internal returns (address p1, address p2) {
+    function _ensureAppealPanel() internal returns (address p1, address p2, address p3) {
         p1 = PANEL_A;
         p2 = PANEL_B;
+        p3 = PANEL_C;
         _postRealBond(p1);
         _postRealBond(p2);
+        _postRealBond(p3);
+    }
+
+    /// Three of the arbiters the LOT called, who may actually vote.
+    ///
+    /// ⚠️ IT EXISTS BECAUSE THE PANEL IS NO LONGER THE SCENE'S TO NAME (the
+    /// lot, 14 October 2026). Two scenes below seat three fresh arbiters on top
+    /// of a corps that already holds four, so the chain calls five out of seven
+    /// and "v1, v2 and v3 vote" became a scene that works or not depending on a
+    /// block hash. What the scenes are about — the record the chain writes when
+    /// the panel overturns — does not depend on WHICH three men sat.
+    ///
+    /// The judge is skipped because the door refuses him on his own verdict;
+    /// everyone else in these scenes is hand-seated, which is all the panel
+    /// door asks of a man.
+    function _threeOfTheSummoned(address agr) internal view returns (address[3] memory out) {
+        (address[5] memory called, uint256 n, , , ) =
+            ArbiterAppealFacet(address(diamond)).getAppealSummons(agr);
+        address judge = ArbiterVaultFacet(address(diamond)).getPendingVerdict(agr).arbiter;
+        uint256 k;
+        for (uint256 i = 0; i < n && k < 3; i++) {
+            if (called[i] == judge) continue;
+            out[k] = called[i];
+            k++;
+        }
+        require(k == 3, "rig: the lot left fewer than three men who may vote");
     }
 
     /// The losing executor appeals and the panel overturns the ruling, which
     /// books the judged arbiter a mistake on `DemotionPath.AppealVote` -- the one
     /// surviving road to `Cause.OverturnedVerdicts`.
     function _panelOverturns(address agreementAddr, address loser) internal {
-        (address p1, address p2) = _ensureAppealPanel();
+        (address p1, address p2, address p3) = _ensureAppealPanel();
         require(
-            loser != p1 && loser != p2,
+            loser != p1 && loser != p2 && loser != p3,
             "rig: a panel seat is a party to this deal - pick other party addresses"
         );
 
@@ -300,18 +383,24 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         vm.prank(loser);
         usdc.approve(address(diamond), type(uint256).max);
         vm.prank(loser);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agreementAddr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agreementAddr);
+        pullAppealLot(address(diamond), agreementAddr);
         // The seats open an hour after the appeal (24 September 2026).
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1);
 
         vm.prank(p1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agreementAddr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agreementAddr);
         vm.prank(p2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agreementAddr, true);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agreementAddr);
+        vm.prank(p3);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agreementAddr);
 
-        // Two votes the same way are a formed panel and cannot tie, so this
-        // settles without waiting out the review window.
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agreementAddr);
+        // ⚠️ THREE VOTES SINCE DECISION 177 (14 October 2026), where two were
+        // a formed panel. The bar is three and there is no vote the other way,
+        // so with two this door answers `AppealWindowNotClosed`.
+        //
+        // The bar met, this settles without waiting out the review window.
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agreementAddr);
     }
 
     function _setUniqueActiveUsers(uint256 n) internal {
@@ -454,7 +543,19 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
     // ── Removal from arbiterList ──
 
-    function test_RemovalForCausePrunesArbiterList() public {
+    /// ⚠️ RENAMED AND REWRITTEN ON 14 OCTOBER 2026, AND THE EXPECTATION WAS
+    /// INVERTED ON PURPOSE. It used to be `test_RemovalForCausePrunesArbiterList`
+    /// and it demanded the array get SHORTER. It no longer does: a removal
+    /// empties the man's slot and the roster keeps its length, because the
+    /// appeal lot draws BY INDEX and a splice moved the last arbiter into the
+    /// departing man's index — a man the seed never chose onto a panel. The
+    /// argument is at ArbiterRegistryFacet.resignAsArbiter and the lever is
+    /// measured in test/AppealLotSeatIsAGrave.t.sol.
+    ///
+    /// What this scene still locks, and it is the part that mattered all along:
+    /// the removed arbiter is GONE from the roster by name, and nobody else
+    /// moved.
+    function test_RemovalForCauseEmptiesHisSlotAndMovesNobodyElse() public {
         address second = address(0x33);
         ArbiterRegistryFacet(address(diamond)).addArbiter(second);
         // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
@@ -464,9 +565,11 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(second);
-        // Three seats besides this scene's second arbiter: the base `arbiter` and
-        // the two appeal seats setUp now plants (see _ensureAppealPanel).
-        assertEq(ArbiterVaultFacet(address(diamond)).getArbiters().length, 4);
+        // Four seats besides this scene's second arbiter: the base `arbiter` and
+        // the THREE appeal seats setUp now plants (see _ensureAppealPanel — the
+        // third arrived with decision 177, which made an overturn take three
+        // votes).
+        assertEq(ArbiterVaultFacet(address(diamond)).getArbiters().length, 5);
 
         _disputeAndOverturn(address(0x201), address(0x202));
         _disputeAndOverturn(address(0x203), address(0x204));
@@ -478,15 +581,26 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
 
         address[] memory list = ArbiterVaultFacet(address(diamond)).getArbiters();
-        assertEq(list.length, 3, "the removed one must disappear from arbiterList and not only from isArbiter");
+        assertEq(
+            list.length, 5,
+            "the removal shortened arbiterList: a splice moves the last arbiter into the removed man's index, "
+            "and the appeal lot draws by index"
+        );
         // ⚠️ AND BY NAME, not only by the count. The number alone stopped being
-        // the whole check on 9 October 2026, when setUp began planting two appeal
-        // seats: a count can come out right while the wrong arbiter is the one
-        // that went.
+        // the whole check on 9 October 2026, when setUp began planting appeal
+        // seats -- two then, THREE since decision 177 made an overturn take
+        // three votes: a count can come out right while the wrong arbiter is
+        // the one that went. Since 14 October the count cannot move at all, so
+        // the name is the WHOLE check here.
         for (uint256 i = 0; i < list.length; i++) {
             assertTrue(list[i] != arbiter, "the removed arbiter is still in arbiterList");
         }
-        assertEq(list[0], second, "the arbiter left is the one who was not removed");
+        assertEq(list[0], address(0), "the removed arbiter's slot was not left empty");
+        assertEq(list[4], second, "the arbiter who was NOT removed was moved out of his own index");
+        assertFalse(
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
+            "the removed arbiter is still a member - the roster is a pointer table, isArbiter is the truth"
+        );
     }
 
     // ── The whole chain ──
@@ -1625,7 +1739,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     function _disputeAndSubmit(address cli, address exec) internal returns (address agreementAddr) {
         usdc.mint(cli, 1_000_000 * 10 ** 6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10 ** 6);
+        usdc.approve(address(diamond), 10 * 10 ** 6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         agreementAddr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0
@@ -1786,6 +1900,21 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             keccak256(abi.encode(who, uint256(REP_BASE) + SLOT_CLEAN_STREAK)),
             bytes32(uint256(50))
         );
+        // ⚠️ AND THE CLOCK UNDER THE RUN (12 October 2026). `applyAsArbiter`
+        // now also asks that the run be at least sixteen days old
+        // (`MIN_STREAK_SPAN_TO_REGISTER`), measured from
+        // `ReputationStorage.streakClockStartedAt` -- field 14, appended that
+        // day. A streak written straight into storage carries NO start, and an
+        // unrecorded start is refused outright (`CleanStreakTooYoung(0, ...)`),
+        // so without these two lines every scene here that expects a seating
+        // fails for a reason that is not its subject. The rule itself is
+        // measured in test/CleanStreakCostsSixDollars.t.sol.
+        if (block.timestamp <= 17 days) vm.warp(17 days + 1);
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(who, uint256(REP_BASE) + 14)),
+            bytes32(uint256(1))
+        );
         usdc.mint(who, ARBITER_BOND);
         vm.prank(who);
         usdc.approve(address(diamond), ARBITER_BOND);
@@ -1909,12 +2038,41 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         // The main consequence the parameter exists for: the window holds despite the
         // return. A thaw cannot be bought with a fresh bond.
+        //
+        // ⚠️ THE DOOR IS A NEW CASE SINCE 16 OCTOBER 2026, NOT THE MONEY, and the
+        // reason is this scene's own half-year warp rather than a preference.
+        // `finalizeVerdict` has a ceiling now (`SUSPENSION_HOLD_WINDOW`): a
+        // suspension holds a verdict's escrow until FINALIZE_DELAY plus 72 hours
+        // from the SUBMISSION of that verdict, and the verdict here is
+        // necessarily 180 days older than the suspension -- the cooldown is what
+        // makes a self-enrolment possible at all. So in THIS scene the money door
+        // cannot be held by anything, and a scene that demanded a refusal from it
+        // would be measuring the clock while claiming to measure the mark.
+        //
+        // What replaces it is still a CONSEQUENCE and not a field read, which is
+        // what this file's scenes are built on: he is back in the corps, the
+        // money for a bond is his, and he still cannot take work. `claimDispute`
+        // asks `requireNotSuspended` BEFORE it looks at the commitment, the claim
+        // or the bond -- hence the junk address and the zero salt, as in
+        // test/ArbiterSuspension.t.sol -- so nothing is staged and no money
+        // moves, and the refusal carries the same error with the same deadline
+        // the money door used to carry.
+        //
+        // Where the money bite is still measured: the scene above
+        // (`test_RemovedForCauseCannotFinalizeHisVerdictWithinTheWindow`, inside
+        // the window) and, for the ceiling itself, the pair in
+        // test/ArbiterSuspension.t.sol --
+        // `test_AMaximallyHeldVerdictFinalizesWhenTheCeilingPasses` and
+        // `test_OneSecondShortOfTheCeilingTheSuspensionStillHolds`.
         uint256 until = removedAtTs + ArbiterAccountabilityFacet(address(diamond)).getSuspensionWindow();
         vm.warp(removedAtTs + 24 hours);
+        vm.prank(arbiter);
         vm.expectRevert(
             abi.encodeWithSelector(ArbiterRegistryFacet.ArbiterSuspendedError.selector, until)
         );
-        ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agreementAddr);
+        ArbiterRegistryFacet(address(diamond)).claimDispute(
+            address(0xDEAD), bytes32(0), bytes32(uint256(1)), bytes32(uint256(2))
+        );
     }
 
     /// The `true` side. The same suspension is lifted by A SEATING BY THE OWNER — they
@@ -1976,14 +2134,14 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     // ============================================================
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     function _signFwd(MinimalForwarder fwd, uint256 pk, MinimalForwarder.ForwardRequest memory req)
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
@@ -2007,6 +2165,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             value: 0,
             gas:   1_000_000,
             nonce: fwd.getNonce(from),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
         vm.prank(address(0x9999)); // the relayer: a third address, neither the arbiter nor the forwarder
@@ -2186,7 +2345,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         address exec = address(0x658);
         usdc.mint(cli, 1_000_000 * 10 ** 6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10 ** 6);
+        usdc.approve(address(diamond), 10 * 10 ** 6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0
@@ -2263,24 +2422,38 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // paying out what it never took.
         _postRealBond(v3);
 
+        // ⚠️ THE THIRD STRIKE IS STAGED BY HAND HERE, SO IT CARRIES ITS OWN
+        // SPACING (17 October 2026). `_disputeAndOverturn` above moves the clock
+        // a week for the two it stages; this third overturn is built out of
+        // `_disputeAndSubmit` plus the appeal doors, so without this line it
+        // would land hours after the second one and `OVERTURN_STRIKE_SPACING`
+        // would leave the streak at two.
+        vm.warp(block.timestamp + OVERTURN_STRIKE_SPACING);
         address cli = address(0x65D);
         address exec = address(0x65E);
         address agr = _disputeAndSubmit(cli, exec);
         // submitVerdict(agr, true) — the client won, so it is the executor who appeals.
-        // APPEAL_DEPOSIT is 20 USDC.
+        // The appeal price is a flat $30 since 20 October 2026; this line read
+        // `20 * 10 ** 6` with a comment saying so, and answered "Allowance
+        // exceeded". See APPEAL_PRICE for the derivation of both eras.
         usdc.mint(exec, 100 * 10 ** 6);
         vm.prank(exec);
-        usdc.approve(address(diamond), 20 * 10 ** 6);
+        usdc.approve(address(diamond), APPEAL_PRICE);
         vm.prank(exec);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);   // overturn
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);   // overturn
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);  // leave it
+        address[3] memory sat = _threeOfTheSummoned(agr);
+        vm.prank(sat[0]);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);   // overturn
+        vm.prank(sat[1]);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);   // overturn
+        vm.prank(sat[2]);
+        // Since decision 177 there is no vote to leave it: the third man either
+        // joins the overturn or says nothing at all. He joins, and three is the
+        // bar, so the panel carries.
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
         vm.expectEmit(true, true, true, true, address(diamond));
         emit ArbiterRegistryFacet.RemovalProposedByChain(
@@ -2289,7 +2462,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             agr,
             vm.getBlockTimestamp()
         );
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
         assertTrue(
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter),
@@ -2320,7 +2493,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
 
-        (, , , , , , , , , uint256 removedAt1, , uint256 count1, uint256 lastAt1, uint8 cause1)
+        (, , , , , , , , , uint256 removedAt1, , uint256 count1, uint256 lastAt1, uint8 cause1, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertGt(removedAt1, 0, "the current removal is marked");
         assertEq(count1, 1, "one removal");
@@ -2336,7 +2509,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // it would have the diamond paying out what it never took.
         _postRealBond(arbiter);
 
-        (, , , , , , , , , uint256 removedAt2, , uint256 count2, uint256 lastAt2, uint8 cause2)
+        (, , , , , , , , , uint256 removedAt2, , uint256 count2, uint256 lastAt2, uint8 cause2, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(removedAt2, 0, "there is no current removal: it was undone by a seating");
         assertEq(count2, 1, "but a seating does not erase a past removal");
@@ -2350,7 +2523,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "published the chat log of a dispute to a third party"
         );
 
-        (, , , , , , , , , , , uint256 count3, uint256 lastAt3, uint8 cause3)
+        (, , , , , , , , , , , uint256 count3, uint256 lastAt3, uint8 cause3, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(count3, 2, "a second removal: the counter is two");
         assertEq(lastAt3, vm.getBlockTimestamp(), "the moment was updated to the last one");
@@ -2369,7 +2542,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         address exec = address(0x72C);
         usdc.mint(cli, 1_000_000 * 10 ** 6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10 ** 6);
+        usdc.approve(address(diamond), 10 * 10 ** 6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0
@@ -2399,7 +2572,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
-        (, , , , , , , , , , , uint256 count, , uint8 cause)
+        (, , , , , , , , , , , uint256 count, , uint8 cause, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(count, 1, "a timeout removed them: the counter grew");
         assertEq(cause, AUTO_TIMEOUT,
@@ -2434,7 +2607,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         address exec = address(0x7B6);
         usdc.mint(cli, 1_000_000 * 10 ** 6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10 ** 6);
+        usdc.approve(address(diamond), 10 * 10 ** 6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         address agr = FactoryFacet(address(diamond)).deployAgreement(
             cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0
@@ -2471,7 +2644,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         // And the record is read AFTER the seat is gone — which is when it matters,
         // because a removed arbiter is exactly who someone looks up.
-        (, , , , , , , , , , , uint256 count, uint256 lastAt, uint8 cause)
+        (, , , , , , , , , , , uint256 count, uint256 lastAt, uint8 cause, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(count, 1, "an abandoned claim removed them: the counter grew, as on every other road");
         assertEq(lastAt, vm.getBlockTimestamp(), "the moment recorded is the moment of THE REMOVAL");
@@ -2518,24 +2691,35 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // paying out what it never took.
         _postRealBond(v3);
 
+        // ⚠️ THE THIRD STRIKE IS STAGED BY HAND HERE, SO IT CARRIES ITS OWN
+        // SPACING (17 October 2026). `_disputeAndOverturn` above moves the clock
+        // a week for the two it stages; this third overturn is built out of
+        // `_disputeAndSubmit` plus the appeal doors, so without this line it
+        // would land hours after the second one and `OVERTURN_STRIKE_SPACING`
+        // would leave the streak at two.
+        vm.warp(block.timestamp + OVERTURN_STRIKE_SPACING);
         address cli = address(0x731);
         address exec = address(0x732);
         address agr = _disputeAndSubmit(cli, exec);
         usdc.mint(exec, 100 * 10 ** 6);
         vm.prank(exec);
-        usdc.approve(address(diamond), 20 * 10 ** 6);
+        // The flat $30 appeal price -- this line read `20 * 10 ** 6` and
+        // answered "Allowance exceeded"; see APPEAL_PRICE.
+        usdc.approve(address(diamond), APPEAL_PRICE);
         vm.prank(exec);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(agr);
+        pullAppealLot(address(diamond), agr);
         vm.warp(vm.getBlockTimestamp() + 1 hours + 1); // the seats open an hour after the appeal (24 September 2026)
 
-        vm.prank(v1);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v2);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, true);
-        vm.prank(v3);
-        ArbiterRegistryFacet(address(diamond)).voteOnAppeal(agr, false);
+        address[3] memory sat = _threeOfTheSummoned(agr);
+        vm.prank(sat[0]);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
+        vm.prank(sat[1]);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
+        vm.prank(sat[2]);
+        ArbiterAppealFacet(address(diamond)).voteToOverturn(agr);
 
-        ArbiterRegistryFacet(address(diamond)).resolveAppeal(agr);
+        ArbiterAppealFacet(address(diamond)).resolveAppeal(agr);
 
         // ⚠️ A third mistake accuses, and the common door removes two days later. The
         // card must name the road all the same — that is what chainProposalPath exists
@@ -2547,7 +2731,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
-        (, , , , , , , , , , , uint256 count, , uint8 cause)
+        (, , , , , , , , , , , uint256 count, , uint8 cause, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(count, 1, "the votes removed them: the counter grew");
         assertEq(cause, AUTO_APPEAL,
@@ -2581,7 +2765,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "setup: the self-enrolment went through"
         );
 
-        (, , , , , , , , , uint256 removedAt, , uint256 count, , uint8 cause)
+        (, , , , , , , , , uint256 removedAt, , uint256 count, , uint8 cause, , )
             = ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         assertEq(removedAt, 0, "self-enrolment clears the current removal: that is its right");
         assertEq(count, 1, "but the accused cannot zero the history");
@@ -2754,7 +2938,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
         // The moment of the removal is marked — otherwise there would be nothing to
         // answer. It is read from the card: the facet has no separate removedAt getter.
-        (, , , , , , , , , uint256 removedAt, , , , ) =
+        (, , , , , , , , , uint256 removedAt, , , , , , ) =
             ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(judged);
         assertGt(removedAt, 0, "the moment of the removal is marked");
         assertFalse(
@@ -2892,7 +3076,34 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// revert would be swallowed silently and the arbiter would go unpunished without a
     /// trace. So somebody else's clock is not reset, somebody else's accuser is not
     /// overwritten, and nothing reverts.
+    /// ⚠️ THE RUN IS SPLIT AROUND THE PROPOSAL SINCE 17 OCTOBER 2026, and the
+    /// reason is a real consequence of item 301 rather than a rig detail. Three
+    /// counted overturns now take at least two `OVERTURN_STRIKE_SPACING`s --
+    /// fourteen days -- and a human proposal lives exactly `PROPOSAL_TTL`,
+    /// which is also fourteen days. A proposal laid BEFORE the whole run is
+    /// therefore stale by the time the third strike lands, the chain sees no
+    /// live proposal, and it lays its own: the branch this scene exists for
+    /// becomes unreachable and the scene would have been measuring the
+    /// overwrite instead of the yield. Measured, not reasoned about -- that is
+    /// exactly how it went red (`the human clock is untouched: 1828804 != 1`).
+    ///
+    /// So the human lays his accusation after the first two strikes, and the
+    /// third arrives one spacing later with his proposal seven days old. What
+    /// the scene asserts is unchanged.
+    ///
+    /// ⚠️ AND THE CONSEQUENCE IS NAMED RATHER THAN HIDDEN HERE: a chain
+    /// accusation can no longer arrive while a human proposal laid at the START
+    /// of a mistake run is still standing, because the run is now longer than
+    /// the proposal lives. The yield still happens for a proposal laid LATER in
+    /// the run, which is what this scene now stages.
     function test_ChainYieldsToALiveHumanProposalWithoutReverting() public {
+        _disputeAndOverturn(address(0x9A1), address(0x9A2));
+        _disputeAndOverturn(address(0x9A3), address(0x9A4));
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(arbiter), 2,
+            "rig: the first two strikes did not both count -- the spacing in the helper is not working"
+        );
+
         ArbiterAccountabilityFacet(address(diamond)).proposeRemoval(
             arbiter, ArbiterAccountabilityFacet.Cause.Collusion, DIGEST,
             "three times took the disputes of one counterparty and three times ruled in their favour"
@@ -2901,7 +3112,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
 
         vm.warp(vm.getBlockTimestamp() + 1 hours);
-        _threeOverturnsOnDistinctDisputes(arbiter); // must not revert
+        _disputeAndOverturn(address(0x9A5), address(0x9A6)); // the third, and it must not revert
 
         (uint8 cause1, bytes32 digest1, uint256 afterTs, address by1, ) =
             ArbiterAccountabilityFacet(address(diamond)).getRemovalProposal(arbiter);
@@ -3159,7 +3370,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     function _fundedDisputeClaimedBy(address cli, address exec) internal returns (address agr) {
         usdc.mint(cli, 1_000_000 * 10 ** 6);
         vm.prank(cli);
-        usdc.approve(address(diamond), 10 * 10 ** 6);
+        usdc.approve(address(diamond), 10 * 10 ** 6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         agr = FactoryFacet(address(diamond)).deployAgreement(cli, exec, arbiter, AMOUNT, DEADLINE, TERMS, 0);
         vm.prank(cli);
@@ -3491,7 +3702,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // Nothing is lost: they can press the chain's button themselves, like anybody
         // else — and then the record will tell the truth about the origin.
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(arbiter);
-        (, , , , , , , , , , , , , uint8 cause) =
+        (, , , , , , , , , , , , , uint8 cause, , ) =
             ArbiterAccountabilityFacet(address(diamond)).getArbiterStanding(arbiter);
         // ⚠️ AUTO_APPEAL, NOT AUTO_OVERTURN, SINCE 9 OCTOBER 2026. The run that
         // reaches this removal is driven by `_disputeAndOverturn`, whose overturn

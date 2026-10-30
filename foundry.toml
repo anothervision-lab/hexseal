@@ -4,6 +4,39 @@ out = "out"
 libs = ["lib"]
 optimizer = true
 optimizer_runs = 200
+
+# ── `via_ir` IS NOT A PREFERENCE, IT IS THE ONLY THING THAT COMPILES ───────
+#
+# Written down 15 October 2026 because this line sat here bare and read as a
+# choice taken for the sake of the bytecode -- i.e. as a lever somebody could
+# pull back to make the ~19-minute build cheaper. It is not a lever.
+#
+# MEASURED that day, three runs, optimizer already on (item 307 of the working
+# journal). Every configuration WITHOUT `via_ir` fails to compile:
+#
+#   test/** + script/** without via_ir           EXIT 1, Stack too deep
+#   test/** only without via_ir                  EXIT 1, Stack too deep
+#   src/** only, --skip test --skip script       EXIT 1, Stack too deep
+#
+#       Compiler error (/solidity/libyul/backends/evm/AsmCodeGen.cpp:63):
+#       Stack too deep.
+#
+# The last row is the one that settles it: even the narrowest possible unit,
+# `src/` alone, does not build. So the single huge compilation unit is not the
+# price of a preference, and splitting the tree into per-path compiler profiles
+# to cut the cost is closed as IMPOSSIBLE rather than as unattractive -- until
+# the code that needs the IR pipeline is itself changed. Recheck: item 307.
+#
+# ⚠️ AND IF A PER-PATH PROFILE EVER BECOMES POSSIBLE, IT IS A CHANGE TO WHAT
+# GOES ON CHAIN, NOT A BUILD-TIME TWEAK. Facet initcode is embedded in the
+# SCRIPTS: `new ArbiterRegistryFacet()` stands in script/DeployFull.s.sol:274
+# and in six more live cut scripts (measured 15 October 2026 by enumerating
+# script/*.sol; fifteen more sit in script/archive/). The creation code the
+# broadcast deploys is compiled as part of the SCRIPT's unit, not read back
+# from out/ArbiterRegistryFacet.sol/ArbiterRegistryFacet.json -- so a different
+# profile for `script/**`
+# would move the deployed bytes while leaving that artifact byte-identical, and
+# an acceptance that compares artifact hashes would see nothing.
 via_ir = true
 
 # ── TOOLCHAIN PINS ────────────────────────────────────────────────────────
@@ -182,3 +215,61 @@ fs_permissions = [
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+# ── FUZZ SEED: PINNED 13 OCTOBER 2026, AND WHAT IT COSTS ──────────────────────
+#
+# Until today there was no [fuzz] section at all, so every run drew fresh
+# inputs. That has one consequence nobody chose:
+#
+#   A COUNTEREXAMPLE FOUND ON ONE MACHINE COULD NEVER REACH ANOTHER. forge
+#   saves a failing input to cache/fuzz/failures/<Suite>/<test>, and cache/ is
+#   in .gitignore with zero files tracked. The lock fired, wrote down what it
+#   found, and the finding died on that disk. Measured: one such file sits
+#   here, written 12 October at 20:42 for DiamondTest::testFuzzDeployAgreement.
+#   Five runs of that test today pass on the saved input, so something fixed
+#   it -- and nothing anywhere records what, because nobody else ever saw the
+#   input. Carried in the working journal as item 299. (The journal itself does
+#   not travel to the public showcase, so only the number is named here: a path
+#   would be a dead link for every reader there.)
+#
+# ⚠️ WHAT PINNING BUYS AND WHAT IT SPENDS, both out loud. It buys a red that
+# is the SAME red on every machine: a fuzz failure can be handed to somebody
+# else by naming the test, and they will see it. It spends exploration -- the
+# fuzzer now walks the same inputs every run and will not stumble on a new
+# one by chance. Four fuzz tests, no invariant tests, so the surface given up
+# is small and the reproducibility is worth more here.
+#
+# ⚠️ AND THE HONEST CONSEQUENCE OF THAT TRADE: a pinned fuzzer stops being a
+# search. It is a fixed set of cases wearing a fuzzer's clothes. New ground is
+# covered by somebody writing a case on purpose, not by the dice -- so when a
+# fuzz test is the only cover for a rule, that is now a hand-written gap, not
+# a machine that will eventually get there.
+#
+# ⚠️ AND WHAT IT DOES NOT BUY, MEASURED RATHER THAN ASSUMED. Pinning the seed
+# makes a run reproducible AT THE SAME CONCURRENCY, not everywhere. Measured
+# 13 October 2026 on one deliberately-failing fuzz test, cache/fuzz cleared
+# before every run so the replay could not do the work instead of the seed:
+#
+#       forge test -j 1          3 runs, same input every time
+#       forge test  (default)    3 runs, same input every time
+#       the two sets             DIFFERENT inputs from each other
+#
+# `-j` defaults to the core count, so two machines with different cores walk
+# different inputs even with the same seed. Handing somebody a failing test by
+# name therefore works on the same machine and may not across machines unless
+# they also match `-j`. Pinning `-j 1` as well would close that and was not
+# done: the suite is 134 files and single-threading it costs far more than the
+# gap is worth.
+#
+# ⚠️ ONE RUN REFUSED TO FIT, AND IT IS WRITTEN DOWN RATHER THAN EXPLAINED AWAY.
+# The very first run of that experiment produced a different input from the
+# eight that followed, including runs after a forced recompile. No hypothesis
+# tested reproduced it. The honest statement is that eight runs agree and one
+# did not, and nobody knows why.
+#
+# The number is the date the decision was taken. It means nothing arithmetically
+# and is not supposed to: any constant does the job, and a date says when the
+# exploration stopped.
+[profile.default.fuzz]
+seed = "20261013"
+

@@ -36,6 +36,8 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/ReputationFacet.sol";
 import {TreasuryLinkFacet} from "../src/facets/TreasuryLinkFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {DealCapOff} from "./DealCapOff.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 // ---------- MOCK USDC ----------
 //
@@ -150,189 +152,85 @@ abstract contract MoneyPathBase is Test {
         ReputationFacet      repFacet        = new ReputationFacet();
         TreasuryLinkFacet    linkFacet       = new TreasuryLinkFacet();
 
-        bytes4[] memory regSels = new bytes4[](15);
-        regSels[0]  = RegistryFacet.initRegistry.selector;
-        regSels[1]  = RegistryFacet.register.selector;
-        regSels[2]  = RegistryFacet.updateStatus.selector;
-        regSels[3]  = RegistryFacet.setAuthorizedFactory.selector;
-        regSels[4]  = RegistryFacet.hasActivePair.selector;
-        regSels[5]  = RegistryFacet.getActivePair.selector;
-        regSels[6]  = RegistryFacet.getRecord.selector;
-        regSels[7]  = RegistryFacet.getByClient.selector;
-        regSels[8]  = RegistryFacet.getByExecutor.selector;
-        regSels[9]  = RegistryFacet.getActive.selector;
-        regSels[10] = RegistryFacet.totalAgreements.selector;
-        regSels[11] = RegistryFacet.authorizedFactory.selector;
-        regSels[12] = RegistryFacet.notifyWorkHandedIn.selector;
-        // Appended 18 September 2026: a direct hire is an OFFER, so the
-        // factory registers it through registerOffer, and the clone
-        // announces the acceptance. Without both mounted this rig's
-        // deployAndFund reverts with "function not found".
-        regSels[13] = RegistryFacet.registerOffer.selector;
-        regSels[14] = RegistryFacet.notifyOfferAccepted.selector;
+        // ⚠️ THE APPLICATIONS FACET IS DEPLOYED HERE AND NOT INSIDE THE CUT
+        // BELOW, AND THE REASON IS AN ADDRESS. It used to be created inline in
+        // the cut, which put it BEFORE the proxy in this contract's nonce
+        // sequence; building the cut in stages moved it after, every address
+        // from the proxy onwards shifted, and the clone's own certificate — a
+        // document pinned byte for byte in test/AgreementCertificateSnapshot.t.sol
+        // because a human has to bless it — came out different. Nothing about
+        // the product had changed. Deployed in order, the addresses are the
+        // ones the golden prints were taken against.
+        ArbiterApplicationsFacet appsFacet = new ArbiterApplicationsFacet();
 
-        bytes4[] memory facSels = new bytes4[](18);
-        facSels[0]  = FactoryFacet.initFactory.selector;
-        facSels[1]  = FactoryFacet.deployAgreement.selector;
-        facSels[2]  = FactoryFacet.deployAndFund.selector;
-        facSels[3]  = FactoryFacet.setFeeRecipient.selector;
-        facSels[4]  = FactoryFacet.setTrustedForwarder.selector;
-        facSels[5]  = FactoryFacet.setAgreementDeployer.selector;
-        facSels[6]  = FactoryFacet.getFeeRecipient.selector;
-        facSels[7]  = FactoryFacet.getTrustedForwarder.selector;
-        facSels[8]  = FactoryFacet.getUsdc.selector;
-        facSels[9]  = FactoryFacet.getAgreementDeployer.selector;
-        facSels[10] = FactoryFacet.setFeeBps.selector;
-        facSels[11] = FactoryFacet.setFeeFloor.selector;
-        facSels[12] = FactoryFacet.setMaxPendingRequests.selector;
-        facSels[13] = FactoryFacet.quoteFee.selector;
-        facSels[14] = FactoryFacet.getFeeFloor.selector;
-        facSels[15] = FactoryFacet.getUndeliveredFees.selector;
-        facSels[16] = FactoryFacet.withdrawUndeliveredFees.selector;
-        facSels[17] = FactoryFacet.getFeeBps.selector;
+        // ⚠️ TWO CUTS AND NOT ONE, 14 OCTOBER 2026, AND IT IS THE STACK AND
+        // NOT A TIDY-UP. Fourteen `FacetCut` structs and their fourteen
+        // selector lists were all live at once in this frame, and this frame is
+        // INLINED INTO EVERY DERIVED `setUp` — so every file inheriting this
+        // base sat one or two slots short of what via_ir can hold. Adding two
+        // selectors to one list, or a two-line cut to a derived `setUp`, then
+        // produced "Cannot swap Variable expr_... too deep in the stack by 3
+        // slots" pointing at a line in THIS file, which is not where the fault
+        // was. Five facets go in with the proxy and nine follow in a second
+        // call and nine over two more, so the peak is five structs instead of
+        // fourteen.
+        //
+        // The diamond ends up identical: `diamondCut` is additive and the
+        // DiamondCutFacet is in the first group, which is what makes the second
+        // call possible at all. The same shape `script/DeployFull.s.sol` uses
+        // for the real chain (`buildInitCuts` then `buildRemainingCuts`).
+        IDiamondCut.FacetCut[] memory first = new IDiamondCut.FacetCut[](5);
+        first[0] = IDiamondCut.FacetCut(address(cutFacet),      IDiamondCut.FacetCutAction.Add, _cutSels());
+        first[1] = IDiamondCut.FacetCut(address(loupeFacet),    IDiamondCut.FacetCutAction.Add, _loupeSels());
+        first[2] = IDiamondCut.FacetCut(address(ownFacet),      IDiamondCut.FacetCutAction.Add, _ownSels());
+        first[3] = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, _regSels());
+        first[4] = IDiamondCut.FacetCut(address(factoryFacet),  IDiamondCut.FacetCutAction.Add, _facSels());
 
-        bytes4[] memory jobSels = new bytes4[](13);
-        jobSels[0]  = JobBoardFacet.mintJob.selector;
-        jobSels[1]  = JobBoardFacet.applyForJob.selector;
-        jobSels[2]  = JobBoardFacet.acceptApplicant.selector;
-        jobSels[3]  = JobBoardFacet.cancelJob.selector;
-        jobSels[4]  = JobBoardFacet.getJob.selector;
-        jobSels[5]  = JobBoardFacet.getClientJobs.selector;
-        jobSels[6]  = JobBoardFacet.getApplicants.selector;
-        jobSels[7]  = JobBoardFacet.withdrawApplication.selector;
-        jobSels[8]  = JobBoardFacet.editJob.selector;
-        jobSels[9]  = JobBoardFacet.totalJobs.selector;
-        jobSels[10] = JobBoardFacet.getOpenJobs.selector;
-        jobSels[11] = JobBoardFacet.getJobFeeHeld.selector;
-        jobSels[12] = JobBoardFacet.mintJobWithPermit.selector;
+        diamond = new DiamondProxy(owner, first, address(0), "");
 
-        bytes4[] memory svcSels = new bytes4[](14);
-        svcSels[0]  = ServiceBoardFacet.mintService.selector;
-        svcSels[1]  = ServiceBoardFacet.requestService.selector;
-        svcSels[2]  = ServiceBoardFacet.acceptRequest.selector;
-        svcSels[3]  = ServiceBoardFacet.rejectRequest.selector;
-        svcSels[4]  = ServiceBoardFacet.cancelRequest.selector;
-        svcSels[5]  = ServiceBoardFacet.getService.selector;
-        svcSels[6]  = ServiceBoardFacet.getRequest.selector;
-        svcSels[7]  = ServiceBoardFacet.totalServices.selector;
-        svcSels[8]  = ServiceBoardFacet.totalRequests.selector;
-        svcSels[9]  = ServiceBoardFacet.getRequestFunds.selector;
-        svcSels[10] = ServiceBoardFacet.getRequestFeeHeld.selector;
-        svcSels[11] = ServiceBoardFacet.getPendingRequestIdsByClientAndExecutor.selector;
-        svcSels[12] = ServiceBoardFacet.getPendingRequestCount.selector;
-        svcSels[13] = ServiceBoardFacet.removeService.selector;
+        IDiamondCut.FacetCut[] memory boards = new IDiamondCut.FacetCut[](4);
+        boards[0] = IDiamondCut.FacetCut(address(jobFacet),     IDiamondCut.FacetCutAction.Add, _jobSels());
+        boards[1] = IDiamondCut.FacetCut(address(svcFacet),     IDiamondCut.FacetCutAction.Add, _svcSels());
+        boards[2] = IDiamondCut.FacetCut(address(receiptFacet), IDiamondCut.FacetCutAction.Add, _receiptSels());
+        boards[3] = IDiamondCut.FacetCut(address(repFacet),     IDiamondCut.FacetCutAction.Add, _repSels());
+        IDiamondCut(address(diamond)).diamondCut(boards, address(0), "");
 
-        bytes4[] memory receiptSels = new bytes4[](4);
-        receiptSels[0] = JobReceiptFacet.mintJobReceipt.selector;
-        receiptSels[1] = JobReceiptFacet.burnJobReceipt.selector;
-        receiptSels[2] = JobReceiptFacet.isJobReceiptBurned.selector;
-        receiptSels[3] = JobReceiptFacet.getTokenIdByJobId.selector;
-
-        bytes4[] memory arbSels = new bytes4[](10);
-        arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
-        arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
-        arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
-        arbSels[3] = ArbiterRegistryFacet.clearDisputeClaim.selector;
-        arbSels[4] = ArbiterRegistryFacet.submitVerdict.selector;
-        arbSels[5] = ArbiterRegistryFacet.finalizeVerdict.selector;
-        arbSels[6] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
-        arbSels[7] = ArbiterRegistryFacet.raiseAppeal.selector;
-        arbSels[8] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        arbSels[9] = ArbiterRegistryFacet.resolveAppeal.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](28);
-        arbSelsVault[0] = ArbiterVaultFacet.isRegisteredArbiter.selector;
-        arbSelsVault[1] = ArbiterVaultFacet.getDisputeClaimer.selector;
-        arbSelsVault[2] = ArbiterVaultFacet.withdrawArbiterReward.selector;
-        arbSelsVault[3] = ArbiterVaultFacet.fundVault.selector;
-        arbSelsVault[4] = ArbiterVaultFacet.getPendingVerdict.selector;
-        arbSelsVault[5] = ArbiterVaultFacet.getVaultBalance.selector;
-        arbSelsVault[6] = ArbiterVaultFacet.creditDisputeFee.selector;
-        arbSelsVault[7] = ArbiterVaultFacet.getTreasurySlice.selector;
-        arbSelsVault[8] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
-        arbSelsVault[9] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
-        arbSelsVault[10] = ArbiterVaultFacet.setArbiterFloor.selector;
-        arbSelsVault[11] = ArbiterVaultFacet.getArbiterFloor.selector;
-        arbSelsVault[12] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
-        arbSelsVault[13] = ArbiterVaultFacet.fundDispute.selector;
-        arbSelsVault[14] = ArbiterVaultFacet.getDisputeBounty.selector;
-        arbSelsVault[15] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
-        arbSelsVault[16] = ArbiterVaultFacet.getRefundableBounty.selector;
-        arbSelsVault[17] = ArbiterVaultFacet.setDisputeDiscount.selector;
-        arbSelsVault[18] = ArbiterVaultFacet.getDisputeDiscount.selector;
-        arbSelsVault[19] = ArbiterVaultFacet.getAppealVotes.selector;
-        // The appeal economics (17 September 2026): the panel's pull is a
-        // money exit, and its read is a ledger term below.
-        arbSelsVault[20] = ArbiterVaultFacet.withdrawAppealShare.selector;
-        arbSelsVault[21] = ArbiterVaultFacet.getAppealShareOwed.selector;
-        arbSelsVault[22] = ArbiterVaultFacet.getAppealLedger.selector;
-        arbSelsVault[23] = ArbiterVaultFacet.quoteAppealDeposit.selector;
-        arbSelsVault[24] = ArbiterVaultFacet.settleAppealDebts.selector;
-        arbSelsVault[25] = ArbiterVaultFacet.getAppealDebts.selector;
-        // The bond THIS CASE carries (22 September 2026): a money exit and a
-        // ledger term. It is on this rig because the identity below has to see
-        // it — real USDC sits on the diamond from the claim until the verdict
-        // finalizes or the arbiter collects.
-        arbSelsVault[26] = ArbiterVaultFacet.withdrawCaseBond.selector;
-        arbSelsVault[27] = ArbiterVaultFacet.getCaseBond.selector;
-
-        bytes4[] memory accSels = new bytes4[](3);
-        accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
-        accSels[1] = ArbiterAccountabilityFacet.getArbiterBond.selector;
-        accSels[2] = ArbiterAccountabilityFacet.getDisputeSubsidy.selector;
-
-        // Two selectors and no more: the payroll pot and its reading. The pot
-        // is the reason this facet is here at all — decision 69 fills it and
-        // decision 73 has not yet given it a door, so from 4 September the
-        // diamond starts holding money nobody comes for, and money nobody comes
-        // for is exactly what would otherwise absorb a miscount in silence.
-        bytes4[] memory linkSels = new bytes4[](2);
-        linkSels[0] = TreasuryLinkFacet.fundArbiterPayroll.selector;
-        linkSels[1] = TreasuryLinkFacet.getArbiterPayrollBalance.selector;
-
-        bytes4[] memory repSels = new bytes4[](4);
-        repSels[0] = ReputationFacet.autoAwardXP.selector;
-        repSels[1] = ReputationFacet.notifyExecutorFault.selector;
-        repSels[2] = ReputationFacet.getXP.selector;
-        repSels[3] = ReputationFacet.getUnresolvedDisputes.selector;
-
-
-
-        bytes4[] memory cutSels = new bytes4[](1);
-        cutSels[0] = DiamondCutFacet.diamondCut.selector;
-
-        bytes4[] memory loupeSels = new bytes4[](5);
-        loupeSels[0] = DiamondLoupeFacet.facets.selector;
-        loupeSels[1] = DiamondLoupeFacet.facetFunctionSelectors.selector;
-        loupeSels[2] = DiamondLoupeFacet.facetAddresses.selector;
-        loupeSels[3] = DiamondLoupeFacet.facetAddress.selector;
-        loupeSels[4] = DiamondLoupeFacet.supportsInterface.selector;
-
-        bytes4[] memory ownSels = new bytes4[](4);
-        ownSels[0] = OwnershipFacet.transferOwnership.selector;
-        ownSels[1] = OwnershipFacet.owner.selector;
-        ownSels[2] = OwnershipFacet.acceptOwnership.selector;
-        ownSels[3] = OwnershipFacet.pendingOwner.selector;
-
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](14);
-        cut[0]  = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, regSels);
-        cut[1]  = IDiamondCut.FacetCut(address(factoryFacet),  IDiamondCut.FacetCutAction.Add, facSels);
-        cut[2]  = IDiamondCut.FacetCut(address(cutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
-        cut[3]  = IDiamondCut.FacetCut(address(loupeFacet),    IDiamondCut.FacetCutAction.Add, loupeSels);
-        cut[4]  = IDiamondCut.FacetCut(address(ownFacet),      IDiamondCut.FacetCutAction.Add, ownSels);
-        cut[5]  = IDiamondCut.FacetCut(address(jobFacet),      IDiamondCut.FacetCutAction.Add, jobSels);
-        cut[6]  = IDiamondCut.FacetCut(address(svcFacet),      IDiamondCut.FacetCutAction.Add, svcSels);
-        cut[7]  = IDiamondCut.FacetCut(address(receiptFacet),  IDiamondCut.FacetCutAction.Add, receiptSels);
-        cut[8]  = IDiamondCut.FacetCut(address(arbFacet),      IDiamondCut.FacetCutAction.Add, arbSels);
-        cut[9]  = IDiamondCut.FacetCut(address(accFacet),      IDiamondCut.FacetCutAction.Add, accSels);
-        cut[10] = IDiamondCut.FacetCut(address(repFacet),      IDiamondCut.FacetCutAction.Add, repSels);
-        cut[11] = IDiamondCut.FacetCut(address(linkFacet),     IDiamondCut.FacetCutAction.Add, linkSels);
-        cut[12] = IDiamondCut.FacetCut(address(new ArbiterApplicationsFacet()), IDiamondCut.FacetCutAction.Add, _applicationsSelectors());
-        cut[13] = IDiamondCut.FacetCut(address(arbFacetVault),      IDiamondCut.FacetCutAction.Add, arbSelsVault);
-
-        diamond = new DiamondProxy(owner, cut, address(0), "");
+        IDiamondCut.FacetCut[] memory arb = new IDiamondCut.FacetCut[](5);
+        arb[0] = IDiamondCut.FacetCut(address(arbFacet),      IDiamondCut.FacetCutAction.Add, _arbSels());
+        arb[1] = IDiamondCut.FacetCut(address(accFacet),      IDiamondCut.FacetCutAction.Add, _accSels());
+        arb[2] = IDiamondCut.FacetCut(address(linkFacet),     IDiamondCut.FacetCutAction.Add, _linkSels());
+        arb[3] = IDiamondCut.FacetCut(address(appsFacet),     IDiamondCut.FacetCutAction.Add, _applicationsSelectors());
+        arb[4] = IDiamondCut.FacetCut(address(arbFacetVault), IDiamondCut.FacetCutAction.Add, _arbSelsVault());
+        IDiamondCut(address(diamond)).diamondCut(arb, address(0), "");
 
         Agreement impl = new Agreement();
         AgreementDeployer dep = new AgreementDeployer(address(diamond), address(impl));
+
+        // ⚠️ A THIRD CALL AND NOT A SIXTH ELEMENT IN `arb` (15 October 2026).
+        // The appeal became a facet of its own, so its three doors need an
+        // address of their own — and the note above says in so many words what
+        // a sixth struct in this frame costs: this `setUp` is INLINED INTO
+        // EVERY DERIVED ONE and already sits a slot or two from what via_ir can
+        // hold. One more call keeps the peak at five structs; the diamond that
+        // comes out is identical, because `diamondCut` is additive.
+        //
+        // ⚠️ AND IT SITS *AFTER* `Agreement`/`AgreementDeployer`, WHICH IS NOT
+        // TIDINESS BUT A MEASUREMENT. `new ArbiterAppealFacet()` is one more
+        // CREATE in this frame, and every CREATE after it lands on a different
+        // address; the note at the top of this `setUp` says the golden prints
+        // of test/AgreementCertificateSnapshot.t.sol were taken against the
+        // addresses this order produces. Placed before the Agreement, it moved
+        // the clone's address and turned FIFTEEN certificate scenes red with
+        // nothing about the product changed — measured on this tree today,
+        // 15 October 2026. Deployed here, nothing downstream of it is created
+        // at all, so every pinned address is the one it was.
+        {
+            IDiamondCut.FacetCut[] memory appeal = new IDiamondCut.FacetCut[](1);
+            appeal[0] = IDiamondCut.FacetCut(
+                address(new ArbiterAppealFacet()), IDiamondCut.FacetCutAction.Add, _arbSelsAppeal()
+            );
+            IDiamondCut(address(diamond)).diamondCut(appeal, address(0), "");
+        }
         RegistryFacet(address(diamond)).initRegistry(address(diamond));
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(dep)
@@ -353,6 +251,21 @@ abstract contract MoneyPathBase is Test {
         _trackActor(arbiterAddr);
         _trackActor(feeRecipient);
         _trackActor(stranger);
+
+        // ⚠️ THE DEAL CEILING IS SWITCHED OFF ON THIS FIXTURE, AND THAT IS A
+        // STATEMENT ABOUT THE ELEVEN SUITES BUILT ON IT: ten of them are NOT
+        // about the ceiling. They are about the split, the exits, the debts,
+        // the certificate and the appeal economics, and their money literals
+        // were typed against $1,000 and $50,000 deals years before any ceiling
+        // existed. Retyping those amounts smaller would mean retyping the
+        // expectations with them, and an expectation retyped to make a build
+        // pass has stopped being independent of the code -- which is the exact
+        // accident this project keeps a rule about.
+        //
+        // The eleventh is test/DealCap.t.sol, whose subject IS the ceiling. It
+        // puts it back in its own `setUp`, says so there, and MEASURES that it
+        // is back before it asserts anything.
+        DealCapOff.thisSuiteIsNotAboutTheCeiling(address(diamond));
     }
 
     /// The bond behind a hand-given seat (8 September 2026).
@@ -377,6 +290,273 @@ abstract contract MoneyPathBase is Test {
     /// A function rather than a local in the cut builder: that builder is one
     /// stack slot from the via_ir limit, and a fourth memory array there does
     /// not fit.
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  THE SELECTOR LISTS, EACH IN ITS OWN FUNCTION
+    // ════════════════════════════════════════════════════════════════════════
+    //
+    // ⚠️ THEY ARE HERE BECAUSE OF THE STACK, 14 OCTOBER 2026, AND THIS IS THE
+    // SECOND HALF OF THE SAME FIX AS THE SPLIT CUTS IN `setUp`. Thirteen
+    // dynamic arrays declared together stayed live until the last of them was
+    // used, so this frame — which is INLINED INTO EVERY DERIVED `setUp` — held
+    // thirteen memory pointers at its peak and left its inheritors one or two
+    // slots short of what via_ir can hold. Built inside a call each, they die
+    // at the call.
+    //
+    // ⚠️ IT CHANGES THE INLINER'S BUDGET FOR EVERY FILE THAT INHERITS THIS ONE,
+    // and that is not theoretical: the first attempt at this refactor broke
+    // test/MutualCancellation.t.sol, which had not been touched — a function in
+    // it that had compiled for months went one slot over because the base got
+    // smaller. If a file breaks after an edit here, that is the mechanism, and
+    // the fix belongs in the file that broke rather than in a retreat from
+    // this one.
+
+    function _regSels() internal pure returns (bytes4[] memory regSels) {
+        regSels = new bytes4[](15);
+        regSels[0]  = RegistryFacet.initRegistry.selector;
+        regSels[1]  = RegistryFacet.register.selector;
+        regSels[2]  = RegistryFacet.updateStatus.selector;
+        regSels[3]  = RegistryFacet.setAuthorizedFactory.selector;
+        regSels[4]  = RegistryFacet.hasActivePair.selector;
+        regSels[5]  = RegistryFacet.getActivePair.selector;
+        regSels[6]  = RegistryFacet.getRecord.selector;
+        regSels[7]  = RegistryFacet.getByClient.selector;
+        regSels[8]  = RegistryFacet.getByExecutor.selector;
+        regSels[9]  = RegistryFacet.getActive.selector;
+        regSels[10] = RegistryFacet.totalAgreements.selector;
+        regSels[11] = RegistryFacet.authorizedFactory.selector;
+        regSels[12] = RegistryFacet.notifyWorkHandedIn.selector;
+        // Appended 18 September 2026: a direct hire is an OFFER, so the
+        // factory registers it through registerOffer, and the clone
+        // announces the acceptance. Without both mounted this rig's
+        // deployAndFund reverts with "function not found".
+        regSels[13] = RegistryFacet.registerOffer.selector;
+        regSels[14] = RegistryFacet.notifyOfferAccepted.selector;
+    }
+
+    function _facSels() internal pure returns (bytes4[] memory facSels) {
+        facSels = new bytes4[](19);
+        facSels[0]  = FactoryFacet.initFactory.selector;
+        facSels[1]  = FactoryFacet.deployAgreement.selector;
+        facSels[2]  = FactoryFacet.deployAndFund.selector;
+        facSels[3]  = FactoryFacet.setFeeRecipient.selector;
+        facSels[4]  = FactoryFacet.setTrustedForwarder.selector;
+        facSels[5]  = FactoryFacet.setAgreementDeployer.selector;
+        facSels[6]  = FactoryFacet.getFeeRecipient.selector;
+        facSels[7]  = FactoryFacet.getTrustedForwarder.selector;
+        facSels[8]  = FactoryFacet.getUsdc.selector;
+        facSels[9]  = FactoryFacet.getAgreementDeployer.selector;
+        facSels[10] = FactoryFacet.setFeeBps.selector;
+        facSels[11] = FactoryFacet.setFeeFloor.selector;
+        facSels[12] = FactoryFacet.setMaxPendingRequests.selector;
+        facSels[13] = FactoryFacet.quoteFee.selector;
+        facSels[14] = FactoryFacet.getFeeFloor.selector;
+        facSels[15] = FactoryFacet.getUndeliveredFees.selector;
+        facSels[16] = FactoryFacet.withdrawUndeliveredFees.selector;
+        facSels[17] = FactoryFacet.getFeeBps.selector;
+        // ⚠️ APPENDED 12 OCTOBER 2026, AND IT IS NOT A VIEW FOR THE
+        // INTERFACE'S BENEFIT -- IT IS LOAD BEARING ON EVERY TOP-UP.
+        // `Agreement.proposeExtra` reads the ceiling its own pot is held to by
+        // staticcalling this selector on the diamond, and a non-answer LOCKS
+        // the door on purpose (`PotCeilingUnavailable`, and the argument for
+        // closing rather than opening is at the error). So a diamond that does
+        // not route this routes no top-up either, on any deal, for good -- a
+        // clone cannot be fixed. Measured rather than argued: without this one
+        // line, seventy scenes across nine suites built on this fixture revert
+        // PotCeilingUnavailable.
+        facSels[18] = FactoryFacet.getAgreementPotCeiling.selector;
+    }
+
+    function _jobSels() internal pure returns (bytes4[] memory jobSels) {
+        jobSels = new bytes4[](13);
+        jobSels[0]  = JobBoardFacet.mintJob.selector;
+        jobSels[1]  = JobBoardFacet.applyForJob.selector;
+        jobSels[2]  = JobBoardFacet.acceptApplicant.selector;
+        jobSels[3]  = JobBoardFacet.cancelJob.selector;
+        jobSels[4]  = JobBoardFacet.getJob.selector;
+        jobSels[5]  = JobBoardFacet.getClientJobs.selector;
+        jobSels[6]  = JobBoardFacet.getApplicants.selector;
+        jobSels[7]  = JobBoardFacet.withdrawApplication.selector;
+        jobSels[8]  = JobBoardFacet.editJob.selector;
+        jobSels[9]  = JobBoardFacet.totalJobs.selector;
+        jobSels[10] = JobBoardFacet.getOpenJobs.selector;
+        jobSels[11] = JobBoardFacet.getJobFeeHeld.selector;
+        jobSels[12] = JobBoardFacet.mintJobWithPermit.selector;
+    }
+
+    function _svcSels() internal pure returns (bytes4[] memory svcSels) {
+        svcSels = new bytes4[](14);
+        svcSels[0]  = ServiceBoardFacet.mintService.selector;
+        svcSels[1]  = ServiceBoardFacet.requestService.selector;
+        svcSels[2]  = ServiceBoardFacet.acceptRequest.selector;
+        svcSels[3]  = ServiceBoardFacet.rejectRequest.selector;
+        svcSels[4]  = ServiceBoardFacet.cancelRequest.selector;
+        svcSels[5]  = ServiceBoardFacet.getService.selector;
+        svcSels[6]  = ServiceBoardFacet.getRequest.selector;
+        svcSels[7]  = ServiceBoardFacet.totalServices.selector;
+        svcSels[8]  = ServiceBoardFacet.totalRequests.selector;
+        svcSels[9]  = ServiceBoardFacet.getRequestFunds.selector;
+        svcSels[10] = ServiceBoardFacet.getRequestFeeHeld.selector;
+        svcSels[11] = ServiceBoardFacet.getPendingRequestIdsByClientAndExecutor.selector;
+        svcSels[12] = ServiceBoardFacet.getPendingRequestCount.selector;
+        svcSels[13] = ServiceBoardFacet.removeService.selector;
+    }
+
+    function _receiptSels() internal pure returns (bytes4[] memory receiptSels) {
+        receiptSels = new bytes4[](4);
+        receiptSels[0] = JobReceiptFacet.mintJobReceipt.selector;
+        receiptSels[1] = JobReceiptFacet.burnJobReceipt.selector;
+        receiptSels[2] = JobReceiptFacet.isJobReceiptBurned.selector;
+        receiptSels[3] = JobReceiptFacet.getTokenIdByJobId.selector;
+    }
+
+    function _arbSels() internal pure returns (bytes4[] memory arbSels) {
+        arbSels = new bytes4[](7);
+        arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
+        arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
+        arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
+        arbSels[3] = ArbiterRegistryFacet.clearDisputeClaim.selector;
+        arbSels[4] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[5] = ArbiterRegistryFacet.finalizeVerdict.selector;
+        arbSels[6] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+    }
+
+    /// The three appeal doors every derived suite needs, in a list of their
+    /// own since 15 October 2026 — the appeal became ArbiterAppealFacet, and a
+    /// FacetCut element carries exactly ONE address. The bytes are unchanged.
+    function _arbSelsAppeal() internal pure returns (bytes4[] memory appealSels) {
+        appealSels = new bytes4[](3);
+        appealSels[0] = ArbiterAppealFacet.raiseAppeal.selector;
+        appealSels[1] = ArbiterAppealFacet.voteToOverturn.selector;
+        appealSels[2] = ArbiterAppealFacet.resolveAppeal.selector;
+    }
+
+    function _arbSelsVault() internal pure returns (bytes4[] memory arbSelsVault) {
+        arbSelsVault = new bytes4[](32);
+        // ⚠️ FILLED IN TWO HALVES SINCE 20 OCTOBER 2026, AND THE REASON IS THE
+        // STACK rather than readability. This builder is INLINED INTO EVERY
+        // DERIVED `setUp` -- there are thirty-eight of them -- and the moment
+        // the list grew the three doors of the dispute fee, via_ir refused one
+        // of those frames with
+        //
+        //   Error: Variable memPtr_112 is 1 too deep in the stack
+        //
+        // naming NO file, which is the expensive half of it: the bisect that
+        // found it was a per-file `forge build` over every modified test.
+        // Two halves writing into one array keep each frame small, and the
+        // array is passed by reference so nothing is copied.
+        _arbSelsVaultFirst(arbSelsVault);
+        _arbSelsVaultSecond(arbSelsVault);
+    }
+
+    function _arbSelsVaultFirst(bytes4[] memory arbSelsVault) private pure {
+        arbSelsVault[0] = ArbiterVaultFacet.isRegisteredArbiter.selector;
+        arbSelsVault[1] = ArbiterVaultFacet.getDisputeClaimer.selector;
+        arbSelsVault[2] = ArbiterVaultFacet.withdrawArbiterReward.selector;
+        arbSelsVault[3] = ArbiterVaultFacet.fundVault.selector;
+        arbSelsVault[4] = ArbiterVaultFacet.getPendingVerdict.selector;
+        arbSelsVault[5] = ArbiterVaultFacet.getVaultBalance.selector;
+        arbSelsVault[6] = ArbiterVaultFacet.creditDisputeFee.selector;
+        arbSelsVault[7] = ArbiterVaultFacet.getTreasurySlice.selector;
+        arbSelsVault[8] = ArbiterVaultFacet.withdrawTreasurySlice.selector;
+        arbSelsVault[9] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        arbSelsVault[10] = ArbiterVaultFacet.setArbiterFloor.selector;
+        arbSelsVault[11] = ArbiterVaultFacet.getArbiterFloor.selector;
+        arbSelsVault[12] = ArbiterVaultFacet.quoteDisputeTopUp.selector;
+        arbSelsVault[13] = ArbiterVaultFacet.fundDispute.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.getDisputeBounty.selector;
+        arbSelsVault[15] = ArbiterVaultFacet.withdrawDisputeBounty.selector;
+    }
+
+    function _arbSelsVaultSecond(bytes4[] memory arbSelsVault) private pure {
+        arbSelsVault[16] = ArbiterVaultFacet.getRefundableBounty.selector;
+        arbSelsVault[17] = ArbiterVaultFacet.setDisputeDiscount.selector;
+        arbSelsVault[18] = ArbiterVaultFacet.getDisputeDiscount.selector;
+        arbSelsVault[19] = ArbiterVaultFacet.getAppealVotes.selector;
+        // The appeal economics (17 September 2026): the panel's pull is a
+        // money exit, and its read is a ledger term below.
+        arbSelsVault[20] = ArbiterVaultFacet.withdrawAppealShare.selector;
+        arbSelsVault[21] = ArbiterVaultFacet.getAppealShareOwed.selector;
+        arbSelsVault[22] = ArbiterVaultFacet.getAppealLedger.selector;
+        arbSelsVault[23] = ArbiterVaultFacet.quoteAppealDeposit.selector;
+        arbSelsVault[24] = ArbiterVaultFacet.settleAppealDebts.selector;
+        arbSelsVault[25] = ArbiterVaultFacet.getAppealDebts.selector;
+        // The bond THIS CASE carries (22 September 2026): a money exit and a
+        // ledger term. It is on this rig because the identity below has to see
+        // it — real USDC sits on the diamond from the claim until the verdict
+        // finalizes or the arbiter collects.
+        arbSelsVault[26] = ArbiterVaultFacet.withdrawCaseBond.selector;
+        arbSelsVault[27] = ArbiterVaultFacet.getCaseBond.selector;
+        // And what that bond COSTS before it is put down (20 October 2026). A
+        // pure read of `caseBondFor`, on this rig because the scene that
+        // compares the quote with the DEBIT at `claimDispute` runs here.
+        arbSelsVault[28] = ArbiterVaultFacet.quoteCaseBond.selector;
+        // The dispute fee taken AT THE DOOR (20 October 2026). All three are
+        // on this rig and none of them is optional here:
+        //   `holdDisputeFee`     — `Agreement.raiseDispute` calls it and will
+        //                          not open a dispute without it, so an
+        //                          unmounted selector makes every disputed
+        //                          scene in every derived file revert with
+        //                          "Diamond: function not found";
+        //   `settleDisputeFee`   — the other end of the same money, called on
+        //                          both roads out of DISPUTED;
+        //   `getHeldDisputeFee`  — a ledger term in `_diamondLedger`, because
+        //                          real USDC sits on the diamond from the
+        //                          moment a dispute is opened.
+        arbSelsVault[29] = ArbiterVaultFacet.holdDisputeFee.selector;
+        arbSelsVault[30] = ArbiterVaultFacet.settleDisputeFee.selector;
+        arbSelsVault[31] = ArbiterVaultFacet.getHeldDisputeFee.selector;
+    }
+
+    function _accSels() internal pure returns (bytes4[] memory accSels) {
+        accSels = new bytes4[](3);
+        accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
+        accSels[1] = ArbiterAccountabilityFacet.getArbiterBond.selector;
+        accSels[2] = ArbiterAccountabilityFacet.getDisputeSubsidy.selector;
+
+        // Two selectors and no more: the payroll pot and its reading. The pot
+        // is the reason this facet is here at all — decision 69 fills it and
+        // decision 73 has not yet given it a door, so from 4 September the
+        // diamond starts holding money nobody comes for, and money nobody comes
+        // for is exactly what would otherwise absorb a miscount in silence.
+    }
+
+    function _linkSels() internal pure returns (bytes4[] memory linkSels) {
+        linkSels = new bytes4[](2);
+        linkSels[0] = TreasuryLinkFacet.fundArbiterPayroll.selector;
+        linkSels[1] = TreasuryLinkFacet.getArbiterPayrollBalance.selector;
+    }
+
+    function _repSels() internal pure returns (bytes4[] memory repSels) {
+        repSels = new bytes4[](4);
+        repSels[0] = ReputationFacet.autoAwardXP.selector;
+        repSels[1] = ReputationFacet.notifyExecutorFault.selector;
+        repSels[2] = ReputationFacet.getXP.selector;
+        repSels[3] = ReputationFacet.getUnresolvedDisputes.selector;
+    }
+
+    function _cutSels() internal pure returns (bytes4[] memory cutSels) {
+        cutSels = new bytes4[](1);
+        cutSels[0] = DiamondCutFacet.diamondCut.selector;
+    }
+
+    function _loupeSels() internal pure returns (bytes4[] memory loupeSels) {
+        loupeSels = new bytes4[](5);
+        loupeSels[0] = DiamondLoupeFacet.facets.selector;
+        loupeSels[1] = DiamondLoupeFacet.facetFunctionSelectors.selector;
+        loupeSels[2] = DiamondLoupeFacet.facetAddresses.selector;
+        loupeSels[3] = DiamondLoupeFacet.facetAddress.selector;
+        loupeSels[4] = DiamondLoupeFacet.supportsInterface.selector;
+    }
+
+    function _ownSels() internal pure returns (bytes4[] memory ownSels) {
+        ownSels = new bytes4[](4);
+        ownSels[0] = OwnershipFacet.transferOwnership.selector;
+        ownSels[1] = OwnershipFacet.owner.selector;
+        ownSels[2] = OwnershipFacet.acceptOwnership.selector;
+        ownSels[3] = OwnershipFacet.pendingOwner.selector;
+    }
+
     function _applicationsSelectors() internal pure returns (bytes4[] memory appSels) {
         appSels = new bytes4[](4);
         appSels[0] = ArbiterApplicationsFacet.postArbiterBond.selector;
@@ -485,15 +665,77 @@ abstract contract MoneyPathBase is Test {
             (uint256 caseBond, ) = ArbiterVaultFacet(address(diamond)).getCaseBond(deal);
             total += caseBond;
 
+            // ---- the dispute fee taken at the door (added 20 October 2026) --
+            //
+            // Real USDC on the diamond from the moment a party opens a dispute
+            // (`Agreement.raiseDispute` -> `holdDisputeFee`) until the dispute
+            // ends: to the judge who wrote the verdict, home to the party who
+            // paid when none came, or into the panel's pocket when the verdict
+            // is overturned. Before this cut the fee came out of the POT at the
+            // verdict and never sat on the diamond unbooked, so this term did
+            // not exist.
+            //
+            // Read through the mounted door and not off the slot, for the
+            // reason the case bond is: a record that stops being written makes
+            // this sum too SMALL, and too small is the direction that reds.
+            (uint256 heldFee, ) = ArbiterVaultFacet(address(diamond)).getHeldDisputeFee(deal);
+            total += heldFee;
+
             // ---- the appeal deposit in flight (added 4 September 2026) ----
             //
-            // ⚠️ `appealDeposit` is NOT a balance. It is never zeroed: neither
+            // ⚠️ `appealDeposit` is NOT a balance. It is never zeroed: no
             // branch of resolveAppeal clears it, so after the appeal is settled
             // the field still holds what was paid while the money itself has
-            // gone — to the appellant on a win, into `vaultBalance` on a loss.
-            // Read it as a balance and this sum double-counts every resolved
-            // appeal in the fixture's life. The predicate for "still held" is
-            // therefore the pair of flags, not the number.
+            // gone. Read it as a balance and this sum double-counts every
+            // resolved appeal in the fixture's life. The predicate for "still
+            // held" is therefore the pair of flags, not the number.
+            //
+            // ⚠️ AND WHERE IT GOES WAS WRONG HERE IN BOTH DIRECTIONS UNTIL
+            // 19 OCTOBER 2026. This note said "to the appellant on a win, into
+            // `vaultBalance` on a loss", which described the rule of 14 October
+            // and survived two replacements of it. Neither half is true now:
+            //
+            //   the appeal CARRIED  -> the deposit goes home to the appellant,
+            //     whole, off this very record. (So that half was right by
+            //     accident and for the wrong reason: it went home as a REFUND,
+            //     not as a bond that happened to match.)
+            //   the verdict STANDS  -> THREE QUARTERS of the deposit are the
+            //     wage of the men who ANSWERED, booked per man, and the
+            //     QUARTER that is left -- with the remainder of the division
+            //     inside it -- crosses to the other side of the deal. Nothing
+            //     goes to `vaultBalance` at all on a deal the registry
+            //     recorded -- the ONE exception is an agreement with no
+            //     registry record, where there is no other side to pay.
+            //   nobody ANSWERED     -> the WHOLE deposit goes to the TREASURY,
+            //     i.e. into `treasurySlice`, which this very sum books above
+            //     through `getTreasurySlice()`. Nothing crosses to the other
+            //     side on this road.
+            //
+            // ⚠️ AND BOTH OF THOSE TWO LINES WERE WRONG HERE UNTIL 20 OCTOBER
+            // 2026, which matters more in this file than in most: what stands
+            // in this comment is what a reader of the identity consults to
+            // decide whether a term is missing, so a wrong destination sends
+            // the man hunting a leak to the wrong pocket. They are dated and
+            // not wiped, because each was the rule of its own day. The first
+            // read "the WHOLE deposit is the wage of the men who ANSWERED ...
+            // and the only thing that reaches the other side is what the
+            // division cannot split" -- the pocket rule of 18 October, split
+            // into a wage and a toll by the owner on the 19th, so the other
+            // side now takes a whole quarter and not merely a rounding
+            // remainder. The second read "the whole deposit crosses to the
+            // other side of the deal" -- the rule from 17 October until the
+            // evening of the 19th, when silence was redirected to the
+            // treasury. Read off the branch rather than from here if in
+            // doubt: `_nobodyAnswered` -> `toTreasury = deposit`, and
+            // `toll = pocket - each * answered` -> `toOtherSide` on the road
+            // that leaves the verdict standing.
+            //
+            // Named in full rather than trimmed, because this comment is what a
+            // reader of the identity consults to decide whether a term is
+            // missing, and a wrong destination sends him looking in the wrong
+            // place. The destinations themselves are measured in
+            // test/AppealDepositHomeOnAWin.t.sol and test/AppealMoneyPaths.t.sol;
+            // nothing here depends on them, since the predicate is the flags.
             //
             // The raw field, deliberately, and not `_depositOf`'s fallback to
             // the constant: the fallback exists for appeals raised before the
@@ -507,11 +749,23 @@ abstract contract MoneyPathBase is Test {
 
             // ---- the panel's unpulled shares (added 17 September 2026) ----
             //
-            // A settled appeal with a quorum leaves `voterShare` per voter on
-            // the diamond until each voter pulls it. Summed per (deal, actor)
-            // through the same read a screen uses, for every actor the fixture
-            // knows — a voter the test forgot to track is money this sum does
-            // not see, and too small goes red.
+            // ⚠️ A LIVE TERM AGAIN, AND THE NOTE THAT CALLED IT LEGACY WAS
+            // WRONG WITHIN A DAY OF BEING WRITTEN. It said "the panel is no
+            // longer paid for an appeal, so nothing new is ever booked here"
+            // — true for the sixteen hours decision 301 stood alone. The
+            // owner's decision of 17 October 2026 pays the panel again, out of
+            // the APPELLANT'S DEPOSIT this time: half of every deposit is
+            // divided among the men who ANSWERED the summons and each pulls his
+            // own with `withdrawAppealShare`, so `voterShare` is written on
+            // every settlement anybody answered.
+            //
+            // That makes this term load-bearing rather than historical: money
+            // the diamond holds between `resolveAppeal` and the last pull. A
+            // `voterShare` written between 14 and 16 October 2026 under
+            // decision 171 is still covered by the same read, under the same
+            // key. Summed per (deal, actor) through the same door a screen uses
+            // — a voter the test forgot to track is money this sum misses, and
+            // too small goes red.
             //
             // ⚠️ NOT the ledger's `advanceFromBond` / `advanceFromVault` /
             // `debt`: the first two are money ALREADY PAID OUT to the

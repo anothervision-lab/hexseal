@@ -553,9 +553,17 @@ contract UpgradeFeeModel is Script {
         sels[14] = bytes4(0x5533316c) /* freezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[15] = bytes4(0x69315118) /* unfreezeVerdict(address), removed from the facet 9 Oct 2026; this script is the record of a cut that mounted it */;
         sels[16] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        sels[17] = ArbiterRegistryFacet.raiseAppeal.selector;
-        sels[18] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        sels[19] = ArbiterRegistryFacet.resolveAppeal.selector;
+        sels[17] = bytes4(keccak256("raiseAppeal(address)"));
+        // ⚠️ THE OLD FOUR BYTES, AS A LITERAL, BECAUSE THIS SCRIPT IS A
+        // RECORD OF A CUT THAT WENT ON CHAIN. The door was
+        // `voteOnAppeal(address,bool)` 0xc9bb9cdd when this group was
+        // signed; decision 177 renamed it to `voteToOverturn(address)`
+        // on 14 October 2026 and the chain will not route the new bytes
+        // until the cut that carries them. A `Replace` group naming a
+        // selector the diamond does not route REVERTS AND TAKES THE
+        // WHOLE CUT, so this line may not follow the tree's symbol.
+        sels[18] = bytes4(0xc9bb9cdd);
+        sels[19] = bytes4(keccak256("resolveAppeal(address)"));
         sels[20] = ArbiterVaultFacet.withdrawArbiterReward.selector;
         sels[21] = ArbiterVaultFacet.fundVault.selector;
         sels[22] = ArbiterVaultFacet.setRewardPerDispute.selector;

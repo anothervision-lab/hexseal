@@ -49,6 +49,7 @@ import "../script/DeployFull.s.sol";
 import {UpgradeBoardFeeDelivery} from "../script/UpgradeBoardFeeDelivery.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract BoardFeeDeliveryUpgradeTest is BoardsFixture, ArbiterSplitRig {
     UpgradeBoardFeeDelivery upgrade;
@@ -68,19 +69,38 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture, ArbiterSplitRig {
     uint256 constant FACTORY_SELECTORS  = 21;
     uint256 constant ADDED_SELECTORS    = 2;
 
-    /// The five, by SIGNATURE TEXT, never taken from the later script's lists.
+    /// The ten, by SIGNATURE TEXT, never taken from the later scripts' lists.
     function _grownFactoryAfterThisCut() internal pure returns (bytes4[] memory sels) {
         // ⚠️ THE SIZE IS THE LENGTH OF THE LIST DIRECTLY BELOW IT, and it used
         // to be a sum of separately declared allowance constants. Those
         // constants are gone: a number kept apart from the list it sizes is one
         // more thing to keep in step, and keeping it in step by hand is the
         // habit this file was rewritten to break.
-        sels = new bytes4[](5);
+        sels = new bytes4[](10);
         sels[0] = bytes4(keccak256("pauseNewDeals()"));
         sels[1] = bytes4(keccak256("resumeNewDeals()"));
         sels[2] = bytes4(keccak256("newDealsPausedUntil()"));
         sels[3] = bytes4(keccak256("NEW_DEALS_PAUSE_DURATION()"));
         sels[4] = bytes4(keccak256("MAX_FEE_BPS()"));
+        // ⚠️ THE DEAL CAP'S FIVE, APPENDED 12 OCTOBER 2026, by SIGNATURE TEXT
+        // and never read off FactoryFacet or any later script's list. A
+        // growing ceiling on one deal's escrow: the one-way button, the three
+        // reads the interface needs, and the per-deal ceiling the Agreement
+        // clone staticcalls on every top-up.
+        //
+        // They are HERE and not folded into this cut's own groups for the
+        // reason this whole allowance exists: the cut is a RECORD of what went
+        // on chain that day, and demanding it mount functions written seven
+        // weeks later would be demanding that the past match the present.
+        // Leaving them out of the allowance instead would let the coverage
+        // locks below call a FactoryFacet with five unmounted functions
+        // complete -- five dead doors, present in the ABI, routed nowhere,
+        // found by the first person whose button did nothing.
+        sels[5] = bytes4(keccak256("liftDealCap()"));
+        sels[6] = bytes4(keccak256("getDealCap()"));
+        sels[7] = bytes4(keccak256("getSettledVolume()"));
+        sels[8] = bytes4(keccak256("isDealCapLifted()"));
+        sels[9] = bytes4(keccak256("getAgreementPotCeiling(address)"));
     }
 
     /// The three the job board grew on 18 September 2026, by SIGNATURE TEXT and
@@ -263,9 +283,9 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture, ArbiterSplitRig {
         );
 
         // A count agrees on a swap, so the surplus is also asked BY NAME: every
-        // one of the five beyond this cut's two must be a selector this file
-        // has named -- the brake's four or item 138's MAX_FEE_BPS() -- and
-        // every one of those five must be in the surplus.
+        // one of the ten beyond this cut's two must be a selector this file
+        // has named -- the brake's four, item 138's MAX_FEE_BPS() or the deal
+        // cap's five -- and every one of those ten must be in the surplus.
         bytes4[] memory surplus = new bytes4[](unmounted);
         uint256 k;
         for (uint256 i = 0; i < fromArtifact.length; i++) {
@@ -677,6 +697,10 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture, ArbiterSplitRig {
         // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
         // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
         _mountRemovedVerdictHandDoors(address(d), census);
+        // And the appeal vote door under its old name, which left the facet on
+        // 14 October 2026 with decision 177 and leaves the chain in the cut that
+        // carries it. Same reason, same shape: ArbiterSplitRig.
+        _mountRemovedAppealVoteDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(
@@ -770,7 +794,8 @@ contract BoardFeeDeliveryUpgradeTest is BoardsFixture, ArbiterSplitRig {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

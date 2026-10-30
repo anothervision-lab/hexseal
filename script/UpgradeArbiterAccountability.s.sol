@@ -710,9 +710,17 @@ contract UpgradeArbiterAccountability is Script {
         sels[15] = ArbiterRegistryFacet.clearStuckVerdict.selector;
 
         // The appeal
-        sels[16] = ArbiterRegistryFacet.raiseAppeal.selector;
-        sels[17] = ArbiterRegistryFacet.voteOnAppeal.selector;
-        sels[18] = ArbiterRegistryFacet.resolveAppeal.selector;
+        sels[16] = bytes4(keccak256("raiseAppeal(address)"));
+        // ⚠️ THE OLD FOUR BYTES, AS A LITERAL, BECAUSE THIS SCRIPT IS A
+        // RECORD OF A CUT THAT WENT ON CHAIN. The door was
+        // `voteOnAppeal(address,bool)` 0xc9bb9cdd when this group was
+        // signed; decision 177 renamed it to `voteToOverturn(address)`
+        // on 14 October 2026 and the chain will not route the new bytes
+        // until the cut that carries them. A `Replace` group naming a
+        // selector the diamond does not route REVERTS AND TAKES THE
+        // WHOLE CUT, so this line may not follow the tree's symbol.
+        sels[17] = bytes4(0xc9bb9cdd);
+        sels[18] = bytes4(keccak256("resolveAppeal(address)"));
 
         // Rewards
         sels[19] = ArbiterVaultFacet.withdrawArbiterReward.selector;

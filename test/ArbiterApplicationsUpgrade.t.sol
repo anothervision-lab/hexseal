@@ -46,6 +46,7 @@ import "../script/DeployFull.s.sol";
 import {UpgradeArbiterApplications} from "../script/UpgradeArbiterApplications.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     UpgradeArbiterApplications upgrade;
@@ -326,7 +327,7 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
         );
         d = new DiamondProxy(address(this), initCuts, address(0), "");
 
-        IDiamondCut.FacetCut[] memory rest = new IDiamondCut.FacetCut[](8);
+        IDiamondCut.FacetCut[] memory rest = new IDiamondCut.FacetCut[](9);
         rest[0] = IDiamondCut.FacetCut(
             address(new JobBoardFacet()), IDiamondCut.FacetCutAction.Add, deploy.jobBoardFacetSelectors()
         );
@@ -356,6 +357,18 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
         // twenty-eight selectors the chain routes, which is what it said.
         rest[7] = IDiamondCut.FacetCut(
             address(new ArbiterVaultFacet()), IDiamondCut.FacetCutAction.Add, deploy.arbiterVaultFacetSelectors()
+        );
+        // The six doors of one appeal (15 October 2026 split). Same reason as
+        // the entry above it: they were in the registry's list until that day
+        // and are in this census as ordinary arbiter selectors, so without this
+        // entry the rig is simply MISSING six selectors the chain routes — which
+        // is exactly what setUp said when it was left out. Measured on this
+        // tree: "the rig is MISSING a selector the chain routed at this census:
+        // 0x6d35b861" (raiseAppeal), and the suite reported ONE failing test
+        // instead of its nine, because a reverting setUp makes the other eight
+        // stop existing rather than go red.
+        rest[8] = IDiamondCut.FacetCut(
+            address(new ArbiterAppealFacet()), IDiamondCut.FacetCutAction.Add, deploy.arbiterAppealFacetSelectors()
         );
         IDiamondCut(address(d)).diamondCut(rest, address(0), "");
 
@@ -403,6 +416,10 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
         // itself: see ArbiterSplitRig._mountRemovedVerdictHandDoors for why they go
         // on the arbiter facet that is already here rather than on a stub.
         _mountRemovedVerdictHandDoors(address(d), census);
+        // And the appeal vote door under its old name, which left the facet on
+        // 14 October 2026 with decision 177 and leaves the chain in the cut that
+        // carries it. Same reason, same shape: ArbiterSplitRig.
+        _mountRemovedAppealVoteDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(

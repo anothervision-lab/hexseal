@@ -283,13 +283,19 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         _submitAndFinalize(a, true); // client wins
 
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the verdict landed");
-        assertEq(a.undeliveredRefund(), 97_000_000, "pot less the 3% fee, owed");
-        assertEq(usdc.balanceOf(address(a)), 97_000_000, "and held in the clone");
+        // ⚠️ THE POT REACHES THE WINNER WHOLE SINCE 20 OCTOBER 2026, and the fee
+        // is not part of this arithmetic any more. It was taken at the dispute
+        // DOOR, out of the opener's own wallet, and has sat on the diamond ever
+        // since; nothing is subtracted from the escrow at the verdict. The
+        // figures that stood here -- $97 of a $100 pot, $3 to the diamond --
+        // were the fee cut out of the escrow at settlement.
+        assertEq(a.undeliveredRefund(), 100_000_000, "the whole pot, owed");
+        assertEq(usdc.balanceOf(address(a)), 100_000_000, "and held in the clone");
 
         usdc.setBlacklisted(client, false);
         uint256 c0 = usdc.balanceOf(client);
         vm.prank(stranger); a.withdrawUndeliveredRefund();
-        assertEq(usdc.balanceOf(client) - c0, 97_000_000, "the winner was paid, late");
+        assertEq(usdc.balanceOf(client) - c0, 100_000_000, "the winner was paid, late");
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
     }
 
@@ -312,7 +318,10 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         vm.warp(block.timestamp + FINALIZE_DELAY + 1);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a));
 
-        assertEq(usdc.balanceOf(executor) - e0, 97_000_000, "the winner was paid");
+        // ⚠️ THE WHOLE POT SINCE 20 OCTOBER 2026: the fee was taken at the
+        // dispute door out of the opener's wallet, so nothing is cut out of the
+        // escrow at the verdict. The figure read 97_000_000.
+        assertEq(usdc.balanceOf(executor) - e0, 100_000_000, "the winner was paid");
         assertEq(a.undeliveredRefund(), 10_500_000, "the client's proposal is a debt, held fee included");
         assertEq(usdc.balanceOf(address(a)), 10_500_000, "and nothing else stayed behind");
     }
@@ -358,7 +367,11 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         uint256 c0 = usdc.balanceOf(client);
         vm.prank(executor); a.triggerArbiterTimeout();
 
-        assertEq(usdc.balanceOf(client) - c0, AMOUNT / 2, "the client got their half, no more");
+        // ⚠️ THE HALF PLUS THE DOOR CHARGE COMING HOME (20 October 2026): the
+        // client opened this dispute and paid `disputeFee()` at the door, and
+        // no verdict was ever written, so the timeout sends it back to him.
+        // `c0` is read after the charge was taken, so it appears in this delta.
+        assertEq(usdc.balanceOf(client) - c0, AMOUNT / 2 + 10_000_000, "the client got their half and the door charge back, no more");
         assertEq(a.undeliveredPayout(), AMOUNT / 2, "the executor's half is owed to them");
         assertEq(usdc.balanceOf(address(a)), AMOUNT / 2, "and waits in the clone");
 
@@ -475,41 +488,102 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         usdc.setBlacklisted(address(diamond), true);
 
         uint256 c0 = usdc.balanceOf(client);
-        // Armed around finalizeVerdict alone, not around _submitAndFinalize:
-        // submitVerdict emits first, and an expectation armed before it would
-        // match on that log instead.
         vm.prank(arbiterAddr);
         ArbiterRegistryFacet(address(diamond)).submitVerdict(address(a), true);
         vm.warp(block.timestamp + FINALIZE_DELAY + 1);
-        vm.expectEmit(false, false, false, true, address(a));
-        emit DisputeFeeDeferred(3_000_000);
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(address(a)); // client wins
 
+        // ⚠️ THERE IS NOTHING LEFT TO DEFER, AND THAT IS A STRONGER RESULT THAN
+        // THE DEFERRAL IT REPLACES (20 October 2026). This scene used to arm
+        // `DisputeFeeDeferred(3_000_000)` and then walk the debt home through
+        // `withdrawUndeliveredFee`: the clone paid the fee TO the diamond at the
+        // verdict, a blacklisted diamond could not receive it, and the whole
+        // machinery of `undeliveredFee` existed for that one moment.
+        //
+        // The fee reaches the diamond at the DOOR of the dispute now and
+        // nothing is transferred at the verdict at all -- `settleDisputeFee`
+        // books a counter. So a token that starts refusing the diamond between
+        // the dispute and the verdict cannot delay a cent: the winner is paid,
+        // the clone empties, and the judge's wage is on the books.
+        //
+        // ⚠️ WHAT THE SAME REFUSAL DOES AT THE DOOR IS THE OTHER HALF OF THIS
+        // FILE'S QUESTION AND IT IS A SCENE OF ITS OWN BELOW -- there the
+        // dispute cannot be opened at all, because the charge is HARD.
         assertEq(uint8(a.status()), uint8(Agreement.Status.RESOLVED), "the dispute closed");
-        assertEq(usdc.balanceOf(client) - c0, 97_000_000, "the winner was paid in full and on time");
-        assertEq(a.undeliveredFee(), 3_000_000, "and the $3 is owed to the diamond");
-        assertEq(usdc.balanceOf(address(a)), 3_000_000, "held on the clone until it can be sent");
-
-        // The diamond's books already count the fee -- creditDisputeFee ran --
-        // so its ledger stands exactly $3 above its balance until the pull.
+        assertEq(usdc.balanceOf(client) - c0, 100_000_000, "the winner was paid in full and on time");
+        assertEq(a.undeliveredFee(), 0, "nothing was deferred: no transfer to the diamond happens at a verdict any more");
+        assertEq(usdc.balanceOf(address(a)), 0, "and the clone emptied");
         assertEq(
-            _diamondLedger() - usdc.balanceOf(address(diamond)),
-            3_000_000,
-            "the gap is the deferred fee, to the cent"
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000,
+            "the judge's whole ten dollar fee was booked even while the token refused the diamond"
         );
+        _assertDiamondBalances("a verdict executed while the token refuses the diamond");
 
+        // And the arbiter can be paid once the token serves the diamond again.
         usdc.setBlacklisted(address(diamond), false);
-        uint256 d0 = usdc.balanceOf(address(diamond));
-        vm.prank(stranger); a.withdrawUndeliveredFee();
-        assertEq(usdc.balanceOf(address(diamond)) - d0, 3_000_000, "the fee arrived, late");
-        assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
-        _assertDiamondBalances("after the deferred fee was pulled");
-
-        // And the arbiter can be paid out of it, which is what the credit
-        // promised in the first place.
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         _assertDiamondBalances("after the arbiter took their share");
+    }
+
+    /// ⚠️ THE OTHER HALF, AND THE ONE THAT COSTS SOMETHING (20 October 2026):
+    /// a token that refuses the DIAMOND at the moment a dispute is opened
+    /// closes that door. The charge is hard -- no fee, no dispute -- because a
+    /// tolerated charge is not a charge, and the refusal is NAMED so the party
+    /// is not left guessing.
+    ///
+    /// What is given up: a party cannot buy a verdict while the token refuses
+    /// the diamond. What is kept, and it is this file's whole subject: the
+    /// escrow is not stuck behind that. The deal is still ACTIVE and its own
+    /// exits are clone-only doors with no diamond call on the money path.
+    function testADisputeCannotBeOpenedWhileTheTokenRefusesTheDiamond() public {
+        (Agreement a, ) = _hireThroughJobBoard(AMOUNT);
+        _activate(a);
+        _handIn(a);
+
+        // ⚠️ THE CLAIM HOLDS AND THE ERROR MOVED, 21 OCTOBER 2026. The line
+        // expected the token's own raw string, `bytes("blacklisted")`, which is
+        // what came back while the clone pulled the fee itself. The levy is
+        // taken through `ArbiterVaultFacet.holdDisputeFee` since 20 October, and
+        // that door attempts the pull and then answers a NAMED refusal --
+        // `DisputeFeeNotCovered(needed, balance, allowance)` -- precisely so a
+        // reader can tell a refusing token from a short purse. So the dispute
+        // still cannot be opened, and the reason is now reported one frame up
+        // with three numbers attached instead of one opaque string.
+        //
+        // The hand figure is asserted on its own line BEFORE the attempt, where
+        // the pot still stands: `needed` is the only load-bearing number in
+        // that error, and matching on the selector alone keeps this scene from
+        // locking the client's incidental balance into an expectation.
+        //     the levy  max( 10_000_000, 100_000_000 x 3 / 100 = 3_000_000 )
+        //             = 10_000_000
+        assertEq(a.disputeFee(), 10_000_000, "the floor decides on a $100 pot, so the levy the door asks for is ten dollars");
+
+        usdc.setBlacklisted(address(diamond), true);
+
+        // `expectPartialRevert` and not `expectRevert`: the latter, handed a
+        // bytes4, demands revert data of exactly four bytes and this error
+        // carries three numbers, so it reported "custom error 0xc917d4b1"
+        // against the real payload. Partial matches the selector and leaves the
+        // client's incidental balance out of the expectation.
+        vm.prank(client);
+        vm.expectPartialRevert(ArbiterRegistryFacet.DisputeFeeNotCovered.selector);
+        a.raiseDispute();
+        assertEq(a.disputedAt(), 0, "a dispute was opened without the fee being taken");
+        // ⚠️ AND THE REFUSAL LEFT NOTHING BEHIND, which is the half the error's
+        // rename could have quietly dropped: a door that reverts after a
+        // partial write would leave the deal marked as having prepaid.
+        (uint256 heldFee, address payer) =
+            ArbiterVaultFacet(address(diamond)).getHeldDisputeFee(address(a));
+        assertEq(heldFee, 0,        "a refused dispute left a fee recorded as held");
+        assertEq(payer, address(0), "a refused dispute left a payer recorded against it");
+
+        // ── AND THE MONEY IS NOT STUCK: the hand-in's own exit still opens. ──
+        vm.warp(block.timestamp + AUTO_APPROVE_WINDOW + 1);
+        uint256 e0 = usdc.balanceOf(executor);
+        vm.prank(stranger); a.triggerAutoApprove();
+        assertEq(usdc.balanceOf(executor) - e0, AMOUNT, "the executor was not paid the whole pot");
+        assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
     }
 
     /// The same with the silent form of refusal, and with the EXECUTOR winning
@@ -525,8 +599,12 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         uint256 e0 = usdc.balanceOf(executor);
         _submitAndFinalize(a, false); // executor wins
 
-        assertEq(usdc.balanceOf(executor) - e0, 97_000_000, "the winner was paid");
-        assertEq(a.undeliveredFee(), 3_000_000, "the silent refusal is booked like the loud one");
+        // ⚠️ THE WHOLE POT, AND NOTHING DEFERRED (20 October 2026). The pot is
+        // not reduced by the fee -- it was taken at the door -- and the silent
+        // refusal has nothing to refuse, because the verdict transfers nothing
+        // to the diamond. The two figures read 97_000_000 and 3_000_000.
+        assertEq(usdc.balanceOf(executor) - e0, 100_000_000, "the winner was paid");
+        assertEq(a.undeliveredFee(), 0, "a silent refusal deferred something, where there is nothing to defer");
     }
 
     /// The control the scenes above need: with a healthy diamond nothing is
@@ -546,10 +624,20 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         uint256 d0 = usdc.balanceOf(address(diamond));
         _submitAndFinalize(a, true);
 
+        // ⚠️ NOTHING ARRIVES AT THE DIAMOND AT THE VERDICT ANY MORE
+        // (20 October 2026). The fee was taken at the DOOR of the dispute and
+        // has sat here since; `d0` is read after that, so the only movement
+        // across the settlement is the bond going home. The line read
+        // 3_000_000 -- 3% of a $100 pot arriving with the verdict.
         assertEq(
-            usdc.balanceOf(address(diamond)) + caseBond - d0, 3_000_000,
-            "the fee arrived at once, and the bond left with the verdict"
+            usdc.balanceOf(address(diamond)) + caseBond - d0, 0,
+            "money arrived at the diamond at the verdict -- the fee was supposed to be there from the door"
         );
+        // ⚠️ AND `undeliveredFee` IS NOUGHT FOR A REASON THAT HAS CHANGED, which
+        // is worth a line because the assertion did not. It used to mean "the
+        // clone's transfer of the fee to the diamond succeeded"; the clone makes
+        // no such transfer now, so the field is nought on every road and can
+        // only be written by one of the sixteen clones born before this cut.
         assertEq(a.undeliveredFee(), 0, "nothing deferred on the healthy path");
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
         _assertDiamondBalances("healthy diamond, fee taken");
@@ -569,15 +657,57 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         uint256 c0 = usdc.balanceOf(client);
         uint256 d0 = usdc.balanceOf(address(diamond));
 
-        vm.prank(stranger); a.withdrawUndeliveredFee();
-
-        assertEq(usdc.balanceOf(address(diamond)) - d0, 3_000_000, "to the diamond");
-        assertEq(usdc.balanceOf(stranger), s0, "not to the caller");
-        assertEq(usdc.balanceOf(client), c0, "not to the winner");
-
+        // ⚠️ THIS SCENE'S PREMISE CEASED TO EXIST ON 20 OCTOBER 2026, AND THE
+        // ASSERTIONS ARE INVERTED RATHER THAN DELETED. The premise was: a
+        // settlement hands the clone a dispute fee it owes the diamond, the
+        // diamond refuses the token, the clone books the fee as a debt, and
+        // then anybody at all can push it across -- once. Since the owner moved
+        // the levy to the DISPUTE'S DOOR there is no such moment: the fee left
+        // the opener's wallet at `raiseDispute` and has been sitting on the
+        // diamond ever since, so a blacklisted diamond at settlement time has
+        // no fee to fail to receive and the clone books nothing.
+        //
+        // Worked out by hand, retired figures first so the method can be
+        // checked:
+        //     the retired fee   100_000_000 x 300 / 10_000 = 3_000_000
+        // -- the literal that stood on the line below, which the clone held as
+        // `undeliveredFee` and the stranger's push moved to the diamond. That
+        // reproduces, so the scene was measuring what it said. What ships: the
+        // same door, on the FIRST call, answering `ZeroAmount` -- which used to
+        // be the answer to the SECOND call and is now the answer to every call.
+        //
+        // ⚠️ AND THE THREE "WHO DID NOT GET IT" LINES ARE KEPT, because they are
+        // the half of this scene that still has something to say: a door that
+        // refuses must also move nothing, and the failure mode worth catching
+        // is a push that pays the CALLER. Deleting them would leave the refusal
+        // asserted and the payment unasserted.
         vm.prank(stranger);
         vm.expectRevert(Agreement.ZeroAmount.selector);
         a.withdrawUndeliveredFee();
+
+        assertEq(a.undeliveredFee(), 0, "the clone booked a dispute fee -- the levy is charged at the door and never reaches the escrow");
+        assertEq(usdc.balanceOf(address(diamond)), d0, "the refused call moved money to the diamond anyway");
+        assertEq(usdc.balanceOf(stranger), s0, "not to the caller");
+        assertEq(usdc.balanceOf(client), c0, "not to the winner");
+
+        // And the fee really is on the diamond already, taken at the door: the
+        // claim is "it was collected earlier", not "it was never collected".
+        (uint256 heldFee, address payer) =
+            ArbiterVaultFacet(address(diamond)).getHeldDisputeFee(address(a));
+        assertEq(heldFee, 0, "the door charge is still held after a finalized verdict -- it should have been settled to the judge");
+        // ⚠️ AND THE PAYER MARKER STANDS, which I expected to be cleared and it
+        // is not: `settleDisputeFee` zeroes the AMOUNT and deliberately leaves
+        // `disputeFeePrepaidBy` alone, so the deal is still known to have
+        // prepaid after the money is gone. Measured here (it came back as this
+        // fixture's client, `address(0x1)`) and then read in the facet, where
+        // the choice is written out. The two halves are asserted separately,
+        // because "nothing is held" and "we still know who paid" are different
+        // facts and a cleared marker would let the same fee be taken twice.
+        assertEq(payer, client, "the payer marker was cleared with the amount -- the deal has stopped being known to have prepaid");
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000,
+            "the judge is not owed the whole ten dollar levy, so the fee this scene says was taken at the door was not taken at the door"
+        );
     }
 
     /// All three payees unservable on the same verdict. The clone keeps exactly
@@ -598,9 +728,34 @@ contract MoneyPathRefusalTest is MoneyPathBase {
 
         _submitAndFinalize(a, false); // executor wins the $100 pot
 
+        // ⚠️ TWO OF THESE THREE FIGURES MOVED ON 21 OCTOBER 2026, AND THE THIRD
+        // LEDGER IS NOW STRUCTURALLY EMPTY ON EVERY ROAD. The dispute fee is
+        // taken at the DISPUTE'S DOOR since 20 October and held on the diamond,
+        // so it never passes through the clone: the escrow pays the winner the
+        // WHOLE pot, and `undeliveredFee` -- the clone's ledger for a fee it
+        // owes the diamond -- has nothing to hold.
+        //
+        // Worked out by hand, retired figures first so the method can be
+        // checked. The retired fee came out of the pot at the settlement:
+        //     the fee          100_000_000 x 300 / 10_000 = 3_000_000
+        //     the winnings     100_000_000 - 3_000_000    = 97_000_000
+        // -- the two literals that stood here, both reproduced, so the
+        // subtraction is the right subtraction. What ships:
+        //     the fee          taken at the door, not here =          0
+        //     the winnings     the pot, whole               = 100_000_000
+        // and the hanging proposal's own refund is untouched by any of it,
+        // because 10_500_000 is a BOARD fee on an extra and not the dispute
+        // levy: 10_000_000 of proposal plus 500_000 of held fee, a different
+        // pot with a different rule.
+        //
+        // ⚠️ THE SUM IS STILL WRITTEN WITH THREE TERMS, and the third is kept
+        // at nought rather than dropped: the identity "the ledgers add up to
+        // what is held" is the thing this scene exists for, and a sum of two
+        // terms would stop noticing the day the clone starts holding a fee
+        // again.
         assertEq(a.undeliveredRefund(), 10_500_000, "the client's hanging proposal and its held fee");
-        assertEq(a.undeliveredPayout(), 97_000_000, "the executor's winnings");
-        assertEq(a.undeliveredFee(),     3_000_000, "the arbiter's fee");
+        assertEq(a.undeliveredPayout(), 100_000_000, "the executor's winnings -- the pot comes out whole now that the fee is taken at the door");
+        assertEq(a.undeliveredFee(),             0, "the clone booked a dispute fee it cannot have taken -- the levy is charged at the door");
         assertEq(
             a.undeliveredRefund() + a.undeliveredPayout() + a.undeliveredFee(),
             usdc.balanceOf(address(a)),
@@ -613,10 +768,16 @@ contract MoneyPathRefusalTest is MoneyPathBase {
         vm.startPrank(stranger);
         a.withdrawUndeliveredRefund();
         a.withdrawUndeliveredPayout();
+        // ⚠️ AND THE THIRD DOOR REFUSES, 21 OCTOBER 2026: `withdrawUndeliveredFee`
+        // opens with `if (owed == 0) revert ZeroAmount()`, and the ledger behind
+        // it is a nought on every road now. Asserted rather than deleted, for
+        // the same reason the nought is kept in the sum above -- a deleted call
+        // is a door that stops being watched.
+        vm.expectRevert(Agreement.ZeroAmount.selector);
         a.withdrawUndeliveredFee();
         vm.stopPrank();
         assertEq(usdc.balanceOf(address(a)), 0, "clone empty");
-        _assertDiamondBalances("after all three debts were pulled");
+        _assertDiamondBalances("after both live debts were pulled and the dead fee door refused");
     }
 
     /// Asking for a fee that is not owed is refused by name, like the other two

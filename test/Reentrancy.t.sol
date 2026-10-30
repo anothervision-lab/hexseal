@@ -231,7 +231,7 @@ contract ReentrancyTest is Test {
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
         arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
         arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](13);
+        bytes4[] memory arbSelsVault = new bytes4[](16);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
@@ -245,6 +245,13 @@ contract ReentrancyTest is Test {
         arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
         arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
         arbSelsVault[12] = ArbiterVaultFacet.hasSubmittedVerdict.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026).
+        // `Agreement.raiseDispute` calls `holdDisputeFee` HARD -- no fee, no
+        // dispute -- so a rig that opens a dispute must route it or every such
+        // scene answers "Diamond: function not found".
+        arbSelsVault[13] = ArbiterVaultFacet.holdDisputeFee.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.settleDisputeFee.selector;
+        arbSelsVault[15] = ArbiterVaultFacet.getHeldDisputeFee.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -330,10 +337,29 @@ contract ReentrancyTest is Test {
         ArbiterRegistryFacet(address(diamond)).finalizeVerdict(agr);
     }
 
+
+    /// ⚠️ OPEN A DISPUTE AND PAY FOR IT, AND **DO NOT MINT** (20 October 2026).
+    /// `raiseDispute` pulls `disputeFee()` from the opener through the diamond.
+    /// The first draft of this helper minted exactly the charge, which is fatal
+    /// in a file whose whole subject is that the system's total never moves:
+    /// a mint CREATES money, and the invariant went red by exactly ten dollars
+    /// with nothing wrong in `src/`.
+    ///
+    /// So the opener pays out of the purse the fixture already gave him. His
+    /// having it is asserted rather than assumed: a short purse would otherwise
+    /// make the door refuse and the scene fail somewhere else.
+    function _openTheDisputeAs(address who, address agr) internal {
+        uint256 doorCharge = Agreement(agr).disputeFee();
+        assertGe(
+            malUSDC.balanceOf(who), doorCharge,
+            "rig: the opener cannot pay the door charge out of what the fixture gave him"
+        );
+        vm.prank(who); malUSDC.approve(address(diamond), doorCharge);
+        vm.prank(who); Agreement(agr).raiseDispute();
+    }
     function _deployDisputed() internal returns (address agr) {
         agr = _deployActive();
-        vm.prank(client);
-        Agreement(agr).raiseDispute();
+        _openTheDisputeAs(client, agr);
         // Arbiter claims the dispute
         bytes32 commitment = keccak256(abi.encodePacked(agr, arbiter, SALT));
         vm.prank(arbiter);
@@ -499,7 +525,30 @@ contract ReentrancyTest is Test {
         assertTrue(malUSDC.reentrantReverted(),  "guard must block reentrant triggerArbiterTimeout");
         assertFalse(malUSDC.reentrantSucceeded(), "double-refund must not happen");
 
-        assertEq(malUSDC.balanceOf(client), clientBefore + JOB_AMOUNT, "single refund only");
+        // ⚠️ THE WHOLE POT PLUS THE DOOR CHARGE, 21 OCTOBER 2026, where the
+        // line read a bare `clientBefore + JOB_AMOUNT`. The dispute fee is
+        // taken at the DISPUTE'S door since 20 October and returned when no
+        // verdict was delivered; `_deployDisputed` has the CLIENT open it, and
+        // `clientBefore` is read after that, so the refund lands in this
+        // subtraction. A claimed case makes no difference -- the refund answers
+        // to the missing verdict, not to the missing judge.
+        //
+        // Worked out by hand, retired figure first. Nothing was charged at the
+        // door under the retired rule, so the client received the pot alone:
+        //     100_000_000
+        // -- the literal behind the line that stood. And with the charge, where
+        // the floor decides because 3% of $100 is 3_000_000:
+        //     the charge       max( 10_000_000, 3_000_000 ) =  10_000_000
+        //     what he receives 100_000_000 + 10_000_000     = 110_000_000
+        //
+        // ⚠️ AND THE SCENE'S OWN SUBJECT IS UNTOUCHED BY THE CHANGE, which is
+        // the thing to be careful about here: "single refund only" is a claim
+        // about the reentrancy guard, and it is still exactly one refund. The
+        // figure grew by a term; the ONENESS is what the equality protects, and
+        // a second pass through the hatch would now show up as 220_000_000
+        // rather than as 200_000_000.
+        uint256 doorCharge = 10_000_000;
+        assertEq(malUSDC.balanceOf(client), clientBefore + JOB_AMOUNT + doorCharge, "single refund only -- the pot once, and the door charge once");
         assertEq(malUSDC.balanceOf(agr), 0, "agreement drained exactly once");
     }
 

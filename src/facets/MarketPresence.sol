@@ -32,7 +32,7 @@ pragma solidity ^0.8.20;
 // Rule A is GONE. He is an ordinary user who steps away for a few days to read
 // a case; what he had open before he took it is his own business, and the one
 // conflict that actually matters — judging a deal he is a party to — is
-// refused by `claimDispute` and `voteOnAppeal` by name, as it always was.
+// refused by `claimDispute` and `voteToOverturn` by name, as it always was.
 //
 // ⚠️ WHAT THE NARROWING COSTS, NAMED RATHER THAN DISCOVERED LATER: a deal he
 // opened BEFORE taking a case goes on running while he judges somebody else's.

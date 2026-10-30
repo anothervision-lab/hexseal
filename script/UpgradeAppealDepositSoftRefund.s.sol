@@ -116,6 +116,9 @@ contract UpgradeAppealDepositSoftRefund is Script {
 
     /// The second half of the arbiter registry facet since the 16 September 2026
     /// split — see artifactSelectors() below for why there are two.
+    string internal constant APPEAL_ARTIFACT_PATH =
+        "out/ArbiterAppealFacet.sol/ArbiterAppealFacet.json";
+
     string internal constant VAULT_ARTIFACT_PATH =
         "out/ArbiterVaultFacet.sol/ArbiterVaultFacet.json";
 
@@ -393,7 +396,7 @@ contract UpgradeAppealDepositSoftRefund is Script {
 
     /// The same check with the compiled side handed in, so `run()` can reuse the
     /// one artifact read it already paid for.
-    /// ⚠️ THE THREE DOORS THE FACET LOST AFTER THIS CUT WAS SIGNED (9 October
+    /// ⚠️ THE FOUR DOORS THE FACET HAS LOST SINCE THIS CUT WAS SIGNED (9 October
     /// 2026): `overturnVerdict(address,bool)`, `freezeVerdict(address)` and
     /// `unfreezeVerdict(address)`, the governance hand over a verdict. The bytes
     /// are written out because there is no `.selector` left to take.
@@ -402,15 +405,25 @@ contract UpgradeAppealDepositSoftRefund is Script {
     /// Replace list may exceed the compiled facet by EXACTLY these three and by
     /// nothing else, and none of the three may be back in the facet while this
     /// exception still stands.
-    function sinceRemovedFromRegistry() public pure returns (bytes4[3] memory s) {
-        s = [bytes4(0x42a71c6c), bytes4(0x5533316c), bytes4(0x69315118)];
+    ///
+    /// ⚠️ AND THE FOURTH, 14 OCTOBER 2026 (decision 177):
+    /// `voteOnAppeal(address,bool)` 0xc9bb9cdd. The appeal vote lost its second
+    /// direction, so the door was renamed `voteToOverturn(address)` and its
+    /// selector changed with its signature. The chain still routes the old four
+    /// bytes -- they leave it only in the cut that carries this facet, which
+    /// therefore needs a `Remove` group and an `Add` group where this one had
+    /// neither. The exception is extended rather than the Replace list being
+    /// rewritten, which is what the paragraph above says to do when a fourth
+    /// door leaves.
+    function sinceRemovedFromRegistry() public pure returns (bytes4[4] memory s) {
+        s = [bytes4(0x42a71c6c), bytes4(0x5533316c), bytes4(0x69315118), bytes4(0xc9bb9cdd)];
     }
 
     function assertReplaceListCovers(bytes4[] memory sels, bytes4[] memory fromArtifact) public pure {
-        bytes4[3] memory gone = sinceRemovedFromRegistry();
+        bytes4[4] memory gone = sinceRemovedFromRegistry();
         require(
             sels.length == fromArtifact.length + gone.length,
-            "pre-flight: the Replace list and the compiled facet disagree on how many functions it has, beyond the three doors removed on 9 October 2026"
+            "pre-flight: the Replace list and the compiled facet disagree on how many functions it has, beyond the four doors this facet has lost since"
         );
         for (uint256 i = 0; i < fromArtifact.length; i++) {
             bool found;
@@ -458,12 +471,27 @@ contract UpgradeAppealDepositSoftRefund is Script {
     /// answer is what `assertTheCompiledFacetNeedsNoAddGroup` measures against,
     /// and a frozen list would stop noticing a function added before the split
     /// cut lands — which is the whole job of that check.
+    /// ⚠️ THREE FILES SINCE 15 OCTOBER 2026, WHERE THE PARAGRAPH ABOVE SAYS
+    /// TWO, and the move is the one that paragraph already sanctions: it was
+    /// widened from ONE file to TWO after the September split for exactly this
+    /// reason, and it answers "what does that facet implement" rather than
+    /// freezing a list. The appeal became ArbiterAppealFacet -- six selectors
+    /// carved out of ArbiterRegistryFacet, which stood 1 469 bytes under
+    /// EIP-170 -- and the union of the three is byte for byte what the single
+    /// facet exposed. THE SIGNED REPLACE LIST IS STILL NOT TOUCHED.
+    ///
+    /// ⚠️ WIDENING AN ABI SOURCE BUYS THE RISK THAT IT STOPS
+    /// DISCRIMINATING, so the stand carries the probe:
+    /// test_APhantomInTheWidenedAbiSourceIsStillRefused requires a selector no
+    /// facet implements to be refused and one of the six to be found.
     function artifactSelectors() public view returns (bytes4[] memory out) {
         bytes4[] memory reg = selectorsIn(artifactJson());
         bytes4[] memory vault = selectorsIn(vm.readFile(VAULT_ARTIFACT_PATH));
-        out = new bytes4[](reg.length + vault.length);
+        bytes4[] memory appeal = selectorsIn(vm.readFile(APPEAL_ARTIFACT_PATH));
+        out = new bytes4[](reg.length + vault.length + appeal.length);
         for (uint256 i = 0; i < reg.length; i++) out[i] = reg[i];
         for (uint256 i = 0; i < vault.length; i++) out[reg.length + i] = vault[i];
+        for (uint256 i = 0; i < appeal.length; i++) out[reg.length + vault.length + i] = appeal[i];
     }
 
     /// Every selector must be routed TODAY, and all of them to the same
@@ -636,7 +664,7 @@ contract UpgradeAppealDepositSoftRefund is Script {
     /// function starts failing loudly instead of quietly measuring nothing.
     function liveFacetCodehash(address diamond) public view returns (bytes32) {
         address mounted = IDiamondLoupe(diamond).facetAddress(
-            ArbiterRegistryFacet.resolveAppeal.selector
+            bytes4(keccak256("resolveAppeal(address)"))
         );
         require(
             mounted != address(0),
@@ -869,11 +897,19 @@ contract UpgradeAppealDepositSoftRefund is Script {
         sels[i++] = ArbiterRegistryFacet.recordPresentationDigest.selector;
 
         // ── appeals - the reason this cut exists ──
-        sels[i++] = ArbiterRegistryFacet.raiseAppeal.selector;
-        sels[i++] = ArbiterRegistryFacet.voteOnAppeal.selector;
+        sels[i++] = bytes4(keccak256("raiseAppeal(address)"));
+        // ⚠️ THE OLD FOUR BYTES, AS A LITERAL, BECAUSE THIS SCRIPT IS A
+        // RECORD OF A CUT THAT WENT ON CHAIN. The door was
+        // `voteOnAppeal(address,bool)` 0xc9bb9cdd when this group was
+        // signed; decision 177 renamed it to `voteToOverturn(address)`
+        // on 14 October 2026 and the chain will not route the new bytes
+        // until the cut that carries them. A `Replace` group naming a
+        // selector the diamond does not route REVERTS AND TAKES THE
+        // WHOLE CUT, so this line may not follow the tree's symbol.
+        sels[i++] = bytes4(0xc9bb9cdd);
         sels[i++] = ArbiterVaultFacet.hasVotedOnAppeal.selector;
         sels[i++] = ArbiterVaultFacet.getAppealVotes.selector;
-        sels[i++] = ArbiterRegistryFacet.resolveAppeal.selector;
+        sels[i++] = bytes4(keccak256("resolveAppeal(address)"));
 
         // ── the dispute bounty, where the undelivered deposit now lands ──
         sels[i++] = ArbiterVaultFacet.getDisputeBounty.selector;

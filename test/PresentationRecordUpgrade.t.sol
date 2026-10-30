@@ -11,6 +11,7 @@ import "../src/DiamondProxy.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {PreSplitArbiterDispatcher} from "./ArbiterSplitRig.sol";
 import {DeployFull} from "../script/DeployFull.s.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 /// ⚠️ THE ONE LINE OF run() THIS REHEARSAL REPLACES, AND WHY (16 September
 /// 2026). This cut mounts all fifty-nine arbiter selectors on ONE address,
@@ -35,7 +36,12 @@ contract PresentationRecordRehearsal is UpgradePresentationRecord {
                 address(new ArbiterRegistryFacet()),
                 address(new ArbiterVaultFacet()),
                 d.arbiterRegistryFacetSelectors(),
-                d.arbiterVaultFacetSelectors()
+                d.arbiterVaultFacetSelectors(),
+                // The appeal became a facet of its own on 15 October 2026; a
+                // double that did not forward its six would answer a fallback
+                // revert where the chain of this census answered an appeal.
+                address(new ArbiterAppealFacet()),
+                d.arbiterAppealFacetSelectors()
             )
         );
     }
@@ -918,7 +924,11 @@ contract PresentationRecordUpgradeTest is Test, ArbiterTwoFacetBench, ArbiterCha
         _setOpenClaimCount(diamond, arb, 1);
 
         // First the premise is proved: the anchor really is not mounted before the cut.
-        vm.expectRevert();
+        // ⚠️ THE LITERAL (15 October 2026). This is the diamond refusing an
+        // unrouted selector, which is exactly what the scene is about; bare, the
+        // same `vm.expectRevert()` would have passed on a revert from inside a
+        // door that WAS mounted. Taken off a run with a wrong expectation armed.
+        vm.expectRevert(bytes("Diamond: function not found"));
         ArbiterAccountabilityFacet(address(diamond)).getDisputeClaimedAt(address(0xDEAD));
 
         // And the warning meanwhile runs without a single revert.

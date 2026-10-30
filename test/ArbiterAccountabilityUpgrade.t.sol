@@ -55,6 +55,7 @@ contract WrongSuspensionWindowStub {
 }
 
 import {DeployFull} from "../script/DeployFull.s.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 /// ⚠️ THE ONE LINE OF run() THIS REHEARSAL REPLACES, AND WHY (16 September
 /// 2026). This cut mounts its whole registry group on ONE address, the shape
@@ -78,7 +79,12 @@ contract AccountabilityRehearsal is UpgradeArbiterAccountability {
                 address(new ArbiterRegistryFacet()),
                 address(new ArbiterVaultFacet()),
                 d.arbiterRegistryFacetSelectors(),
-                d.arbiterVaultFacetSelectors()
+                d.arbiterVaultFacetSelectors(),
+                // The appeal became a facet of its own on 15 October 2026; a
+                // double that did not forward its six would answer a fallback
+                // revert where the chain of this census answered an appeal.
+                address(new ArbiterAppealFacet()),
+                d.arbiterAppealFacetSelectors()
             )
         );
     }
@@ -124,7 +130,7 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     ///     ArbiterVaultFacet (half of the pair this cut's registry became);
     ///     settleAppealDebts(uint256) and getAppealDebts() joined them the same day.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](15);
+        sels = new bytes4[](24);
         sels[0] = bytes4(keccak256("acceptDAOAddress()"));
         sels[1] = bytes4(keccak256("getPendingDAOAddress()"));
         sels[2] = bytes4(keccak256("setDisputeDiscount(uint256)"));
@@ -148,6 +154,71 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         sels[12] = bytes4(keccak256("withdrawCaseBond(address)"));
         sels[13] = bytes4(keccak256("getCaseBond(address)"));
         sels[14] = bytes4(keccak256("getJudgingCount(address)"));
+        // ⚠️ getStreakClock(address) -- 12 October 2026, and it is the second
+        // half of the arbiter ENTRY TEST made readable before the button is
+        // pressed. The entrance stopped asking only "how many clean closes"
+        // and started asking "and how long did the run take"
+        // (MIN_STREAK_SPAN_TO_REGISTER, sixteen days): the constant is private
+        // and `streakClockStartedAt` is read by nothing outside the diamond, so
+        // without this door a candidate with five clean closes saw "5 of 5" and
+        // a button that refused him -- the refusal nobody could predict that
+        // the deal cap taught us to stop shipping.
+        sels[15] = bytes4(keccak256("getStreakClock(address)"));
+        // ⚠️ voteToOverturn(address) -- 14 October 2026, decision 177. The
+        // appeal vote lost its second direction, so the door stopped being
+        // `voteOnAppeal(address,bool)` and its selector changed with its
+        // signature. It is GROWTH here and the old four bytes are still what
+        // the chain routes: the cut that carries this facet has to REMOVE
+        // 0xc9bb9cdd and ADD these, which is two groups where this cut had
+        // one.
+        sels[16] = bytes4(keccak256("voteToOverturn(address)"));
+        // ⚠️ AND THE LOT'S TWO, the same night (decision 177): the chain
+        // SUMMONS the appeal panel now instead of letting whoever presses
+        // first sit down. `summonAppealPanel(address)` is the door anybody may
+        // pull and `getAppealSummons(address)` publishes the five it called.
+        // Plain arrivals — nothing leaves with them — so they belong in the
+        // same `Add` group as the renamed vote above.
+        sels[17] = bytes4(keccak256("summonAppealPanel(address)"));
+        sels[18] = bytes4(keccak256("getAppealSummons(address)"));
+        // ⚠️ AND THE PANEL'S SECOND ANSWER, 17 OCTOBER 2026.
+        // `replyNoOverturn(address)` is the answer that asks for NO overturn,
+        // and the panel's wage is paid for it just as much as for a vote. It is
+        // compiled on ArbiterAppealFacet, which this file's ABI source has
+        // carried since the split of 15 October 2026, and the chain routes it
+        // NOWHERE -- measured on Base Sepolia 18 October 2026, where
+        // `facetAddress(0x1b07a7f6)` answered the zero address. A plain
+        // arrival: nothing leaves with it.
+        sels[19] = bytes4(keccak256("replyNoOverturn(address)"));
+        // ⚠️ AND THE BOND'S QUOTE, 20 OCTOBER 2026 (the owner's "yes, a new
+        // selector"). `quoteCaseBond(address)` answers what an arbiter puts
+        // down to TAKE a case, asked BEFORE he takes it. The judge's bond and
+        // the appeal's PRICE parted company that day -- the bond is held down
+        // to the pot, the price keeps its 20 USDC floor -- so a screen that
+        // promised the bond while reading `quoteAppealDeposit` said $20 over a
+        // $5 deal. `getCaseBond` above could not answer it: that reads the
+        // record the claim writes, and there is no record before the claim. It
+        // is compiled on ArbiterVaultFacet and the chain routes it NOWHERE --
+        // measured on Base Sepolia 20 October 2026, where
+        // `facetAddress(0xda358d0b)` answered the zero address while
+        // `facetAddresses()` answered fifteen. A plain arrival: nothing leaves
+        // with it.
+        sels[20] = bytes4(keccak256("quoteCaseBond(address)"));
+        // ⚠️ AND THE DISPUTE FEE TAKEN AT THE DOOR, 20 OCTOBER 2026 (the
+        // owner's flat prices). The fee came off the escrow and onto the party
+        // who OPENS the dispute, so the vault now holds it between the claim
+        // and the verdict instead of the pot carrying it:
+        // `holdDisputeFee(address,uint256)` 0x7808925d takes it in,
+        // `settleDisputeFee(bool)` 0xefccd7bc pays the judge who delivered or
+        // hands it back, and `getHeldDisputeFee(address)` 0x9dae83cc is the
+        // read a screen needs to show what is on the table before either
+        // happens. All three are compiled on ArbiterVaultFacet and the chain
+        // routes NONE of them -- measured on Base Sepolia 21 October 2026 at
+        // block 48 386 920, where `facetAddress` answered the zero address for
+        // all three while `facetAddresses()` answered fifteen. Plain arrivals:
+        // nothing leaves with them.
+        sels[21] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
+        sels[22] = bytes4(keccak256("settleDisputeFee(bool)"));
+        sels[23] = bytes4(keccak256("getHeldDisputeFee(address)"));
     }
 
     /// The same thing for the OTHER facet, which until 29 August 2026 had not
@@ -222,12 +293,24 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         );
     }
 
+    /// ⚠️ A TRIO SINCE 15 OCTOBER 2026, AND THE NAME IS KEPT. The appeal became
+    /// ArbiterAppealFacet that day -- six selectors carved out of
+    /// ArbiterRegistryFacet, which stood 1 469 bytes under EIP-170 -- so what
+    /// "the facet this cut mounted" implements is spread over three contracts
+    /// instead of two. The name stays `_registryAbiPair` because the exemption
+    /// scenes cite it; what it answers is the union, as it already was when the
+    /// September split made it two.
+    ///
+    /// ⚠️ WIDENING AN ABI SOURCE BUYS THE RISK THAT IT STOPS DISCRIMINATING,
+    /// which is what test_APhantomInTheWidenedAbiSourceIsStillRefused is for.
     function _registryAbiPair() internal view returns (bytes4[] memory out) {
         bytes4[] memory a = _abiSelectors("ArbiterRegistryFacet");
         bytes4[] memory b = _abiSelectors("ArbiterVaultFacet");
-        out = new bytes4[](a.length + b.length);
+        bytes4[] memory c = _abiSelectors("ArbiterAppealFacet");
+        out = new bytes4[](a.length + b.length + c.length);
         for (uint256 i = 0; i < a.length; i++) out[i] = a[i];
         for (uint256 i = 0; i < b.length; i++) out[a.length + i] = b[i];
+        for (uint256 i = 0; i < c.length; i++) out[a.length + b.length + i] = c[i];
     }
 
     function _abiSelectors(string memory contractName) internal view returns (bytes4[] memory out) {
@@ -296,6 +379,27 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     /// What disappears if this is removed: the exemption above would become
     /// an unchecked hole — a selector could be dropped out of the cut's lists
     /// and parked here, and the coverage lock would call the cut complete.
+    /// 🔴 THE DESIGNATED MUTATION FOR THE WIDENED ABI SOURCE (15 October 2026).
+    ///
+    /// Widening "what the group this cut mounted implements" from two artifacts
+    /// to three buys one specific risk: that the source stops discriminating
+    /// and every allowance in this file becomes a blanket pass. This holds both
+    /// ends of that. A selector NO facet implements must still be absent, and
+    /// one of the appeal's six must be PRESENT -- without the second half the
+    /// scene would be green on a source that was never widened at all, and
+    /// without the first it would be green on a source that accepts anything.
+    function test_APhantomInTheWidenedAbiSourceIsStillRefused() public view {
+        bytes4[] memory abiNow = _registryAbiPair();
+        bool phantom;
+        bool moved;
+        for (uint256 i = 0; i < abiNow.length; i++) {
+            if (abiNow[i] == bytes4(0xdeadbeef)) phantom = true;
+            if (abiNow[i] == bytes4(0xbff14b7f)) moved = true; // voteToOverturn(address)
+        }
+        assertFalse(phantom, "a selector nothing implements is in the widened ABI source - it has stopped discriminating");
+        assertTrue(moved, "voteToOverturn is not in the widened ABI source - the appeal artifact was never added");
+    }
+
     function test_TheGrowthExemptionIsRealAndCoversNothingTheCutMounted() public view {
         bytes4[] memory grown  = _grownAfterThisCut();
         bytes4[] memory abiSels = _registryAbiPair();
@@ -550,12 +654,21 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     /// with a Remove". That Remove is exactly what the pending cut owes, and it is
     /// carried as an open item rather than as silence here.
     ///
-    /// Named rather than counted: a FOURTH phantom still reds in both arms below.
+    /// ⚠️ AND A FOURTH LEFT ON 14 OCTOBER 2026 (decision 177):
+    /// `voteOnAppeal(address,bool)` 0xc9bb9cdd. The appeal vote lost its second
+    /// direction, the door became `voteToOverturn(address)`, and a renamed
+    /// function is a different selector. It stays in this cut's Replace group
+    /// for the reason the paragraph above gives, and the chain goes on routing
+    /// it until the cut that carries the new facet REMOVES it and ADDS the new
+    /// bytes -- the second thing that pending cut owes.
+    ///
+    /// Named rather than counted: a FIFTH phantom still reds in both arms below.
     function _shrunkFromRegistryAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](3);
+        sels = new bytes4[](4);
         sels[0] = bytes4(keccak256("overturnVerdict(address,bool)"));
         sels[1] = bytes4(keccak256("freezeVerdict(address)"));
         sels[2] = bytes4(keccak256("unfreezeVerdict(address)"));
+        sels[3] = bytes4(keccak256("voteOnAppeal(address,bool)"));
     }
 
     /// (DiamondCutLib checks only "the address is different and has code"), so the cut
@@ -924,7 +1037,12 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
                 address(new ArbiterRegistryFacet()),
                 address(new ArbiterVaultFacet()),
                 d.arbiterRegistryFacetSelectors(),
-                d.arbiterVaultFacetSelectors()
+                d.arbiterVaultFacetSelectors(),
+                // The appeal became a facet of its own on 15 October 2026; a
+                // double that did not forward its six would answer a fallback
+                // revert where the chain of this census answered an appeal.
+                address(new ArbiterAppealFacet()),
+                d.arbiterAppealFacetSelectors()
             )
         );
     }

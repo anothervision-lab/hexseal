@@ -167,7 +167,21 @@ contract UpgradeFeeModelSelectorsTest is Test {
         assertEq(replace.length, 23, "ServiceBoardFacet: expected 23 Replace selectors");
         assertEq(add.length, 2, "ServiceBoardFacet: expected 2 Add selectors");
         _assertDisjoint(replace, add, "ServiceBoardFacet");
-        _assertSameSelectorSet(_concat(replace, add), _abiSelectors("ServiceBoardFacet"), "ServiceBoardFacet");
+        // ⚠️ RETIRED 19 OCTOBER 2026, the fifth time in this file and for the
+        // same reason as the four above it: the live-ABI comparison is gone.
+        // The cut was pressed on 30 JULY 2026, block 44 828 588, receipt
+        // 0xdb4b36fd…, status 0x1, so these lists are a RECORD of what was
+        // mounted that day, while ServiceBoardFacet's ABI keeps growing. The
+        // comparison was armed and had never fired -- which is the whole trap:
+        // it is not red today and goes red on the first door this facet gains,
+        // with no defect behind it.
+        //
+        // GUARDED NOW BY test/DeployFullSelectors.t.sol::testServiceBoardFacetSelectors,
+        // which holds `deploy.serviceBoardFacetSelectors()` against
+        // `_abiSelectors("ServiceBoardFacet")` by set equality -- phantom and
+        // undercut both, against TODAY's artifact, which is the question that
+        // has an answer today. The frozen counts and the disjointness above are
+        // kept: they are the record, and a change to THEM still goes red here.
     }
 
     function testRegistryFacetSelectors() public view {

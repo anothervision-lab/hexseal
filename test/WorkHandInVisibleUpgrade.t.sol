@@ -44,6 +44,7 @@ import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
     UpgradeRegistryHandInSignal internal upgrade;
@@ -312,7 +313,12 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
     function test_TheLivenessProbeTellsAMountedDoorFromAnAbsentOne() public {
         // Before: the selector is not routed, and the probe must refuse to call
         // that a success.
-        vm.expectRevert();
+        // ⚠️ THE LITERAL (15 October 2026), and here it is load-bearing in a way
+        // a bare `vm.expectRevert()` could not be: what this scene claims is that
+        // the probe tells a MOUNTED door from an ABSENT one, and bare it accepted
+        // the absent door's own `Diamond: function not found` as proof that the
+        // PROBE had spoken. Taken off a run with a wrong expectation armed.
+        vm.expectRevert(bytes("post-flight: notifyWorkHandedIn did not refuse with AgreementNotRegistered - the selector may be unrouted, or behind other code"));
         upgrade.assertTheNewDoorIsAliveAndRefusesAStranger(address(diamond));
 
         RegistryFacet fresh = new RegistryFacet();
@@ -461,6 +467,10 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
         // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
         // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
         _mountRemovedVerdictHandDoors(address(d), census);
+        // And the appeal vote door under its old name, which left the facet on
+        // 14 October 2026 with decision 177 and leaves the chain in the cut that
+        // carries it. Same reason, same shape: ArbiterSplitRig.
+        _mountRemovedAppealVoteDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(
@@ -553,7 +563,8 @@ contract WorkHandInVisibleUpgradeTest is Test, ArbiterSplitRig {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

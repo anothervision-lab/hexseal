@@ -15,6 +15,7 @@ import "../src/facets/TreasuryLinkFacet.sol";
 import "../src/facets/ReputationFacet.sol";
 import "../src/JobReceiptFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 /// Anti-drift gate for script/DeployFull.s.sol.
 ///
@@ -252,6 +253,9 @@ contract DeployFullSelectorsTest is Test {
     address constant RECEIPT_FACET  = address(0x100A);
     address constant REPUTATION_FACET = address(0x100B);
     address constant APPLICATIONS_FACET   = address(0x100D);
+    /// The appeal facet of 15 October 2026. A placeholder like the rest: these
+    /// builders are `pure` and only thread the address into the FacetCut.
+    address constant APPEAL_FACET   = address(0x1015);
 
     function setUp() public {
         deploy = new DeployFull();
@@ -381,7 +385,7 @@ contract DeployFullSelectorsTest is Test {
     /// count against ground truth; this test only cares about cross-facet
     /// uniqueness.
     function testNoSelectorCollisionsAcrossFacets() public view {
-        bytes4[][12] memory groups = [
+        bytes4[][15] memory groups = [
             deploy.cutFacetSelectors(),
             deploy.loupeFacetSelectors(),
             deploy.ownershipFacetSelectors(),
@@ -393,7 +397,18 @@ contract DeployFullSelectorsTest is Test {
             deploy.arbiterAccountabilityFacetSelectors(),
             deploy.treasuryLinkFacetSelectors(),
             deploy.jobReceiptFacetSelectors(),
-            deploy.reputationFacetSelectors()
+            deploy.reputationFacetSelectors(),
+            // ⚠️ THE LAST THREE WERE MISSING UNTIL 15 OCTOBER 2026, and the gap
+            // was not an opinion about them: `arbiterVaultFacetSelectors` has
+            // been a group of DeployFull since 16 September and
+            // `arbiterApplicationsFacetSelectors` since 18 September, and
+            // neither was ever held against the others here — so a selector
+            // claimed by both the vault and the registry would have passed this
+            // very test. Closed in the same commit as the appeal split rather
+            // than written down as a known hole.
+            deploy.arbiterVaultFacetSelectors(),
+            deploy.arbiterApplicationsFacetSelectors(),
+            deploy.arbiterAppealFacetSelectors()
         ];
 
         uint256 total;
@@ -450,9 +465,9 @@ contract DeployFullSelectorsTest is Test {
     function testBuildRemainingCutsMatchesIndividualSelectors() public view {
         IDiamondCut.FacetCut[] memory cuts = deploy.buildRemainingCuts(
             JOB_BOARD, SERVICE_BOARD, ARBITER_FACET, ARBITER_VAULT_FACET, ACCOUNTABILITY_FACET, APPLICATIONS_FACET,
-            TREASURY_LINK, RECEIPT_FACET, REPUTATION_FACET
+            TREASURY_LINK, RECEIPT_FACET, REPUTATION_FACET, APPEAL_FACET
         );
-        assertEq(cuts.length, 9, "buildRemainingCuts: expected 9 FacetCut entries");
+        assertEq(cuts.length, 10, "buildRemainingCuts: expected 10 FacetCut entries");
 
         assertEq(cuts[0].facetAddress, JOB_BOARD);
         _assertSameSelectorSet(cuts[0].functionSelectors, deploy.jobBoardFacetSelectors(), "cuts2[0] JobBoardFacet");
@@ -484,6 +499,11 @@ contract DeployFullSelectorsTest is Test {
         assertEq(cuts[8].facetAddress, ARBITER_VAULT_FACET);
         _assertSameSelectorSet(cuts[8].functionSelectors, deploy.arbiterVaultFacetSelectors(), "cuts2[8] ArbiterVaultFacet");
 
+        // The tenth group since 15 October 2026: the six doors of one appeal,
+        // carved out of ArbiterRegistryFacet for room under EIP-170.
+        assertEq(cuts[9].facetAddress, APPEAL_FACET);
+        _assertSameSelectorSet(cuts[9].functionSelectors, deploy.arbiterAppealFacetSelectors(), "cuts2[9] ArbiterAppealFacet");
+
         for (uint256 i = 0; i < cuts.length; i++) {
             assertTrue(cuts[i].action == IDiamondCut.FacetCutAction.Add, "cuts2: all entries must be Add");
         }
@@ -499,7 +519,7 @@ contract DeployFullSelectorsTest is Test {
     // ServiceBoard selectors) and none of them exercises DeployFull's actual
     // buildInitCuts/buildRemainingCuts output end to end.
     //
-    // This deploys all thirteen real facets, builds the diamond exactly the way
+    // This deploys all fifteen real facets, builds the diamond exactly the way
     // run() does, and asserts the diamond that comes out the other end has
     // exactly 13 facets, exactly 239 routed selectors, and that
     // facetAddress(sel) and facets() agree with each other in both directions.
@@ -521,6 +541,7 @@ contract DeployFullSelectorsTest is Test {
         TreasuryLinkFacet      treasuryLink = new TreasuryLinkFacet();
         JobReceiptFacet        receiptFacet = new JobReceiptFacet();
         ReputationFacet        repFacet     = new ReputationFacet();
+        ArbiterAppealFacet     appealFacet  = new ArbiterAppealFacet();
 
         IDiamondCut.FacetCut[] memory initCuts = deploy.buildInitCuts(
             address(cutFacet), address(loupeFacet), address(ownFacet), address(regFacet), address(facFacet)
@@ -529,14 +550,18 @@ contract DeployFullSelectorsTest is Test {
 
         IDiamondCut.FacetCut[] memory cuts2 = deploy.buildRemainingCuts(
             address(jobBoard), address(serviceBoard), address(arbiterFacet), address(vaultFacet), address(accFacet),
-            address(appFacet), address(treasuryLink), address(receiptFacet), address(repFacet)
+            address(appFacet), address(treasuryLink), address(receiptFacet), address(repFacet),
+            address(appealFacet)
         );
         IDiamondCut(address(diamond)).diamondCut(cuts2, address(0), "");
 
         IDiamondLoupe.Facet[] memory facetsList = IDiamondLoupe(address(diamond)).facets();
-        // Fourteen since the 16 September 2026 split: the same selector set as
-        // before, one more address answering part of it.
-        assertEq(facetsList.length, 14, "diamond should end up with exactly 14 distinct facet addresses");
+        // Fifteen since the 15 October 2026 appeal split, fourteen since the
+        // 16 September one: in both cases the same selector set as before, one
+        // more address answering part of it. The TREE is at fifteen while the
+        // chain is still at fourteen, which is what
+        // DeployFullMatchesChain._pendingFacetSplits() is for.
+        assertEq(facetsList.length, 15, "diamond should end up with exactly 15 distinct facet addresses");
 
         uint256 totalRouted;
         for (uint256 i = 0; i < facetsList.length; i++) {
@@ -762,12 +787,97 @@ contract DeployFullSelectorsTest is Test {
         // the suite count unmoved; those stands — nine, measured, not the seven the
         // note first guessed — now mount the three themselves, from their own census,
         // through `ArbiterSplitRig._mountRemovedVerdictHandDoors`.
-        assertEq(totalRouted, 264, "diamond should route exactly 264 selectors total");
+        // 264 -> 269 ON 12 OCTOBER 2026, AND ONLY THE TREE SIDE MOVED. The deal
+        // cap gave FactoryFacet five doors — liftDealCap, getDealCap,
+        // getAgreementPotCeiling, getSettledVolume, isDealCapLifted — and
+        // script/DeployFull.s.sol mounts all five, because a FRESH diamond that
+        // mounted only four of them would take no top-up from anybody: the
+        // Agreement clone staticcalls getAgreementPotCeiling on every
+        // proposeExtra and a non-answer locks the door by design. The live
+        // chain still routes 264; the five are named one by one as pending in
+        // DeployFullMatchesChain.t.sol `_pendingCut()`, and the cut that lands
+        // them is not written yet.
+        // 269 -> 270 ON 12 OCTOBER 2026: `getStreakClock(address)` on
+        // ArbiterRegistryFacet, the second half of the arbiter entry test made
+        // readable before the button is pressed. DeployFull mounts it for the
+        // same reason it mounts the deal cap's five: a fresh diamond that left
+        // it out would refuse candidates with no way for them to see why. The
+        // live chain still routes 264; this one is named as pending in
+        // DeployFullMatchesChain.t.sol `_pendingCut()` beside the other five.
+        // 270 -> 272 ON 14 OCTOBER 2026 (decision 178, the lot): the chain
+        // summons the appeal panel now, so `DeployFull` mounts
+        // `summonAppealPanel(address)` and `getAppealSummons(address)`. A fresh
+        // diamond without them would take appeals it could never give a panel
+        // — the vote door admits only the summoned. The live chain still routes
+        // 264; both are named as pending in DeployFullMatchesChain.t.sol
+        // `_pendingCut()` beside the renamed vote door, and the cut that lands
+        // them needs a Replace, a Remove and an Add group together.
+        // ⚠️ 272 -> 273 ON 17 OCTOBER 2026, AND ONLY THE TREE SIDE MOVED.
+        // `replyNoOverturn(address)` on ArbiterAppealFacet: a summoned panel
+        // had exactly ONE payable act, the vote to overturn, and the answer
+        // that asks for NO overturn is the second -- the wage is paid for it
+        // just as much, so without the door a man who agrees with the verdict
+        // can only earn by voting against it. `script/DeployFull.s.sol` mounts
+        // it, because a fresh diamond without it would pay a panel for one of
+        // the two honest answers.
+        //
+        // The live chain still routes 272 -- measured on Base Sepolia
+        // 18 October 2026 against 0x760F0736…, where
+        // `facetAddress(0x1b07a7f6)` answered the zero address and
+        // `facetAddresses()` answered fifteen in the same breath. It is named
+        // as pending in DeployFullMatchesChain.t.sol `_pendingCut()`, and the
+        // cut that lands it needs ONE group: `Add`. Nothing is renamed or
+        // retired with it.
+        // ⚠️ 273 -> 274 ON 20 OCTOBER 2026, AND AGAIN ONLY THE TREE SIDE
+        // MOVED. `quoteCaseBond(address)` on ArbiterVaultFacet: what an arbiter
+        // puts down to TAKE a case, quoted BEFORE he takes it. The judge's bond
+        // and the appeal's PRICE parted company that day -- the bond is held
+        // down to the pot, the price keeps its 20 USDC floor -- and the only
+        // door a screen could ask before the button was the price, which says
+        // $20 over a $5 deal. `script/DeployFull.s.sol` mounts it, because a
+        // fresh diamond without it would leave that screen with nothing honest
+        // to read.
+        //
+        // The live chain still routes 273 -- measured on Base Sepolia
+        // 20 October 2026 against 0x760F0736… over the public RPC, where
+        // `facetAddress(0xda358d0b)` answered the zero address and
+        // `facetAddresses()` answered fifteen in the same breath. It is named
+        // as pending in DeployFullMatchesChain.t.sol `_pendingCut()`, and the
+        // cut that lands it needs ONE group: `Add`.
+        // ⚠️ 274 -> 277 ON 20 OCTOBER 2026, AND AGAIN ONLY THE TREE SIDE
+        // MOVED. Three doors on ArbiterVaultFacet carry the dispute fee taken
+        // AT THE DOOR of a dispute (the owner's flat prices of that day):
+        //
+        //   holdDisputeFee(address,uint256)   the clone's call at `raiseDispute`
+        //                                     -- it takes the fee from the man
+        //                                     who opens the dispute, through
+        //                                     the diamond, because the diamond
+        //                                     is the address every party has
+        //                                     already approved;
+        //   settleDisputeFee(bool)            the other end: to the judge who
+        //                                     wrote the verdict, or home to the
+        //                                     man who paid for one that never
+        //                                     came;
+        //   getHeldDisputeFee(address)        the read a screen needs to say
+        //                                     whose money is sitting there, and
+        //                                     a ledger term in the money rigs.
+        //
+        // `script/DeployFull.s.sol` mounts all three, because a fresh diamond
+        // without the first would make `raiseDispute` revert on every deal cut
+        // from the new implementation -- the call is HARD, since a tolerated
+        // charge is not a charge.
+        //
+        // ⚠️ THE LIVE CHAIN ROUTES 274 AND THIS FIGURE IS NOT A MEASUREMENT OF
+        // IT. The three are named as pending in DeployFullMatchesChain.t.sol
+        // `_pendingCut()`, and the cut that lands them needs ONE group: `Add`.
+        // The chain's own count was last measured on 20 October 2026 against
+        // 0x760F0736…; nothing here re-reads it.
+        assertEq(totalRouted, 277, "diamond should route exactly 277 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.
         address[] memory addrs = IDiamondLoupe(address(diamond)).facetAddresses();
-        assertEq(addrs.length, 14, "facetAddresses() should also report exactly 14 facets");
+        assertEq(addrs.length, 15, "facetAddresses() should also report exactly 15 facets");
         for (uint256 i = 0; i < addrs.length; i++) {
             bool found = false;
             for (uint256 j = 0; j < facetsList.length; j++) {

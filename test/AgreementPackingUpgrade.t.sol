@@ -45,6 +45,7 @@ import "../script/DeployFull.s.sol";
 import {MockUSDCB} from "./BoardsFixture.sol";
 import {UpgradeAgreementPacking} from "../script/UpgradeAgreementPacking.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 /// An implementation that never locked itself — the shape a careless rewrite of
 /// `Agreement`'s constructor would leave behind, and one any stranger could name
@@ -375,7 +376,8 @@ contract AgreementPackingUpgradeTest is Test {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

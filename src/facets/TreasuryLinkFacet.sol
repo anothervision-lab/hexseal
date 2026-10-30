@@ -518,8 +518,8 @@ contract TreasuryLinkFacet {
     /// division. So the route this door opens is "fines and leftovers -> the
     /// foundation", and it is written here in as many words because it is the
     /// sort of thing that gets built as a detail and discovered as a policy. The
-    /// owner decided it on 24 September 2026, the working journal carries the
-    /// entry, and no public page says it until he says so.
+    /// owner decided it on 24 September 2026, and no public page says it until
+    /// he says so.
     ///
     /// ── WHY THE FOUNDATION AND NOT A NEW ADDRESS ──────────────────────────
     /// It is the one place money already leaves this protocol lawfully: the

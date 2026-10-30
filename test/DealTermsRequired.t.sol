@@ -139,9 +139,16 @@ contract DealTermsRequiredBoardsTest is BoardsFixture {
     /// accepts an applicant: by then someone has read the job, applied, and
     /// been chosen. The chain is the floor, not the moment.
     ///
-    /// Like the service board, JobBoardFacet reaches the factory through a raw
-    /// `call` and re-reverts with its own string, so the typed EmptyTerms does
-    /// not survive the hop.
+    /// ⚠️ UPDATED 12 OCTOBER 2026. This doc comment used to end: "Like the
+    /// service board, JobBoardFacet reaches the factory through a raw `call`
+    /// and re-reverts with its own string, so the typed EmptyTerms does not
+    /// survive the hop", and the body asserted that string. It survives now --
+    /// both boards re-throw the factory's own revert bytes verbatim, so a
+    /// custom error keeps its selector and its arguments all the way out. The
+    /// change was made for the deal cap's sake (its refusal carries two numbers
+    /// a person needs), and this scene is one of the places that shows what it
+    /// bought everybody else: the person who posted the job now learns that the
+    /// TERMS are empty instead of that a "deploy" "failed".
     function testJobWithEmptyTermsPostsFineAndDiesAtAcceptApplicant() public {
         vm.startPrank(client);
         usdc.approve(address(diamond), type(uint256).max);
@@ -158,7 +165,7 @@ contract DealTermsRequiredBoardsTest is BoardsFixture {
 
         // And only now, with an applicant already chosen, does it fail.
         vm.prank(client);
-        vm.expectRevert(bytes("JobBoard: deploy failed"));
+        vm.expectRevert(Agreement.EmptyTerms.selector);
         JobBoardFacet(address(diamond)).acceptApplicant(jobId, executor);
     }
 
@@ -167,10 +174,12 @@ contract DealTermsRequiredBoardsTest is BoardsFixture {
     /// reverts. This is the case the interface has to catch, because the
     /// person who can fix it is not the person who sees the error.
     ///
-    /// ServiceBoardFacet.acceptRequest reaches the factory through a raw
-    /// `call` and re-reverts with its own string, so the typed EmptyTerms
-    /// does not survive the hop — asserted as the revert that is actually
-    /// observable, not as the one it would be preferable to see.
+    /// ⚠️ UPDATED 12 OCTOBER 2026, same as its twin above. This used to say
+    /// that `ServiceBoardFacet.acceptRequest` reaches the factory through a raw
+    /// `call` and re-reverts with its own string, "so the typed EmptyTerms does
+    /// not survive the hop -- asserted as the revert that is actually
+    /// observable, not as the one it would be preferable to see". The one it
+    /// was preferable to see is now the one that arrives.
     function testServiceRequestWithEmptyTermsDiesOnTheExecutorsAccept() public {
         vm.startPrank(executor);
         usdc.approve(address(diamond), type(uint256).max);
@@ -190,7 +199,7 @@ contract DealTermsRequiredBoardsTest is BoardsFixture {
         assertGt(usdc.balanceOf(address(diamond)), AMOUNT, "request was not funded");
 
         vm.prank(executor);
-        vm.expectRevert(bytes("ServiceBoard: deploy failed"));
+        vm.expectRevert(Agreement.EmptyTerms.selector);
         ServiceBoardFacet(address(diamond)).acceptRequest(requestId);
     }
 

@@ -133,6 +133,89 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         assertGt(ReputationFacet(address(diamond)).getXP(executor), 0, "the award really happened");
     }
 
+    /// ⚠️ THE SCENE ABOVE IS NOT THE WORST CASE ANY MORE, AND THAT WAS MEASURED
+    /// RATHER THAN REASONED (12 October 2026). A brand-new pair means the client
+    /// held no standing before the deal, so the streak branch takes the
+    /// `CounterpartyTooNew` road and the two fields appended that day are never
+    /// written at all. Measured: 382 003 there against 500 000.
+    ///
+    /// The real ceiling is a deal that ADVANCES the streak, because that one
+    /// pays for two COLD writes the stalling road does not —
+    /// `streakClientCounted[executor][client]` going false->true and
+    /// `streakClockStartedAt[executor]` going zero->timestamp, about 22 100 gas
+    /// each. Without this scene the budget would be guarded on the cheaper of
+    /// the two roads, which is the shape of the defect the owner's rule of
+    /// 4 August 2026 is about: a limit checked against values the test chose,
+    /// while the expensive path ships unmeasured.
+    ///
+    /// The client is given standing by seeding ReputationStorage directly, for
+    /// the same reason the rest of this file mounts and unmounts selectors:
+    /// building real history would cost two more deals and change what is cold.
+    ///
+    /// ⚠️ WHAT IS SEEDED CHANGED ON 16 OCTOBER 2026, and the field it is seeded
+    /// into is field 15 rather than field 0. The counterparty bar was `xp >= 50`
+    /// and is now `countedWins >= 2`, so seeding XP would leave the gate reading
+    /// a zero and this scene would silently be measuring the CHEAP road again —
+    /// which is the exact defect the scene was written against. The streak
+    /// assertion at the bottom is what catches that, and it is the only thing
+    /// that can, because `countedWins` has no getter to read the seed back
+    /// through.
+    function testXpAwardCostSitsUnderItsCapWhenTheStreakActuallyMoves() public {
+        bytes4 sel = ReputationFacet.autoAwardXP.selector;
+        address rep = _facetOf(sel);
+        _mountOne(address(0), sel, IDiamondCut.FacetCutAction.Remove);
+
+        Agreement a = _markedDone();
+        vm.warp(block.timestamp + AUTO_APPROVE_WINDOW + 1);
+        vm.prank(stranger);
+        a.triggerAutoApprove();
+
+        // The client carries standing of its own BEFORE the deal, which is the
+        // whole condition the advancing road turns on (MIN_COUNTERPARTY_WINS, 2).
+        // Field 15 of ReputationStorage, `countedWins`.
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(
+                client,
+                uint256(0xa32193c5e38bd2de27c8550f156d709eafdc63aaa4290e5e27473f2ffc097400) + 15
+            )),
+            bytes32(uint256(2))
+        );
+        // No getter to read it back through, so the proof the seed landed is the
+        // streak assertion below -- a wrong slot leaves the gate at zero, the
+        // deal takes the stalling road, and the streak stays at zero.
+        assertEq(ReputationFacet(address(diamond)).getXP(client), 0, "rig: this scene must seed the ledger, not the points");
+
+        _mountOne(rep, sel, IDiamondCut.FacetCutAction.Add);
+        uint256 used = _measureAsAgreement(a, abi.encodeWithSignature("autoAwardXP(address)", address(a)));
+
+        _assertUnderCap("autoAwardXP, first deal that ADVANCES the streak, all cold", used, CAP_XP_AWARD);
+        // ⚠️ AND IT GREW ON 16 OCTOBER 2026 by two more cold writes: the
+        // counted-deal ledger is incremented for BOTH sides of a win inside
+        // `_evalPairCap`. The client's entry was seeded, so it is a cold
+        // non-zero -> non-zero; the executor's is a cold zero -> one. This is
+        // still the worst of the roads, and it is still the road this scene
+        // measures.
+        // And it really took the expensive road: a stalled deal would leave the
+        // streak at zero and this scene would be measuring the cheap one again.
+        //
+        // Read off the SLOT rather than through `getCleanStreak`, because this
+        // rig mounts only the handful of reputation selectors it needs and that
+        // one is not among them -- measured, `Diamond: function not found`.
+        // Field 9 of ReputationStorage.
+        assertEq(
+            uint256(vm.load(
+                address(diamond),
+                keccak256(abi.encode(
+                    executor,
+                    uint256(0xa32193c5e38bd2de27c8550f156d709eafdc63aaa4290e5e27473f2ffc097400) + 9
+                ))
+            )),
+            1,
+            "the streak did not advance - this is still measuring the cheaper road"
+        );
+    }
+
     function testDisputeFeeCreditCostSitsUnderItsCap() public {
         Agreement a = _activated();
         vm.prank(client);
@@ -210,6 +293,26 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
     uint256 constant SHIPPED_RELEASE_GAS            = 660_000; // relay.ts release, pre-2026-08-23
     uint256 constant SHIPPED_AUTO_APPROVE_GAS       = 660_000; // relay.ts triggerAutoApprove, pre-2026-08-23
     uint256 constant SHIPPED_RAISE_DISPUTE_GAS      = 160_000; // relay.ts raiseDispute, unchanged
+    /// What the door actually consumes, as a hand-written ceiling.
+    ///
+    /// ⚠️ MEASURED 20 OCTOBER 2026 AT 130 916 (mock USDC), AND A CLAIM THAT IT
+    /// NO LONGER FITS 160 000 WAS WRONG AND IS WITHDRAWN HERE. The dispute fee
+    /// taken at the door adds a diamond call, a cold `transferFrom` and two
+    /// cold stores, and the first reading of this file's red said the door had
+    /// outgrown the shipped ceiling. It had not: the red was
+    /// `holdDisputeFee` NOT MOUNTED on the rig, so the call reverted and
+    /// "must fit its shipped ceiling" failed for a reason that had nothing to
+    /// do with gas. Mounting it left 130 916 against a ceiling of 160 000.
+    ///
+    /// ⚠️ WHAT IS LEFT IS A MARGIN QUESTION AND NOT A BREAK, and it is
+    /// arithmetic on relay.ts's own convention rather than a measurement: that
+    /// file sizes a budget as measured x 1.19 (real USDC is dearer than this
+    /// mock) x 1.2 (margin), and 130 916 x 1.428 is about 186 900 -- over the
+    /// 160 000 it ships. So the door FITS as measured here and the margin the
+    /// web client gives itself is thinner than its own rule asks for. That is a
+    /// number for whoever owns relay.ts, carried as a comment and an arithmetic
+    /// assertion below, not as a red.
+    uint256 constant RAISE_DISPUTE_MEASURED_CEILING = 140_000;
     uint256 constant SHIPPED_ACTIVATION_TIMEOUT_GAS = 210_000; // relay.ts triggerActivationTimeout, unchanged
     uint256 constant SHIPPED_DEADLINE_TIMEOUT_GAS   = 220_000; // relay.ts triggerDeadlineTimeout, unchanged
     uint256 constant SHIPPED_ARBITER_TIMEOUT_GAS    = 500_000; // relay.ts triggerArbiterTimeout, unchanged
@@ -271,8 +374,7 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         assertFalse(_registrySyncFailedFired(), "no stale-registry fallback");
         assertGt(ReputationFacet(address(diamond)).getXP(client), 0, "the winner's XP landed");
         assertGt(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance()
-                + ArbiterVaultFacet(address(diamond)).getTreasurySlice(),
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
             0,
             "the dispute fee was credited, not starved out"
         );
@@ -350,19 +452,61 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         );
     }
 
-    /// The eighth diamond write, the only one outside _complete: raiseDispute
-    /// moves no money but does update the registry, and it ships the tightest
-    /// ceiling of the lot (160_000). This is the entry a floor on
-    /// _updateRegistry would have broken.
+    /// Money and an allowance for the dispute door. Exactly the charge, read
+    /// off the clone -- scaffolding, never an expectation.
+    function _armTheDoorCharge(address who, Agreement a) internal {
+        uint256 doorCharge = a.disputeFee();
+        usdc.mint(who, doorCharge);
+        vm.prank(who); usdc.approve(address(diamond), doorCharge);
+    }
+
+    /// The eighth diamond write, and since 20 October 2026 it MOVES MONEY: the
+    /// dispute fee is taken at this door. It used to be "the only one outside
+    /// `_complete` that moves no money" and it shipped the tightest ceiling of
+    /// the lot at 160 000; both halves of that are gone.
+    ///
+    /// ⚠️ THE SCENE MEASURES TWO THINGS NOW, AND THE SECOND IS THE ONE THAT
+    /// MATTERS DOWNSTREAM. The first is the old claim -- the door fits the
+    /// budget a relayer sends and the registry still ends up true. The second
+    /// is WHAT IT ACTUALLY COSTS, read off `gasleft()` and held to a
+    /// hand-written ceiling, because `frontend/src/lib/relay.ts:900` has to be
+    /// raised in the cut that ships this implementation and the figure it needs
+    /// should come from a measurement. The number this scene prints when it
+    /// reddens IS that figure.
     function testRaiseDisputeAtShippedBudgetKeepsRegistryTrue() public {
         Agreement a = _activated();
+        _armTheDoorCharge(client, a);
         vm.recordLogs();
+
+        uint256 before = gasleft();
         assertTrue(
             _callWithGas(client, a, SHIPPED_RAISE_DISPUTE_GAS, "raiseDispute()"),
             "raiseDispute must fit its shipped ceiling"
         );
+        uint256 used = before - gasleft();
+
         assertEq(_registryStatus(a), 3, "registry must say DISPUTED");
         assertFalse(_registrySyncFailedFired(), "no stale-registry fallback");
+
+        // ── WHAT IT COST, against a hand literal. ⚠️ A RED HERE IS NOT A
+        //    FAILURE TO FIX BY RAISING THE LITERAL: the number it prints is
+        //    what relay.ts must be told, and raising this line without raising
+        //    relay.ts is how a gasless door breaks in production while the
+        //    suite stays green. ──
+        assertLt(
+            used, RAISE_DISPUTE_MEASURED_CEILING,
+            "opening a dispute costs more than the ceiling this tree was measured at -- read the number and carry it to relay.ts:900"
+        );
+        // ── AND THE MARGIN ARITHMETIC, ON relay.ts's OWN CONVENTION. It sizes
+        //    a budget as measured x 1.19 x 1.2; on this measurement that is
+        //    about 186 900 against the 160 000 it ships. Written as an
+        //    assertion so the question cannot be lost, and as a comparison of
+        //    LITERALS so it cannot redden for anything happening in src/. ──
+        assertGt(
+            RAISE_DISPUTE_MEASURED_CEILING * 119 * 12 / 1000,
+            SHIPPED_RAISE_DISPUTE_GAS,
+            "arithmetic: the door's own margin rule no longer puts it over the shipped ceiling -- relay.ts has caught up and this arm can go"
+        );
     }
 
     // ============================================================
@@ -650,7 +794,10 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
                 abi.encodeWithSignature("finalizeVerdict(address)", address(a))
             );
             assertFalse(ok, "these budgets are all far below what resolving costs");
-            if (_refusedCall(ret) == IArbiterRegistryFacet.creditDisputeFee.selector) {
+            // ⚠️ `settleDisputeFee` SINCE 20 OCTOBER 2026, not `creditDisputeFee`:
+            // the clone's fee call at a verdict changed door with the flat
+            // prices, and the floor in front of it moved with it.
+            if (_refusedCall(ret) == IArbiterRegistryFacet.settleDisputeFee.selector) {
                 sawFloorRefusal = true;
             }
             vm.revertToState(snap);
@@ -668,6 +815,7 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         for (uint256 g = 300_000; g <= SHIPPED_FINALIZE_VERDICT_GAS; g += 20_000) {
             uint256 snap = vm.snapshotState();
             Agreement a = _activated();
+            _armTheDoorCharge(client, a);
             vm.prank(client);
             a.raiseDispute();
             _claimByArbiter(a);
@@ -681,9 +829,15 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
             );
 
             if (ok) {
+                // ⚠️ THE FEE LANDS ON THE JUDGE'S COUNTER AND NOWHERE ELSE SINCE
+                // 20 OCTOBER 2026, so this is the counter to read. The line used
+                // to sum `vaultBalance + treasurySlice` -- the bank and the
+                // treasury -- which is where the fee's two shares went while
+                // there were two. `ARBITER_SHARE_BPS` is 10 000 now: the whole
+                // fee is the judge's and both of those stay at nought, so the
+                // old sum would be asserting nought is above nought.
                 assertGt(
-                    ArbiterVaultFacet(address(diamond)).getVaultBalance()
-                        + ArbiterVaultFacet(address(diamond)).getTreasurySlice(),
+                    ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr),
                     0,
                     "a resolution that went through must not have skipped the dispute fee"
                 );

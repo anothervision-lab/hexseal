@@ -21,6 +21,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/JobBoardFacet.sol";
 import "../src/facets/ServiceBoardFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -199,7 +200,7 @@ contract AdversarialAccessTest is Test {
         svcSels[18] = ServiceBoardFacet.getActiveServices.selector;
         svcSels[19] = ServiceBoardFacet.getPendingRequests.selector;
 
-        bytes4[] memory arbSels = new bytes4[](16);
+        bytes4[] memory arbSels = new bytes4[](15);
         arbSels[0] = ArbiterRegistryFacet.setChiefArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[2] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -215,8 +216,14 @@ contract AdversarialAccessTest is Test {
         arbSels[12] = ArbiterRegistryFacet.finalizeVerdict.selector;
         arbSels[13] = ArbiterRegistryFacet.setDAOAddress.selector;
         arbSels[14] = ArbiterRegistryFacet.clearStuckVerdict.selector;
-        arbSels[15] = ArbiterRegistryFacet.raiseAppeal.selector;
-        bytes4[] memory arbSelsVault = new bytes4[](12);
+
+        // ⚠️ A GROUP OF ITS OWN SINCE 15 OCTOBER 2026, when the appeal became
+        // ArbiterAppealFacet. These selectors are the same four bytes they were;
+        // what changed is the address behind them, and a FacetCut element carries
+        // exactly ONE address.
+        bytes4[] memory arbSelsAppeal = new bytes4[](1);
+        arbSelsAppeal[0] = ArbiterAppealFacet.raiseAppeal.selector;
+        bytes4[] memory arbSelsVault = new bytes4[](15);
         arbSelsVault[0] = ArbiterVaultFacet.getChiefArbiter.selector;
         arbSelsVault[1] = ArbiterVaultFacet.isRegisteredArbiter.selector;
         arbSelsVault[2] = ArbiterVaultFacet.getArbiters.selector;
@@ -229,6 +236,13 @@ contract AdversarialAccessTest is Test {
         arbSelsVault[9] = ArbiterVaultFacet.getVaultBalance.selector;
         arbSelsVault[10] = ArbiterVaultFacet.getRewardPerDispute.selector;
         arbSelsVault[11] = ArbiterVaultFacet.getDAOAddress.selector;
+        // ⚠️ THE DISPUTE FEE TAKEN AT THE DOOR (20 October 2026).
+        // `Agreement.raiseDispute` calls `holdDisputeFee` HARD -- no fee, no
+        // dispute -- so a rig that opens a dispute must route it or every such
+        // scene answers "Diamond: function not found".
+        arbSelsVault[12] = ArbiterVaultFacet.holdDisputeFee.selector;
+        arbSelsVault[13] = ArbiterVaultFacet.settleDisputeFee.selector;
+        arbSelsVault[14] = ArbiterVaultFacet.getHeldDisputeFee.selector;
 
         // These readers live in ArbiterAccountabilityFacet, so that is the
         // facet they have to be mounted on. Leaving them in the list above
@@ -254,13 +268,14 @@ contract AdversarialAccessTest is Test {
         ownSels[2] = OwnershipFacet.acceptOwnership.selector;
         ownSels[3] = OwnershipFacet.pendingOwner.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](10);
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](11);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet),        IDiamondCut.FacetCutAction.Add, regSels);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet),         IDiamondCut.FacetCutAction.Add, facSels);
         cut[2] = IDiamondCut.FacetCut(address(diamondCutFacet),      IDiamondCut.FacetCutAction.Add, cutSels);
         cut[3] = IDiamondCut.FacetCut(address(diamondLoupeFacet),    IDiamondCut.FacetCutAction.Add, loupeSels);
         cut[4] = IDiamondCut.FacetCut(address(ownershipFacet),       IDiamondCut.FacetCutAction.Add, ownSels);
         cut[5] = IDiamondCut.FacetCut(address(arbiterRegistryFacet), IDiamondCut.FacetCutAction.Add, arbSels);
+        cut[10] = IDiamondCut.FacetCut(address(new ArbiterAppealFacet()), IDiamondCut.FacetCutAction.Add, arbSelsAppeal);
         cut[8] = IDiamondCut.FacetCut(
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
@@ -335,11 +350,30 @@ contract AdversarialAccessTest is Test {
         Agreement(agr).activate();
     }
 
+
+    /// ⚠️ OPEN A DISPUTE AND PAY FOR IT, AND **DO NOT MINT** (20 October 2026).
+    /// `raiseDispute` pulls `disputeFee()` from the opener through the diamond.
+    /// The first draft of this helper minted exactly the charge, which is fatal
+    /// in a file whose whole subject is that the system's total never moves:
+    /// a mint CREATES money, and the invariant went red by exactly ten dollars
+    /// with nothing wrong in `src/`.
+    ///
+    /// So the opener pays out of the purse the fixture already gave him. His
+    /// having it is asserted rather than assumed: a short purse would otherwise
+    /// make the door refuse and the scene fail somewhere else.
+    function _openTheDisputeAs(address who, address agr) internal {
+        uint256 doorCharge = Agreement(agr).disputeFee();
+        assertGe(
+            usdc.balanceOf(who), doorCharge,
+            "rig: the opener cannot pay the door charge out of what the fixture gave him"
+        );
+        vm.prank(who); usdc.approve(address(diamond), doorCharge);
+        vm.prank(who); Agreement(agr).raiseDispute();
+    }
     // Returns a disputed agreement with NO arbiter claimed yet.
     function _deployDisputed() internal returns (address agr) {
         agr = _deployActive();
-        vm.prank(client);
-        Agreement(agr).raiseDispute();
+        _openTheDisputeAs(client, agr);
     }
 
     // Returns a disputed agreement WITH arbiter claimed.
@@ -581,7 +615,7 @@ contract AdversarialAccessTest is Test {
 
     function testRaiseAppealRejectsZeroAgreement() public {
         vm.expectRevert(ArbiterRegistryFacet.ArbiterZeroAddress.selector);
-        ArbiterRegistryFacet(address(diamond)).raiseAppeal(address(0));
+        ArbiterAppealFacet(address(diamond)).raiseAppeal(address(0));
     }
 
     function testClearStuckVerdictRejectsZeroAgreement() public {

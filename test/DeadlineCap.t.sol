@@ -121,8 +121,16 @@ contract DeadlineLockSceneTest is Test {
         vm.expectRevert(Agreement.DeadlineNotPassed.selector);
         widest.triggerDeadlineTimeout();
 
+        // ⚠️ THE DISPUTE DOOR CHARGES ITS OPENER SINCE 20 OCTOBER 2026, and on
+        // this rig there is no diamond to take the charge -- DIAMOND is a
+        // codeless address on purpose, because this scene is about the
+        // deadline arithmetic and nothing else. The charge is HARD, so the
+        // door refuses; what this scene has to prove is that it refuses BY
+        // NAME rather than with an arithmetic panic, which is the whole claim
+        // of the file. `DisputeFeeUnavailable` is that name.
         vm.prank(CLIENT);
-        widest.raiseDispute();          // no panic: the deadline has not passed
+        vm.expectRevert(Agreement.DisputeFeeUnavailable.selector);
+        widest.raiseDispute();          // no panic: a named refusal, not Panic 0x11
 
         // --- and the four that never touch the sum ---
         vm.prank(CLIENT);
@@ -137,16 +145,41 @@ contract DeadlineLockSceneTest is Test {
         vm.expectRevert(Agreement.AlreadyActive.selector);
         widest.triggerActivationTimeout();
 
+        // ⚠️ `NotDisputed` AND NOT `WindowNotPassed`, 21 OCTOBER 2026, AND IT IS
+        // A CONSEQUENCE OF THE LINE TWELVE ABOVE. `raiseDispute` is refused on
+        // this rig -- deliberately, because DIAMOND is codeless and the door
+        // charge is hard -- so no dispute was ever opened, `_disputedAt` is
+        // still nought, and `triggerArbiterTimeout` meets its own second check
+        // (`if (_disputedAt == 0) revert NotDisputed()`) before it ever reaches
+        // the window comparison on the line after. The scene's claim is
+        // untouched: the door still refuses BY NAME and not with a panic, which
+        // is the only thing this file is about.
         vm.prank(CLIENT);
-        vm.expectRevert(Agreement.WindowNotPassed.selector);
+        vm.expectRevert(Agreement.NotDisputed.selector);
         widest.triggerArbiterTimeout();
 
-        // And the door that IS open: the dispute times out and the money
-        // leaves. The whole point of form A was that no such line existed.
-        vm.warp(block.timestamp + 5 days);
-        vm.prank(CLIENT);
-        widest.triggerArbiterTimeout();
+        // ⚠️ AND THE DOOR THAT IS OPEN IS NO LONGER THE DISPUTE TIMEOUT, which
+        // is the other half of the same consequence. The three lines that stood
+        // here warped five days and let the dispute time out -- a road that
+        // only existed while `raiseDispute` went through on this rig. They are
+        // REPLACED rather than deleted, because "no such line existed" was the
+        // whole point of the form this file replaced: a widest-allowed deal
+        // must have at least one exit that actually moves the money, or the
+        // scene's name is false.
+        //
+        // The exit that remains is the hand-in's own: `markDone` goes through
+        // (the paragraph at the top of this block already says so), and after
+        // `AUTO_APPROVE_WINDOW` -- two days, nothing to do with the 179-year
+        // deadline -- anybody at all can close it. Nothing in that road touches
+        // `activatedAt + deadlineDays * 1 days`, which is exactly why it still
+        // works on a deal whose deadline is 65 535 days out.
+        vm.prank(EXECUTOR);
+        widest.markDone();
+        vm.warp(block.timestamp + 2 days + 1);
+        vm.prank(OUTSIDER);
+        widest.triggerAutoApprove();
         assertEq(usdc.balanceOf(address(widest)), 0, "money never left the escrow");
+        assertEq(uint256(widest.status()), uint256(Agreement.Status.COMPLETED), "the widest allowed deal has no exit that completes it");
     }
 
     /// Control: an ordinary deadline still runs its ordinary course. Without

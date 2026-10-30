@@ -6,8 +6,10 @@ pragma solidity ^0.8.20;
 //
 // The treasury that replaces the one deployed at
 // 0x2e7a7A0515bfDC0006A812EBb3E55d32800Bc660 (src/Treasury.sol, still in the
-// tree so its bytecode stays verifiable against its own source — that is how
-// OPEN-ITEMS item 151 was settled, and the old file must not be edited for it).
+// tree so its bytecode stays verifiable against its own source — and that is
+// why the old file must not be edited: the copy deployed at that address can
+// only be checked against the text it was compiled from, so a changed source
+// makes a live contract unverifiable and nothing can put that back).
 //
 // WHY A NEW CONTRACT AT ALL, when the old one is not broken. Because the old
 // one froze GUESSES. Its DAO threshold, its 500 USDC vault target and its
@@ -159,7 +161,8 @@ pragma solidity ^0.8.20;
 // WRITES TO THE DIAMOND
 //
 // In the old treasury distribute() funded the vault inside itself, with a raw
-// call(gas(), ...). That single line is OPEN-ITEMS item 115, and it was
+// call(gas(), ...). That single line hands the facet 63/64 of whatever gas is
+// left and bounds nothing, and it was
 // measured on 4 September 2026 against a facet that expands memory instead of
 // answering: honest distribute() costs 128 033 gas, and against the burner it
 // DIES at a 200 000-300 000 budget and eats 4 929 085 of a five-million one.
@@ -174,8 +177,8 @@ pragma solidity ^0.8.20;
 // this is a shape change and not a tidy-up:
 //
 //   * A gas-burning facet cannot touch the distribution any more. Not "cannot
-//     easily" — it is not on the path. This is what item 115 asked for, and no
-//     frozen gas number had to be guessed to get it.
+//     easily" — it is not on the path. That is what the unbounded hand-off
+//     needed, and no frozen gas number had to be guessed to get it.
 //
 //   * The push may now be STRICT. The old distribute() had to tolerate a
 //     silent vault failure, because reverting there would wall up the whole

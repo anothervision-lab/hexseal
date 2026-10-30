@@ -158,6 +158,25 @@ contract MockUSDCClone {
 /// tell a refusal for EMPTY TERMS apart from a refusal for a mute diamond.
 contract MockFeeDiamondClone {
     function getFeeBps() external pure returns (uint256) { return 500; }
+
+    /// ⚠️ ADDED 12 OCTOBER 2026 BECAUSE A TOP-UP NOW ASKS TWO QUESTIONS, not
+    /// one. `proposeExtra` reads the ceiling its own pot is held to by
+    /// staticcalling this selector on the diamond, and a non-answer LOCKS the
+    /// door by design (`PotCeilingUnavailable`). A mock diamond that answers
+    /// about the fee and says nothing about the ceiling is a diamond on which
+    /// no top-up works at all -- which is exactly how the relayed top-up scene
+    /// in this file failed when the cap landed.
+    ///
+    /// `type(uint256).max` rather than a number: this fixture's subject is the
+    /// ERC-2771 sender suffix through a REAL forwarder, and the ceiling is
+    /// scenery. A finite number here would make the gasless scenes fail on a
+    /// size rule the moment somebody raised AMOUNT, and they would fail in the
+    /// voice of the cap rather than in the voice of the thing under
+    /// measurement. What the ceiling does on a real diamond is measured in
+    /// test/DealCap.t.sol.
+    function getAgreementPotCeiling(address) external pure returns (uint256) {
+        return type(uint256).max;
+    }
 }
 
 /// The gasless path end to end: a real MinimalForwarder → an Agreement clone.
@@ -198,7 +217,7 @@ contract AgreementCloneGaslessTest is Test {
     Agreement agr;
 
     bytes32 constant TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     function setUp() public {
@@ -230,7 +249,7 @@ contract AgreementCloneGaslessTest is Test {
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
@@ -260,6 +279,7 @@ contract AgreementCloneGaslessTest is Test {
             value: 0,
             gas:   1_000_000,
             nonce: forwarder.getNonce(from),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
         return forwarder.execute(req, _sign(pk, req));

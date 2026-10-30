@@ -68,6 +68,7 @@ import {MockUSDCB} from "./BoardsFixture.sol";
 import {UpgradeAppealDepositSoftRefund} from "../script/UpgradeAppealDepositSoftRefund.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
+import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 
 /// A facet standing in for "some other code entirely behind the same selector".
 /// Used to prove the codehash probe is reading the CODE and not merely noticing
@@ -179,12 +180,21 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// checkable by a reader. Verified offline with `cast sig`:
     /// 0x42a71c6c / 0x5533316c / 0x69315118.
     ///
-    /// Named rather than counted: a FOURTH door leaving still reds here.
+    /// Named rather than counted: a FIFTH door leaving still reds here.
+    ///
+    /// ⚠️ AND THE FOURTH LEFT ON 14 OCTOBER 2026 (decision 177):
+    /// `voteOnAppeal(address,bool)` 0xc9bb9cdd. The appeal vote lost its second
+    /// direction and the door was renamed `voteToOverturn(address)`, which is a
+    /// different selector — so the old bytes left the facet while the chain goes
+    /// on routing them until the cut that carries this work. The new bytes are
+    /// the matching entry in `_grownAfterThisCut`, and the two together are why
+    /// that cut needs a `Remove` group and an `Add` group.
     function _shrunkAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](3);
+        sels = new bytes4[](4);
         sels[0] = bytes4(keccak256("overturnVerdict(address,bool)"));
         sels[1] = bytes4(keccak256("freezeVerdict(address)"));
         sels[2] = bytes4(keccak256("unfreezeVerdict(address)"));
+        sels[3] = bytes4(keccak256("voteOnAppeal(address,bool)"));
     }
 
     /// ⚠️ WHAT THE PAIR GREW **AFTER** THIS CUT WAS SIGNED — by SIGNATURE TEXT,
@@ -198,7 +208,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// Held to "real, and not in this cut's Replace group" by
     /// test_TheGrowthBeyondThisCutIsRealAndBelongsToAnotherFacet.
     function _grownAfterThisCut() internal pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](11);
+        sels = new bytes4[](20);
         sels[0] = bytes4(keccak256("withdrawAppealShare(address)"));
         sels[1] = bytes4(keccak256("getAppealShareOwed(address,address)"));
         sels[2] = bytes4(keccak256("getAppealLedger(address)"));
@@ -218,6 +228,71 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         sels[8] = bytes4(keccak256("withdrawCaseBond(address)"));
         sels[9] = bytes4(keccak256("getCaseBond(address)"));
         sels[10] = bytes4(keccak256("getJudgingCount(address)"));
+        // ⚠️ getStreakClock(address) -- 12 October 2026, and it is the second
+        // half of the arbiter ENTRY TEST made readable before the button is
+        // pressed. The entrance stopped asking only "how many clean closes"
+        // and started asking "and how long did the run take"
+        // (MIN_STREAK_SPAN_TO_REGISTER, sixteen days): the constant is private
+        // and `streakClockStartedAt` is read by nothing outside the diamond, so
+        // without this door a candidate with five clean closes saw "5 of 5" and
+        // a button that refused him -- the refusal nobody could predict that
+        // the deal cap taught us to stop shipping.
+        sels[11] = bytes4(keccak256("getStreakClock(address)"));
+        // ⚠️ voteToOverturn(address) -- 14 October 2026, decision 177. The
+        // appeal vote lost its second direction, so the door stopped being
+        // `voteOnAppeal(address,bool)` and its selector changed with its
+        // signature. It is GROWTH here and the old four bytes are still what
+        // the chain routes: the cut that carries this facet has to REMOVE
+        // 0xc9bb9cdd and ADD these, which is two groups where this cut had
+        // one.
+        sels[12] = bytes4(keccak256("voteToOverturn(address)"));
+        // ⚠️ AND THE LOT'S TWO, the same night (decision 177): the chain
+        // SUMMONS the appeal panel now instead of letting whoever presses
+        // first sit down. `summonAppealPanel(address)` is the door anybody may
+        // pull and `getAppealSummons(address)` publishes the five it called.
+        // Plain arrivals — nothing leaves with them — so they belong in the
+        // same `Add` group as the renamed vote above.
+        sels[13] = bytes4(keccak256("summonAppealPanel(address)"));
+        sels[14] = bytes4(keccak256("getAppealSummons(address)"));
+        // ⚠️ AND THE PANEL'S SECOND ANSWER, 17 OCTOBER 2026.
+        // `replyNoOverturn(address)` is the answer that asks for NO overturn,
+        // and the panel's wage is paid for it just as much as for a vote. It is
+        // compiled on ArbiterAppealFacet, which this file's ABI source has
+        // carried since the split of 15 October 2026, and the chain routes it
+        // NOWHERE -- measured on Base Sepolia 18 October 2026, where
+        // `facetAddress(0x1b07a7f6)` answered the zero address. A plain
+        // arrival: nothing leaves with it.
+        sels[15] = bytes4(keccak256("replyNoOverturn(address)"));
+        // ⚠️ AND THE BOND'S QUOTE, 20 OCTOBER 2026 (the owner's "yes, a new
+        // selector"). `quoteCaseBond(address)` answers what an arbiter puts
+        // down to TAKE a case, asked BEFORE he takes it. The judge's bond and
+        // the appeal's PRICE parted company that day -- the bond is held down
+        // to the pot, the price keeps its 20 USDC floor -- so a screen that
+        // promised the bond while reading `quoteAppealDeposit` said $20 over a
+        // $5 deal. `getCaseBond` above could not answer it: that reads the
+        // record the claim writes, and there is no record before the claim. It
+        // is compiled on ArbiterVaultFacet and the chain routes it NOWHERE --
+        // measured on Base Sepolia 20 October 2026, where
+        // `facetAddress(0xda358d0b)` answered the zero address while
+        // `facetAddresses()` answered fifteen. A plain arrival: nothing leaves
+        // with it.
+        sels[16] = bytes4(keccak256("quoteCaseBond(address)"));
+        // ⚠️ AND THE DISPUTE FEE TAKEN AT THE DOOR, 20 OCTOBER 2026 (the
+        // owner's flat prices). The fee came off the escrow and onto the party
+        // who OPENS the dispute, so the vault now holds it between the claim
+        // and the verdict instead of the pot carrying it:
+        // `holdDisputeFee(address,uint256)` 0x7808925d takes it in,
+        // `settleDisputeFee(bool)` 0xefccd7bc pays the judge who delivered or
+        // hands it back, and `getHeldDisputeFee(address)` 0x9dae83cc is the
+        // read a screen needs to show what is on the table before either
+        // happens. All three are compiled on ArbiterVaultFacet and the chain
+        // routes NONE of them -- measured on Base Sepolia 21 October 2026 at
+        // block 48 386 920, where `facetAddress` answered the zero address for
+        // all three while `facetAddresses()` answered fifteen. Plain arrivals:
+        // nothing leaves with them.
+        sels[17] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
+        sels[18] = bytes4(keccak256("settleDisputeFee(bool)"));
+        sels[19] = bytes4(keccak256("getHeldDisputeFee(address)"));
     }
 
     /// The compiled pair minus the named growth. Every name must actually be in
@@ -308,6 +383,27 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// two conditions below are asked of THAT. Land a cut, queue another, drop
     /// one: nothing here needs touching, and nothing here can be bought by
     /// touching it.
+    /// 🔴 THE DESIGNATED MUTATION FOR THE WIDENED ABI SOURCE (15 October 2026).
+    ///
+    /// Widening "what the group this cut mounted implements" from two artifacts
+    /// to three buys one specific risk: that the source stops discriminating
+    /// and every allowance in this file becomes a blanket pass. This holds both
+    /// ends of that. A selector NO facet implements must still be absent, and
+    /// one of the appeal's six must be PRESENT -- without the second half the
+    /// scene would be green on a source that was never widened at all, and
+    /// without the first it would be green on a source that accepts anything.
+    function test_APhantomInTheWidenedAbiSourceIsStillRefused() public view {
+        bytes4[] memory abiNow = upgrade.artifactSelectors();
+        bool phantom;
+        bool moved;
+        for (uint256 i = 0; i < abiNow.length; i++) {
+            if (abiNow[i] == bytes4(0xdeadbeef)) phantom = true;
+            if (abiNow[i] == bytes4(0xbff14b7f)) moved = true; // voteToOverturn(address)
+        }
+        assertFalse(phantom, "a selector nothing implements is in the widened ABI source - it has stopped discriminating");
+        assertTrue(moved, "voteToOverturn is not in the widened ABI source - the appeal artifact was never added");
+    }
+
     function test_TheGrowthBeyondThisCutIsRealAndBelongsToAnotherFacet() public view {
         bytes4[] memory grown = rigSurplusOverCensus;
         assertGt(grown.length, 0, "the rig carries no surplus over the census at all - this lock has nothing to be about");
@@ -481,7 +577,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // The probe below reads the CODE behind `resolveAppeal`, so the scene
         // first puts a real, freshly compiled facet there — which is the state
         // the probe is being asked about, and the state the chain is in.
-        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ArbiterRegistryFacet()));
+        _replaceOne(ArbiterAppealFacet.resolveAppeal.selector, address(new ArbiterRegistryFacet()));
 
         assertEq(
             upgrade.liveFacetCodehash(address(diamond)),
@@ -491,7 +587,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
 
         // Same selector, different code. The probe must notice the CODE, not
         // merely that an address changed.
-        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ImpostorArbiterFacet()));
+        _replaceOne(ArbiterAppealFacet.resolveAppeal.selector, address(new ImpostorArbiterFacet()));
         assertTrue(
             upgrade.liveFacetCodehash(address(diamond)) != upgrade.thisCheckoutCodehash(),
             "the probe did not notice that resolveAppeal now points at entirely different code"
@@ -509,7 +605,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // The probe below reads the CODE behind `resolveAppeal`, so the scene
         // first puts a real, freshly compiled facet there — which is the state
         // the probe is being asked about, and the state the chain is in.
-        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ArbiterRegistryFacet()));
+        _replaceOne(ArbiterAppealFacet.resolveAppeal.selector, address(new ArbiterRegistryFacet()));
 
         vm.expectRevert(
             abi.encodeWithSignature(
@@ -523,7 +619,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// And the post-flight half must FAIL when the mounted code is not this
     /// checkout, or it is not measuring anything.
     function test_ThePostFlightRefusesCodeThatIsNotThisCheckout() public {
-        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ImpostorArbiterFacet()));
+        _replaceOne(ArbiterAppealFacet.resolveAppeal.selector, address(new ImpostorArbiterFacet()));
         vm.expectRevert(
             abi.encodeWithSignature(
                 "Error(string)",
@@ -536,7 +632,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// The probe must refuse a diamond that does not route resolveAppeal at
     /// all, rather than reading the zero address as "some other code".
     function test_TheCodehashProbeRefusesADiamondWithoutTheSelector() public {
-        _unmount(ArbiterRegistryFacet.resolveAppeal.selector);
+        _unmount(ArbiterAppealFacet.resolveAppeal.selector);
         vm.expectRevert(
             abi.encodeWithSignature(
                 "Error(string)",
@@ -595,7 +691,7 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
 
     /// A Replace group spread over two facets breaks this cut's one assumption.
     function test_ThePreFlightRefusesAReplaceGroupSpreadOverTwoFacets() public {
-        _replaceOne(ArbiterRegistryFacet.resolveAppeal.selector, address(new ImpostorArbiterFacet()));
+        _replaceOne(ArbiterAppealFacet.resolveAppeal.selector, address(new ImpostorArbiterFacet()));
         bytes4[] memory sels = upgrade.replaceSelectors();   // hoisted, see above
         address d = address(diamond);
         vm.expectRevert(
@@ -641,10 +737,10 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// why `test_TheCutIsOneReplaceAndNothingElse` is not a formality.
     function test_ADiamondRejectsAnAddOfAMountedSelector() public {
         bytes4[] memory one = new bytes4[](1);
-        one[0] = ArbiterRegistryFacet.resolveAppeal.selector;
+        one[0] = ArbiterAppealFacet.resolveAppeal.selector;
         IDiamondCut.FacetCut[] memory add = new IDiamondCut.FacetCut[](1);
         add[0] = IDiamondCut.FacetCut(
-            address(new ArbiterRegistryFacet()), IDiamondCut.FacetCutAction.Add, one
+            address(new ArbiterAppealFacet()), IDiamondCut.FacetCutAction.Add, one
         );
         vm.expectRevert(bytes("Diamond: selector exists"));
         IDiamondCut(address(diamond)).diamondCut(add, address(0), "");
@@ -719,8 +815,25 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
             // ArbiterSplitRig.verdictHandDoors(), never counted: a fourth door
             // leaving still reds here.
             _concat(
-                _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
-                verdictHandDoors()
+                // ⚠️ AND THE FOURTH, 14 OCTOBER 2026: the appeal vote door under its
+                // old name. Decision 177 renamed `voteOnAppeal(address,bool)` to
+                // `voteToOverturn(address)`, so `DeployFull` mounts the new bytes while
+                // this cut's record still names the old ones. Same mirror, same rule:
+                // named by their bytes, never counted.
+                _concat(
+                    // ⚠️ AND THE APPEAL'S SIX, 15 OCTOBER 2026. They were part of
+                    // `arbiterRegistryFacetSelectors()` until that day and are a
+                    // group of their own since: the appeal became
+                    // ArbiterAppealFacet, bytes unchanged. Left out, DeployFull's
+                    // side would be six short of what this cut's record names and
+                    // the two sets would disagree about a move nobody made.
+                    _concat(
+                        _concat(deploy.arbiterRegistryFacetSelectors(), deploy.arbiterVaultFacetSelectors()),
+                        deploy.arbiterAppealFacetSelectors()
+                    ),
+                    verdictHandDoors()
+                ),
+                removedAppealVoteDoors()
             ),
             "this cut vs DeployFull"
         );
@@ -799,6 +912,10 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         // facet AND the chain on 9 October 2026. Same reason, same shape, one note:
         // see ArbiterSplitRig._mountRemovedVerdictHandDoors.
         _mountRemovedVerdictHandDoors(address(d), census);
+        // And the appeal vote door under its old name, which left the facet on
+        // 14 October 2026 with decision 177 and leaves the chain in the cut that
+        // carries it. Same reason, same shape: ArbiterSplitRig.
+        _mountRemovedAppealVoteDoors(address(d), census);
 
         for (uint256 i = 0; i < census.length; i++) {
             require(
@@ -890,7 +1007,8 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
                 address(new ArbiterApplicationsFacet()),
                 address(new TreasuryLinkFacet()),
                 address(new JobReceiptFacet()),
-                address(new ReputationFacet())
+                address(new ReputationFacet()),
+                address(new ArbiterAppealFacet())
             ),
             address(0),
             ""

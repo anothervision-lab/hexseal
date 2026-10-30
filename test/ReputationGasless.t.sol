@@ -53,7 +53,7 @@ contract ReputationGaslessTest is Test {
     uint256 constant DEAL_AMOUNT = 20_000_000; // 20 USDC — above MIN_WIN_AMOUNT
 
     bytes32 constant FWD_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,bytes data)"
+        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
     );
 
     function setUp() public {
@@ -105,7 +105,7 @@ contract ReputationGaslessTest is Test {
         internal view returns (bytes memory)
     {
         bytes32 structHash = keccak256(abi.encode(
-            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, keccak256(req.data)
+            FWD_TYPEHASH, req.from, req.to, req.value, req.gas, req.nonce, req.deadline, keccak256(req.data)
         ));
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
@@ -150,6 +150,7 @@ contract ReputationGaslessTest is Test {
             value: 0,
             gas:   500_000,
             nonce: fwd.getNonce(client),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
         bytes memory sig = _signFwd(fwd, CLIENT_PK, req);
@@ -181,6 +182,7 @@ contract ReputationGaslessTest is Test {
             value: 0,
             gas:   500_000,
             nonce: fwd.getNonce(client),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
         vm.prank(relayer);
@@ -235,6 +237,7 @@ contract ReputationGaslessTest is Test {
             value: 0,
             gas:   500_000,
             nonce: fwd.getNonce(attacker),
+            deadline: type(uint48).max,   // not this file's subject; the window is locked in ForwardRequestDeadline.t.sol
             data:  data
         });
         vm.prank(relayer);
