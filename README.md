@@ -314,3 +314,9 @@ Everything goes through this repository's own GitHub page. There is no email add
   public issue. The rules for what to send are in [`SECURITY.md`](SECURITY.md).
 - **Anything else** — a question, a bug that is not a security problem, a correction to
   these documents: open an ordinary issue in the **Issues** tab.
+
+⚠️ **What that door does not promise.** There is no support channel, no queue and no
+reply time for an ordinary issue. Nobody is on duty, so an issue that goes unanswered
+means that — not a decision about the person who filed it. The one exception is a
+vulnerability: the private form above has a stated first-reply time, and
+[`SECURITY.md`](SECURITY.md) says what happens if it passes.
