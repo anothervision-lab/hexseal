@@ -26,6 +26,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/JobBoardFacet.sol";
 import "../src/facets/ServiceBoardFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {inviteAndSeatArbiter, mountAcceptDoor} from "./ArbiterSeatRig.sol";
 
 // ============================================================
 //  MALICIOUS ERC20
@@ -299,7 +300,14 @@ contract ReentrancyTest is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(malUSDC), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+
+        // ⚠️ THE ANSWERING DOOR, MOUNTED ON PURPOSE (8 November 2026). This rig
+        // never mounted ArbiterApplicationsFacet at all, and from that day a seat
+        // is taken by the invited man through `acceptArbiterInvitation` — see
+        // ArbiterSeatRig.mountAcceptDoor. Without it every seating below would
+        // die in the diamond's fallback instead of saying what it was measuring.
+        mountAcceptDoor(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arbiter);
         _bondSeat(arbiter);
     }
 
@@ -606,7 +614,18 @@ contract ReentrancyTest is Test {
 
         // Refund = amount + fee above the floor; the floor itself is forfeited.
         assertEq(malUSDC.balanceOf(client), clientBefore + JOB_AMOUNT + (JOB_FEE - JOB_FLOOR), "single refund only");
-        assertEq(malUSDC.balanceOf(address(diamond)), 0, "diamond drained exactly once");
+        // ⚠️ `ENTRY_BOND` AND NOT A ZERO SINCE 8 NOVEMBER 2026, in this scene
+        // and in the two below it. The three asserted a bare `0` and the claim
+        // they make is unchanged: the board's money leaves the diamond ONCE and
+        // none of it stays behind. What stays behind is the entrance bond the
+        // arbiter seated in `setUp` paid, which the guard has nothing to do
+        // with -- so it is named as its own term rather than rolled into a
+        // bigger literal, and a second refund getting through still reds by
+        // exactly the refund.
+        assertEq(
+            malUSDC.balanceOf(address(diamond)), ENTRY_BOND,
+            "diamond drained exactly once, beyond the entrance bond of its seat"
+        );
     }
 
     function testReentrancy_CancelRequest() public {
@@ -626,7 +645,10 @@ contract ReentrancyTest is Test {
 
         // Refund = amount + fee above the floor; the floor itself is forfeited.
         assertEq(malUSDC.balanceOf(client), clientBefore + SVC_AMOUNT + (SVC_FEE - JOB_FLOOR), "single refund only");
-        assertEq(malUSDC.balanceOf(address(diamond)), 0, "diamond drained exactly once");
+        assertEq(
+            malUSDC.balanceOf(address(diamond)), ENTRY_BOND,
+            "diamond drained exactly once, beyond the entrance bond of its seat"
+        );
     }
 
     function testReentrancy_RejectRequest() public {
@@ -646,8 +668,24 @@ contract ReentrancyTest is Test {
 
         // Refund = amount + fee above the floor; the floor itself is forfeited.
         assertEq(malUSDC.balanceOf(client), clientBefore + SVC_AMOUNT + (SVC_FEE - JOB_FLOOR), "single refund only");
-        assertEq(malUSDC.balanceOf(address(diamond)), 0, "diamond drained exactly once");
+        assertEq(
+            malUSDC.balanceOf(address(diamond)), ENTRY_BOND,
+            "diamond drained exactly once, beyond the entrance bond of its seat"
+        );
     }
+
+    /// ⚠️ WHAT THE SEAT IN `setUp` HOLDS ON THE DIAMOND SINCE 8 NOVEMBER 2026.
+    /// `inviteAndSeatArbiter` pays the entrance out of the man's own wallet in
+    /// the same transaction as the seat, and the money stays on the diamond for
+    /// the life of this rig -- so the three DiamondGuard scenes below, which
+    /// assert that a refund leaves the diamond empty, have a term to name.
+    ///
+    /// ⚠️ A LITERAL FIXED BY A PERSON, not read back out of
+    /// `ArbiterRegistryStorage.ENTRY_BOND`, for the reason
+    /// `ArbiterSeatRig.SEAT_ENTRY_BOND` carries: an expectation that asks the
+    /// contract what its own price is stays green at fifty dollars, at one cent
+    /// and at nought.
+    uint256 internal constant ENTRY_BOND = 10_000_000;
 
     /// The bond behind a hand-given seat (8 September 2026).
     ///
@@ -664,10 +702,14 @@ contract ReentrancyTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
-    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
-    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
-    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
-    /// name is kept because every scene in this file calls it.
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// HELPER STILL WRITES NO BOND. The entry bond is taken by the seating door
+    /// itself, inside the same transaction as the seat, out of the man's own
+    /// wallet — never by hand into `arbiterBond` from here. What this leaves him
+    /// with is what a seated arbiter still needs on top: money and an allowance
+    /// for the bond each CASE asks for, inside `claimDispute`. Two different
+    /// sums at two different moments, and the name is kept because every scene
+    /// in this file calls it.
     function _bondSeat(address who) internal {
         malUSDC.mint(who, 1_000_000_000);
         vm.prank(who);

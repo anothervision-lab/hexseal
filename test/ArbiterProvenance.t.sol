@@ -18,6 +18,8 @@ import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {fundEntryBond, inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
+import {ArbiterApplicationsFacet} from "../src/facets/ArbiterApplicationsFacet.sol";
 
 contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// Both handles point at ONE address — the proxy carrying both facets (see
@@ -60,11 +62,34 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
         facet.setChiefArbiter(chief);
     }
 
+    /// ⚠️ WRITTEN OUT LONGHAND SINCE 8 NOVEMBER 2026, AND IT HAS TO BE. The
+    /// seating is two transactions now — the owner invites, the man answers —
+    /// and the two events belong to different ones: `ArbiterInvited` to the
+    /// press, `ArbiterSeated` to the answer (`ArbiterRegistryStorage.seatOnInvitation`
+    /// still emits it, with the INVITER in the `by` field). Driving this
+    /// through the `inviteAndSeatArbiter` helper would put a `vm.expectEmit`
+    /// in front of the wrong call of the three, which is the kind of seam that
+    /// looks fine and measures nothing.
+    ///
+    /// ⚠️ AND THE PROVENANCE IS THE WHOLE SUBJECT OF THE FILE: the man sends
+    /// the answering transaction, and the chain must still record the OWNER as
+    /// the one who seated him — `revokeUnprovenSeat` and the panel audit both
+    /// read that field. A door that credited the sender would quietly turn
+    /// every invited arbiter into a self-seated one.
     function test_OwnerSeatIsAttributedToOwner() public {
+        vm.expectEmit(true, true, false, true, address(facet));
+        emit ArbiterRegistryFacet.ArbiterInvited(seat1, owner, block.timestamp);
+        facet.addArbiter(seat1);
+
+        assertFalse(facetVault.isRegisteredArbiter(seat1), "the press seated him by itself");
+
+        fundEntryBond(address(facet), seat1);
+
         vm.expectEmit(true, true, false, true, address(facet));
         emit ArbiterRegistryFacet.ArbiterSeated(seat1, owner, false);
 
-        facet.addArbiter(seat1);
+        vm.prank(seat1);
+        ArbiterApplicationsFacet(address(facet)).acceptArbiterInvitation();
 
         assertEq(accFacet.getSeatedBy(seat1), owner, "the chain must remember that the owner did the seating");
         assertEq(accFacet.getSeatedCountBy(owner), 1, "the owner's seating counter must go up");
@@ -93,7 +118,7 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// And the owner's press on the same address goes through, so the refusal
     /// above is about WHO pressed and not about the man or the bench.
     function test_TheSameSeatingFromTheOwnerGoesThrough() public {
-        facet.addArbiter(seat1);
+        inviteAndSeatArbiter(address(facet), seat1);
         assertTrue(facetVault.isRegisteredArbiter(seat1), "the owner could not seat him either");
         assertEq(accFacet.getSeatedBy(seat1), owner, "the owner's press was credited to somebody else");
     }
@@ -104,7 +129,7 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// is about `clearSeat`, which does not care which of them pressed, and the
     /// chief no longer has a press.
     function test_ResignDecrementsSeaterCount() public {
-        facet.addArbiter(seat1);
+        inviteAndSeatArbiter(address(facet), seat1);
         assertEq(accFacet.getSeatedCountBy(owner), 1);
 
         vm.prank(seat1);
@@ -119,8 +144,8 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// mark for "he walked in himself" — and the appeal panel reads that very
     /// field, so a self-seated man must not read as vouched-for.
     function test_TwoSeatsCountAndASelfSeatingCountsForNobody() public {
-        facet.addArbiter(seat1);
-        facet.addArbiter(seat2);
+        inviteAndSeatArbiter(address(facet), seat1);
+        inviteAndSeatArbiter(address(facet), seat2);
         assertEq(accFacet.getSeatedCountBy(owner), 2, "two seatings, counter of two");
 
         // The bench is the two arbiter facets and no reputation storage behind
@@ -153,12 +178,12 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     function test_AChiefTheOwnerSeatedIsOneUnitOfHisOwnBloc() public {
         assertEq(facet.getChiefBloc(), 0, "an empty corps already has a bloc");
 
-        facet.addArbiter(chief);
+        inviteAndSeatArbiter(address(facet), chief);
         assertEq(facet.getChiefBloc(), 1, "a chief who is an arbiter is one unit of the bloc");
 
         // And seats the OWNER grants to other people are the owner's, not his.
-        facet.addArbiter(seat1);
-        facet.addArbiter(seat2);
+        inviteAndSeatArbiter(address(facet), seat1);
+        inviteAndSeatArbiter(address(facet), seat2);
         assertEq(facet.getChiefBloc(), 1, "the owner's seatings were credited to the chief");
         assertEq(accFacet.getSeatedCountBy(owner), 3, "the owner's own counter did not keep them");
     }
@@ -173,7 +198,7 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// the live case and not an invented one. The write is read back through the
     /// live getters, so a layout that moves turns the SETUP red.
     function test_AChiefWhoSeatedHimselfIsCountedOnce() public {
-        facet.addArbiter(chief);
+        inviteAndSeatArbiter(address(facet), chief);
         _seatedByForTest(chief, chief);
 
         assertTrue(facetVault.isRegisteredArbiter(chief), "setup: the chief holds no seat");
@@ -188,10 +213,10 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
 
     /// The ceiling does not apply to the owner: the owner is the one who decides.
     function test_OwnerIsNotCapped() public {
-        facet.addArbiter(seat1);
-        facet.addArbiter(seat2);
-        facet.addArbiter(address(0xA3));
-        facet.addArbiter(address(0xA4));
+        inviteAndSeatArbiter(address(facet), seat1);
+        inviteAndSeatArbiter(address(facet), seat2);
+        inviteAndSeatArbiter(address(facet), address(0xA3));
+        inviteAndSeatArbiter(address(facet), address(0xA4));
         assertEq(accFacet.getSeatedCountBy(owner), 4, "the owner seats as many as needed");
     }
 
@@ -199,7 +224,7 @@ contract ArbiterProvenanceTest is Test, ArbiterTwoFacetBench {
     /// his bloc and still falls when its holder leaves. Those seats exist on
     /// chain; nothing about the closed door unwrites them.
     function test_ASeatTheChiefGrantedBeforeTheDoorClosedStillCounts() public {
-        facet.addArbiter(seat1);
+        inviteAndSeatArbiter(address(facet), seat1);
         _seatedByForTest(seat1, chief);
         assertEq(facet.getChiefBloc(), 1, "an old seat of his stopped counting");
 

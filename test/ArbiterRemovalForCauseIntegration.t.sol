@@ -50,6 +50,7 @@ import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 import {pullAppealLot} from "./AppealLotRig.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {fundEntryBond, inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 contract MockUSDCIntegration {
     mapping(address => uint256) public balanceOf;
@@ -160,10 +161,13 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
     /// ArbiterRegistryStorage.POSITION — the same namespace test/ArbiterSuspension.t.sol
     /// reads (ARB_BASE is there too), and the bond slot 12 was obtained there by
-    /// sweeping. It is needed here for exactly one thing: so that 'the bond burns ON
-    /// THE REMOVAL and not on the accusation' is checked on a non-zero bond. The
-    /// bench seats the base arbiter by hand (addArbiter), and a hand seating takes no
-    /// bond at all — see test_HandSeatedArbiterHasNothingToBurnUntilHePostsItHimself.
+    /// sweeping. It is needed here for exactly one thing, and from 8 November
+    /// 2026 that thing turned over: a seat taken through either door now
+    /// carries ENTRY_BOND, so what the slot reproduces is a seat that PREDATES
+    /// the price — one of the four already sitting on Base Sepolia, which no cut
+    /// reaches back to charge. See
+    /// test_ARemovalOfASeatThatPredatesThePriceBurnsNothing beside
+    /// test_ARemovalBurnsTheEntranceBondOfASeatThatPaidOne.
     bytes32 constant ARB_BASE = 0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
 
     /// The offset of `suspendedUntil` inside Data — the same 27 that
@@ -173,6 +177,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// silently writing a neighbour.
     uint256 constant SLOT_SUSPENDED_UNTIL = 27;
     uint256 constant SLOT_ARBITER_BOND = 12;
+
+    /// ⚠️ THE ENTRANCE BOND, TEN DOLLARS, AS A LITERAL FIXED BY A PERSON (the
+    /// owner's decision of 8 November 2026). Never read back out of
+    /// `ArbiterRegistryStorage.ENTRY_BOND`: a scene whose expected side comes
+    /// out of the declaration under test is green at any price.
+    uint256 constant ENTRY_BOND = 10_000_000;
 
     /// An outsider: no role at all, neither arbiter nor chief nor owner.
     address constant STRANGER = address(0x5A);
@@ -223,9 +233,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
 
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -491,9 +504,10 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// there a booked bond with no USDC behind it makes the diamond insolvent by
     /// exactly 50 USDC.
     function _postRealBond(address who) internal {
-        // ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026. What a seated arbiter now
-        // needs is money and an allowance for the bond he posts PER CASE, and
-        // that is what this leaves him with.
+        // ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the
+        // seating line above pays it through the real door. What is added here
+        // is what a seated arbiter still needs on top: money and an allowance
+        // for the bond he posts PER CASE.
         usdc.mint(who, 1_000_000_000);
         vm.prank(who);
         usdc.approve(address(diamond), type(uint256).max);
@@ -557,9 +571,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// moved.
     function test_RemovalForCauseEmptiesHisSlotAndMovesNobodyElse() public {
         address second = address(0x33);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(second);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), second);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
@@ -672,9 +689,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// into anything extraneous (openClaimCount, a suspension), and the only variable
     /// in the test is the proposal.
     function _addFreshArbiter(address who) internal {
-        ArbiterRegistryFacet(address(diamond)).addArbiter(who);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), who);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
@@ -1111,9 +1131,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arbiter));
 
         // The owner repairs a mistaken removal — a real road, not a hypothetical one.
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -1143,9 +1166,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "setup: the first reply landed"
         );
 
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -1533,9 +1559,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(who));
 
-        ArbiterRegistryFacet(address(diamond)).addArbiter(who);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), who);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
@@ -1566,7 +1595,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             arbiter, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("x"), address(0),
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);   // erases removedAt
+        inviteAndSeatArbiter(address(diamond), arbiter);   // erases removedAt
 
         ArbiterAccountabilityFacet(address(diamond)).suspendArbiter(arbiter);
         assertTrue(ArbiterAccountabilityFacet(address(diamond)).isSuspended(arbiter));
@@ -1855,9 +1884,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         );
 
         // The owner has sorted it out and repairs a mistaken removal — a production road.
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -1939,6 +1971,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         assertTrue(ArbiterRegistryFacet(address(diamond)).isDaoActive(), "setup: governance was switched on by a human");
 
         _grantSelfRegistrationGate(arbiter);
+        fundEntryBond(address(diamond), arbiter);
         vm.prank(arbiter);
         // ⚠️ HALF A YEAR FIRST SINCE 22 SEPTEMBER 2026. Every door into the
         // corps is shut to a man removed against his will until
@@ -2024,6 +2057,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "setup: the suspension was re-dated across the cooldown and is live again"
         );
 
+        fundEntryBond(address(diamond), arbiter);
         vm.prank(arbiter);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         assertTrue(
@@ -2089,9 +2123,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
 
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -2179,9 +2216,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         MinimalForwarder fwd = new MinimalForwarder();
         FactoryFacet(address(diamond)).setTrustedForwarder(address(fwd));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(human);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), human);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
@@ -2397,25 +2437,34 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         address v1 = address(0x6A1);
         address v2 = address(0x6A2);
         address v3 = address(0x6A3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), v1);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), v2);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), v3);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
@@ -2501,9 +2550,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         assertEq(cause1, uint8(ArbiterAccountabilityFacet.Cause.Collusion) + 1,
             "the cause is recorded with an offset: zero must mean 'never removed'");
 
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -2666,25 +2718,34 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         address v1 = address(0x7A1);
         address v2 = address(0x7A2);
         address v3 = address(0x7A3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v1);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), v1);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(v1);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v2);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), v2);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
         // paying out what it never took.
         _postRealBond(v2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(v3);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), v3);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond
@@ -2752,6 +2813,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         _handOverRemovalRight(address(0xDA0));
         _grantSelfRegistrationGate(arbiter);
+        fundEntryBond(address(diamond), arbiter);
         vm.prank(arbiter);
         // ⚠️ HALF A YEAR FIRST SINCE 22 SEPTEMBER 2026. Every door into the
         // corps is shut to a man removed against his will until
@@ -2780,13 +2842,32 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// The fact docs/DECENTRALIZATION.md asserts: a removal forfeits WHATEVER bond
     /// there is — and a hand-seated arbiter has none at all.
     ///
-    /// A non-zero `arbiterBond` is written by exactly one line in the whole of `src/`
-    /// — `ArbiterRegistryFacet.applyAsArbiter` — and its very first line reverts
-    /// `DAONotActive` while the DAO is off (the owner's decision of 1 August 2026:
-    /// the arbiters at the start are hand-picked and their own). So for anybody who
-    /// can physically be removed today, `bondForfeited` is provably zero — and the
-    /// public document must say precisely that rather than threaten with fifty dollars
-    /// that do not exist.
+    /// ⚠️ AND THE FACT TURNED OVER ON 8 NOVEMBER 2026, WHICH IS WHY THIS
+    /// DOCSTRING IS REWRITTEN RATHER THAN RE-WORDED. What stood here was: "a
+    /// non-zero `arbiterBond` is written by exactly one line in the whole of
+    /// `src/` — `ArbiterRegistryFacet.applyAsArbiter` — and its very first line
+    /// reverts `DAONotActive` while the DAO is off, so for anybody who can
+    /// physically be removed today `bondForfeited` is provably zero."
+    ///
+    /// Every clause of that is now false. FOUR doors write a non-zero bond —
+    /// `applyAsArbiter`, `applyAsArbiterWithPermit`, `acceptArbiterInvitation`
+    /// and `acceptArbiterInvitationWithPermit` (the set
+    /// `script/check_arbiter_bond_writers.py` pins off the AST) — none of them
+    /// asks whether the DAO is awake, and every seat taken from that day
+    /// forward carries ten dollars that a removal burns.
+    ///
+    /// ⚠️ SO THE PUBLIC CLAIM MOVED, AND A TEST FILE IS NOT WHERE THAT IS
+    /// SETTLED. docs/DECENTRALIZATION.md says a removal forfeits whatever bond
+    /// the seat holds and that today that is provably nothing. The first half
+    /// still holds; the second stopped holding with this cut, and it is carried
+    /// to the owner as a finding rather than edited from here.
+    ///
+    /// ⚠️ WHAT IS *NOT* ZERO AND WHAT STILL IS. The four seats already sitting
+    /// on Base Sepolia were seated under the old rule and hold nothing; no cut
+    /// reaches back to charge them, so a removal of one of THEM still forfeits
+    /// nothing. The number a reader of the chain sees therefore depends on when
+    /// the man sat down, which is the honest statement and the one this scene
+    /// now makes in two halves.
     ///
     /// ⚠️ This test does NOT guard the TEXT of the document. Guarding text would be
     /// guarding something other than the work — the very class of "a lock hunting for
@@ -2795,44 +2876,98 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     /// red. The reverse corruption (somebody putting an untruth back into the document)
     /// is caught by nothing, and that is recorded honestly rather than papered over
     /// with the appearance of a check.
-    function test_HandSeatedArbiterHasNothingToBurnUntilHePostsItHimself() public {
+    function test_ARemovalBurnsTheEntranceBondOfASeatThatPaidOne() public {
         address seat = address(0x6401);
+
+        // Half one, unchanged and deliberately so: the owner's PRESS still
+        // moves no money, and now it does not even seat him. Variant A rests on
+        // that asymmetry — an owner's action must not break on a stranger's
+        // empty wallet.
         ArbiterRegistryFacet(address(diamond)).addArbiter(seat);
-
-        // Half one, unchanged and deliberately so: the seating itself still moves
-        // no money. Variant A rests on that asymmetry — an owner's action must not
-        // break on a stranger's empty wallet.
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 0,
-            "a hand seating takes no bond"
+            "the press alone took a bond"
+        );
+        assertFalse(
+            ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(seat),
+            "the press alone seated him"
         );
 
-        // ⚠️ AND HALF TWO IS GONE AGAIN SINCE 22 SEPTEMBER 2026. It used to
-        // say: the arbiter posts the bond himself, and from that moment the
-        // forfeit is worth the fifty dollars the public document names. There
-        // is no seat bond to post any more — the money an arbiter puts at risk
-        // is posted PER CASE and comes home when his verdict stands — so a
-        // removal forfeits nothing, for anybody, and the document has to say
-        // that again.
-        //
-        // What punishes a bad arbiter now is the record, the suspension and the
-        // loss of the seat. That is the owner's decision and this is the fact
-        // it rests on: corrupt it (start writing a seat bond again) and the
-        // number in the event below stops being zero.
+        // Half two, and it is the half that turned over on 8 November 2026. It
+        // used to read "there is no seat bond to post any more, so a removal
+        // forfeits nothing, for anybody". The man answers the invitation and
+        // the answer takes his ten dollars, so from here on there IS something
+        // to burn.
+        fundEntryBond(address(diamond), seat);
+        vm.prank(seat);
+        ArbiterApplicationsFacet(address(diamond)).acceptArbiterInvitation();
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), ENTRY_BOND,
+            "the answer seated him without taking the entrance bond"
+        );
+
         _postRealBond(seat);
-        assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 0,
-            "nothing writes a seat bond any more, so there is nothing to burn"
-        );
 
         uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
 
-        // The sixth field of the event is bondForfeited. A zero here is what a reader
-        // of the chain will see on any removal today.
+        // ⚠️ THE BOND BURNS ON THE REMOVAL AND NOT ON THE ACCUSATION. Under a
+        // live proposal he is still an arbiter and the money is still his; an
+        // accusation is not a punishment.
         _proposeAndWait(seat, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("chat log"));
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), ENTRY_BOND,
+            "the accusation took his entrance money"
+        );
+
         // The sixth field of the event is bondForfeited, and it is the number a
-        // reader of the chain sees. It used to be zero on every removal that was
-        // reachable at all; the literal below is what changed.
+        // reader of the chain sees. It was zero on every removal reachable
+        // between 22 September and 8 November; the literal below is what
+        // changed, and it is a literal rather than a read of the field.
+        vm.expectEmit(true, true, true, true, address(diamond));
+        emit ArbiterAccountabilityFacet.ArbiterRemovedForCause(
+            seat, owner, ArbiterAccountabilityFacet.Cause.Collusion, false, keccak256("chat log"),
+            ENTRY_BOND
+        );
+        ArbiterAccountabilityFacet(address(diamond)).removeArbiterForCause(
+            seat, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("chat log"), address(0),
+            "three times took the disputes of one counterparty and three times ruled in their favour"
+        );
+
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance() - vaultBefore, ENTRY_BOND,
+            "the forfeit did not reach the arbiter vault"
+        );
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 0,
+            "the burnt bond still stands against a man who is no longer an arbiter"
+        );
+    }
+
+    /// THE OTHER HALF OF THE SAME FACT, AND THE ONE THAT KEEPS THE PUBLIC
+    /// DOCUMENT HONEST FOR THE CORPS THAT ALREADY EXISTS.
+    ///
+    /// The four arbiters sitting on Base Sepolia today were seated under the
+    /// rule that charged nothing, and no cut reaches back to charge them. So a
+    /// removal of one of them forfeits nought, and the refund path has to
+    /// survive that rather than revert on an empty transfer.
+    ///
+    /// ⚠️ THE ZERO IS MADE BY HAND AND READ BACK, which is the only honest way
+    /// to reproduce it now: no door creates an unbonded seat any more. The write
+    /// goes through `_giveBond`, whose slot is pinned by a live getter, so a
+    /// layout that moves turns this rig red rather than zeroing a neighbour.
+    function test_ARemovalOfASeatThatPredatesThePriceBurnsNothing() public {
+        address seat = address(0x6402);
+        inviteAndSeatArbiter(address(diamond), seat);
+        _giveBond(seat, 0);
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 0,
+            "rig: the bond was zeroed in the wrong slot"
+        );
+        _postRealBond(seat);
+
+        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+
+        _proposeAndWait(seat, ArbiterAccountabilityFacet.Cause.Collusion, keccak256("chat log"));
         vm.expectEmit(true, true, true, true, address(diamond));
         emit ArbiterAccountabilityFacet.ArbiterRemovedForCause(
             seat, owner, ArbiterAccountabilityFacet.Cause.Collusion, false, keccak256("chat log"),
@@ -2845,7 +2980,7 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         assertEq(
             ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
-            "the forfeit is worth nothing again: the arbiter vault did not grow"
+            "the bank grew on a removal that had nothing to take"
         );
     }
 
@@ -3448,9 +3583,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         // refusal comes at execution and not at the proposal: the cause is proved by
         // `_requireProven`, which is called from removeArbiterForCause — a proposal
         // checks only the form (a digest and words for the non-attested codes).
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. This scene is about what an arbiter
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. This scene is about what an arbiter
         // DOES, so the seat is funded with REAL money through the real door — this
         // rig refunds and forfeits bonds, and a bond booked without the money behind
         // it would have the diamond paying out what it never took.
@@ -3808,9 +3946,12 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
     function test_AfterHandoverTheOwnerKeepsExactlyTheTwoLightDoors() public {
         address dao = address(0xDA1);
         address subject = address(0xD21);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(subject);
-        // A hand-given seat carries no bond, and since 8 September 2026 an unbonded
-        // seat is refused by every arbiter door. The scenes below are about what an
+        inviteAndSeatArbiter(address(diamond), subject);
+        // ⚠️ A SEAT COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the line
+        // above seats him through the real road: invited, paid, sitting. This
+        // comment used to open "a hand-given seat carries no bond"; it carries
+        // one now, and what still has to be added below is the money for the
+        // bond each CASE asks for. The scenes below are about what an
         // arbiter DOES, so the seat is funded the moment it is given — with REAL
         // money through the real door, because this rig refunds and forfeits bonds
         // and a bond booked without the money behind it would have the diamond

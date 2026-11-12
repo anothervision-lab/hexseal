@@ -641,12 +641,27 @@ contract ArbiterRemovalForCauseTest is Test {
 
         // The SEATING door is open to the owner in this state — it is already so, and
         // it is with that door that the removal door must agree.
+        //
+        // ⚠️ WHAT "OPEN" MEANS CHANGED ON 8 NOVEMBER 2026, AND WHAT IS MEASURED
+        // HERE DID NOT. `addArbiter` records an INVITATION now and seats
+        // nobody, so the old assertion — `isArbiter` (field 0) reading 1 out of
+        // the raw slot — would read 0 and this control would report a drift
+        // that is not there. The predicate under test is
+        // `_requireSeatingNotHandedOver`, which is the same predicate it always
+        // was and sits in front of the same door.
+        //
+        // ⚠️ THE LANDING IS PROVED BY THE EVENT AND NOT BY A SLOT, which is a
+        // repair rather than a workaround. `reg` here is a STANDALONE facet
+        // with no routing (see the warning above), so the invitation's own
+        // getter — `ArbiterApplicationsFacet.getArbiterInvitation` — cannot be
+        // reached from this object at all; and the alternative, hand-counting
+        // `seatInvitations`'s field index, is the one thing this file's own
+        // comments warn against. `ArbiterInvited` is emitted by the door under
+        // test, carries the man and the presser, and cannot be satisfied by a
+        // press that did nothing.
+        vm.expectEmit(true, true, false, true, address(reg));
+        emit ArbiterRegistryFacet.ArbiterInvited(address(0xA7), owner, block.timestamp);
         reg.addArbiter(address(0xA7));
-        assertEq(
-            uint256(vm.load(address(reg), keccak256(abi.encode(address(0xA7), uint256(ARB_BASE))))),
-            1,
-            "seating works with a live DAO and no successor, so removal must too"
-        );
     }
 
     // ============================================================

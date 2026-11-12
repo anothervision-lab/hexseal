@@ -66,6 +66,7 @@ import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {fundEntryBond, inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 contract MockUSDCApplications {
     mapping(address => uint256) public balanceOf;
@@ -146,6 +147,13 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     /// window is and then checks the window against that answer is a test that
     /// agrees with itself no matter what the number becomes.
     uint256 constant WINDOW = 7 days;
+
+    /// ⚠️ TEN DOLLARS, AS A LITERAL FIXED BY A PERSON (the owner's decision of
+    /// 8 November 2026), and NOT read back out of
+    /// `ArbiterRegistryStorage.ENTRY_BOND`. A scene that asked the facet what
+    /// its own price is and then checked the price against that answer would
+    /// agree with itself at fifty dollars, at one cent and at nought.
+    uint256 constant ENTRY_BOND = 10_000_000;
 
     /// States as the facet numbers them. Literals, for the same reason.
     uint8 constant ST_NONE      = 0;
@@ -248,18 +256,32 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         reg.applyAsArbiter();
     }
 
-    /// The bond a seat costs, and the oracle is the money. The number this
-    /// facet publishes is zero since the per-case cut; a successful
-    /// `applyAsArbiter` has to move exactly that much and no more.
+    /// The bond a seat costs, and the oracle is the money.
+    ///
+    /// ⚠️ TURNED ROUND ON 8 NOVEMBER 2026, AND THE TITLE IS THE CHANGE. Until
+    /// that day this scene was `test_TheBondMirrorIsZeroAndTheRegistryTakesNothing`
+    /// and it held the opposite claim: the form published zero and a successful
+    /// `applyAsArbiter` had to move nothing. The owner put ten dollars back on
+    /// the entrance, so the form publishes ten and the door has to take exactly
+    /// ten — from HIS wallet into the diamond, with the seat booking the same
+    /// figure.
+    ///
+    /// ⚠️ THE OLD SCENE WOULD HAVE STAYED GREEN THROUGH THE CHANGE IF ITS
+    /// WALLET HAD BEEN TOPPED UP BY A RIG, which is the whole reason it is
+    /// rewritten here rather than merely funded: "his balance is where it was"
+    /// is true both when nothing was charged and when a helper minted exactly
+    /// what was charged. The figures below are differences against a baseline
+    /// read in this scene, so neither reading can stand in for the other.
     ///
     /// ⚠️ THE APPLICANT IS LEFT SOLVENT AND WITH AN OPEN ALLOWANCE, on purpose.
     /// A scene where the money could not have moved anyway proves nothing about
     /// whether the door tried to move it.
-    function test_TheBondMirrorIsZeroAndTheRegistryTakesNothing() public {
+    function test_TheBondMirrorIsTheEntryBondAndTheRegistryTakesExactlyIt() public {
         (, , uint256 bond, ) = app.getApplicationRequirements();
-        assertEq(bond, 0, "this facet still advertises a price for a seat");
+        assertEq(bond, ENTRY_BOND, "this facet advertises a price the door does not charge");
 
         _approveSpend(applicant, type(uint256).max);
+        usdc.mint(applicant, ENTRY_BOND);
         uint256 walletBefore   = usdc.balanceOf(applicant);
         uint256 diamondBefore  = usdc.balanceOf(address(diamond));
 
@@ -267,9 +289,15 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         reg.applyAsArbiter();
 
         assertTrue(regVault.isRegisteredArbiter(applicant), "the door did not seat him");
-        assertEq(usdc.balanceOf(applicant), walletBefore, "the seat took money from him");
-        assertEq(usdc.balanceOf(address(diamond)), diamondBefore, "the diamond took money for a seat");
-        assertEq(acc.getArbiterBond(applicant), 0, "a bond was booked that nobody paid");
+        assertEq(
+            walletBefore - usdc.balanceOf(applicant), ENTRY_BOND,
+            "the entrance did not take the bond out of HIS wallet"
+        );
+        assertEq(
+            usdc.balanceOf(address(diamond)) - diamondBefore, ENTRY_BOND,
+            "the diamond is not holding the bond it charged"
+        );
+        assertEq(acc.getArbiterBond(applicant), ENTRY_BOND, "the seat carries no record of the money");
     }
 
     /// The four numbers a form reads before a man signs anything.
@@ -278,7 +306,12 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
             app.getApplicationRequirements();
         assertEq(minXP,     0,      "experience opens nothing since 20 September 2026");
         assertEq(minStreak, 5,      "the owner fixed the run of clean deals at five");
-        assertEq(bond,      0,      "a seat is free since 22 September 2026");
+        // ⚠️ TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026. This read was `0` with
+        // the words "a seat is free since 22 September 2026" — true for seven
+        // weeks, a lie from the moment the owner put the entrance price back.
+        // A form that publishes a price different from the one the door takes
+        // sends a man to a transaction that reverts.
+        assertEq(bond,      ENTRY_BOND, "the form publishes a price the doors do not charge");
         assertEq(window,    WINDOW, "the window a form counts down");
     }
 
@@ -288,7 +321,7 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     /// measured it there.
     function test_RefusalWordsUseTheSameCapAsTheRemovalDoors() public {
         uint256 cap = acc.getMaxReasonBytes();
-        reg.addArbiter(applicant);
+        inviteAndSeatArbiter(address(reg), applicant);
 
         string memory tooLong = _repeat("x", cap + 1);
         vm.expectRevert(abi.encodeWithSelector(
@@ -335,6 +368,7 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         // And the door that replaced all three does answer, so the loop above is
         // not passing because the whole diamond is deaf.
         _seedRecord(applicant, 0, 5);
+        fundEntryBond(address(reg), applicant);
         vm.prank(applicant);
         reg.applyAsArbiter();
         assertTrue(regVault.isRegisteredArbiter(applicant), "the entrance that stayed does not work");
@@ -430,7 +464,7 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     /// this at all". It now governs exactly one door: `revokeUnprovenSeat`.
     function test_TheRatchetShutsTheFilterDoorAndNothingElse() public {
         assertTrue(app.isManualAdmissionOpen(), "setup: the hand is already out");
-        reg.addArbiter(applicant);
+        inviteAndSeatArbiter(address(reg), applicant);
 
         _activateDao();
         assertFalse(app.isManualAdmissionOpen(), "the ratchet did not turn");
@@ -442,6 +476,7 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         // direction — it never was the thing the ratchet governed.
         address candidate = address(0xC0FFEE);
         _seedRecord(candidate, 0, 5);
+        fundEntryBond(address(reg), candidate);
         vm.prank(candidate);
         reg.applyAsArbiter();
         assertTrue(regVault.isRegisteredArbiter(candidate), "the ratchet shut the automatic door");
@@ -474,20 +509,42 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         app.postArbiterBondWithPermit(vm.getBlockTimestamp() + 1 hours, 27, bytes32(0), bytes32(0));
     }
 
-    /// `getBondState` answers NONE or UNPOSTED and nothing else, because nothing
-    /// writes a seat bond any more. It stays mounted because every live
-    /// Agreement clone calls this selector and a clone is pinned to its
-    /// implementation for life.
-    function test_GetBondStateAnswersOnlyNoneOrUnposted() public {
-        (uint8 none, , ) = app.getBondState(stranger);
-        assertEq(none, 0, "a stranger is not NONE");
+    /// `getBondState` answers NONE or UNPOSTED and nothing else — and from
+    /// 8 November 2026 that is true WHILE THE SECOND RETURN VALUE IS NON-ZERO,
+    /// which is the only reason this scene is worth more than it was.
+    ///
+    /// ⚠️ THE TWO HALVES PARTED COMPANY THAT DAY. `bond` tells the truth about
+    /// the money; `state` tells the truth about rule B, which every live
+    /// Agreement clone reads through this very selector
+    /// (`Agreement._holdsArbiterBond` refuses a man as a PARTY at
+    /// `state >= 2`). A `state` of WHOLE for a seat that has paid would switch
+    /// rule B back on across every deal that already exists, with no cut and no
+    /// line of src/ to point at — see the double warning on `getBondState`
+    /// itself. So the pairing below is the subject: UNPOSTED beside ten
+    /// dollars, deliberately.
+    ///
+    /// The invited man is here for the boundary: an invitation is not a seat,
+    /// so he reads exactly as a stranger does until he answers it.
+    function test_GetBondStateAnswersOnlyNoneOrUnpostedEvenWithMoneyBehindTheSeat() public {
+        (uint8 none, uint256 noBond, ) = app.getBondState(stranger);
+        assertEq(none,   0, "a stranger is not NONE");
+        assertEq(noBond, 0, "a stranger reads as holding money");
 
         reg.addArbiter(applicant);
-        (uint8 seated, uint256 bond, ) = app.getBondState(applicant);
-        assertEq(seated, 1, "a seat does not read as UNPOSTED");
-        assertEq(bond,   0, "a seat carries a bond after all");
+        (uint8 invited, uint256 invitedBond, ) = app.getBondState(applicant);
+        assertEq(invited,     0, "an invited man reads as holding a seat");
+        assertEq(invitedBond, 0, "an invited man reads as holding money");
 
-        assertTrue(app.isArbiterActive(applicant), "a free seat is not allowed to act");
+        fundEntryBond(address(diamond), applicant);
+        vm.prank(applicant);
+        app.acceptArbiterInvitation();
+
+        (uint8 seated, uint256 bond, uint256 toPost) = app.getBondState(applicant);
+        assertEq(seated, 1,          "a paid-up seat does not read as UNPOSTED");
+        assertEq(bond,   ENTRY_BOND, "the seat carries no record of the money");
+        assertEq(toPost, 0,          "there is no such thing as a seat that owes money");
+
+        assertTrue(app.isArbiterActive(applicant), "a paid-up seat is not allowed to act");
     }
 
     /// The public list, and the paged read over it. Nothing can be pushed into

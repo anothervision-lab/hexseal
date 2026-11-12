@@ -191,7 +191,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
             "arbiter paid out, and his bond for this case came back with it"
         );
         assertEq(usdc.balanceOf(feeRecipient) - b.fee, toTreasury, "the treasury was paid out of an arbitration fee");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond back to nothing");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond back to nothing but the entrance bond of the seat");
         _assertDiamondBalances("after both withdrawals");
     }
 
@@ -435,7 +435,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
 
         assertEq(c0 - usdc.balanceOf(client), FEE_FLOOR, "the client is out exactly the floor");
         assertEq(usdc.balanceOf(feeRecipient) - f0, FEE_FLOOR, "and the floor is what the protocol kept");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond keeps nothing beyond the arbiter's bond");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond keeps nothing beyond the arbiter's bond");
         _assertDiamondBalances("after cancelJob");
     }
 
@@ -452,7 +452,10 @@ contract MoneyPathExitsTest is MoneyPathBase {
 
         assertEq(c0 - usdc.balanceOf(client), FEE_FLOOR, "client out exactly the floor");
         assertEq(usdc.balanceOf(feeRecipient) - f0, FEE_FLOOR, "protocol kept the floor");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld);
+        assertEq(
+            usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND,
+            "diamond keeps nothing beyond the arbiter's bond"
+        );
         _assertDiamondBalances("after rejectRequest");
     }
 

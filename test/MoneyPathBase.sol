@@ -38,6 +38,7 @@ import {TreasuryLinkFacet} from "../src/facets/TreasuryLinkFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {DealCapOff} from "./DealCapOff.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC ----------
 //
@@ -235,7 +236,7 @@ abstract contract MoneyPathBase is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(dep)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
+        inviteAndSeatArbiter(address(diamond), arbiterAddr);
 
         _postSeatBond(arbiterAddr);
 
@@ -411,7 +412,27 @@ abstract contract MoneyPathBase is Test {
     }
 
     function _arbSels() internal pure returns (bytes4[] memory arbSels) {
-        arbSels = new bytes4[](7);
+        // ⚠️ 7 -> 8 ON 8 NOVEMBER 2026, AND THE EIGHTH IS NOT A DOOR THIS
+        // FIXTURE PRESSES. It is a door the SEATING presses on its way through.
+        //
+        // `acceptArbiterInvitation` — appSels[4] below — asks whether the
+        // handover has happened before it writes a seat, and it asks the only
+        // way one facet can ask another: `ArbiterRegistryFacet(address(this))
+        // .isDaoActive()`, an external staticcall back into this same diamond.
+        // On a census that routes the accept door and not this read, the inner
+        // call lands in the diamond's fallback and the WHOLE setUp dies with
+        // `Diamond: function not found` — which is what forty suites standing
+        // on this base did on the owner's full run of 8 November (82 hits of
+        // that string in one log, all of them inside a setUp).
+        //
+        // ⚠️ SO THE RULE FOR THIS LIST IS: A NARROW CENSUS MUST ROUTE WHAT THE
+        // DOORS IT ROUTES REACH FOR, not only what its own scenes call. The
+        // trap is that nothing here calls `isDaoActive` and nothing ever will,
+        // so a reader pruning "unused" selectors would take it straight back
+        // out. `DiamondDeathEscrowBase` has carried it since long before the
+        // entry bond, by accident rather than by this argument, which is
+        // exactly why that base stayed green through the same run.
+        arbSels = new bytes4[](8);
         arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
@@ -419,6 +440,7 @@ abstract contract MoneyPathBase is Test {
         arbSels[4] = ArbiterRegistryFacet.submitVerdict.selector;
         arbSels[5] = ArbiterRegistryFacet.finalizeVerdict.selector;
         arbSels[6] = ArbiterRegistryFacet.notifyArbiterTimeout.selector;
+        arbSels[7] = ArbiterRegistryFacet.isDaoActive.selector;
     }
 
     /// The three appeal doors every derived suite needs, in a list of their
@@ -558,29 +580,66 @@ abstract contract MoneyPathBase is Test {
     }
 
     function _applicationsSelectors() internal pure returns (bytes4[] memory appSels) {
-        appSels = new bytes4[](4);
+        appSels = new bytes4[](5);
         appSels[0] = ArbiterApplicationsFacet.postArbiterBond.selector;
         appSels[1] = ArbiterApplicationsFacet.isArbiterActive.selector;
         appSels[2] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
         appSels[3] = ArbiterApplicationsFacet.getBondState.selector;
+        // ⚠️ THE FIFTH ARRIVED ON 8 NOVEMBER 2026 AND IS NOT OPTIONAL. From
+        // that day `addArbiter` records an INVITATION and seats nobody; the
+        // seat is taken by the invited man through this door, which also pulls
+        // his entry bond. A rig that mounts the four above and not this one
+        // routes every seating into the diamond's fallback.
+        appSels[4] = ArbiterApplicationsFacet.acceptArbiterInvitation.selector;
     }
 
-    /// What this fixture's arbiter has locked as his seat bond.
-    ///
-    /// Every assertion below that used to read "the diamond keeps nothing" now
-    /// means "nothing BEYOND this": the bond is posted in setUp and sits there
-    /// for the life of the rig. Kept as a field rather than a literal so those
-    /// assertions stay tied to the number the diamond actually charges.
+    /// What this fixture's arbiter has locked as his SEAT bond — the thing
+    /// retired on 22 September 2026. It has read zero ever since and still
+    /// does; it is kept, and kept at zero, because that zero is a statement:
+    /// the retired bond stayed retired through the entry bond's arrival.
     uint256 internal seatBondHeld;
 
-    /// ⚠️ THERE IS NO SEAT BOND ANY MORE (22 September 2026). The name is
-    /// kept because every rig below calls it; what it does is what a seated
-    /// arbiter now actually needs — money and an allowance for the bond he
-    /// posts PER CASE, at the moment he claims a dispute.
+    /// ⚠️ WHAT A SEAT HOLDS ON THE DIAMOND SINCE 8 NOVEMBER 2026, and it is a
+    /// DIFFERENT sum from the field above rather than that field coming back to
+    /// life. `acceptArbiterInvitation` pulls ten dollars out of the invited
+    /// man's own wallet in the same transaction as the seat, and the money
+    /// stays on the diamond for the life of the rig — booked by
+    /// `getArbiterBond`, and therefore counted by `_diamondLedger`.
     ///
-    /// `seatBondHeld` stays a field and now reads zero, so every assertion
-    /// below that says "the diamond keeps nothing beyond the arbiter's bond"
-    /// goes on saying the true thing without being rewritten one by one.
+    /// ⚠️ A LITERAL FIXED BY A PERSON, not read back out of
+    /// `ArbiterRegistryStorage.ENTRY_BOND`, and the argument is the one
+    /// `ArbiterSeatRig.SEAT_ENTRY_BOND` carries: an expectation that asks the
+    /// contract what its own price is would be satisfied at fifty dollars, at
+    /// one cent and at nought, and every scene standing on it would stay green
+    /// while the price moved. Named as its own term everywhere rather than
+    /// folded into a literal, because the claim these files make is that every
+    /// sum on the diamond has a name.
+    ///
+    /// ⚠️ ONE DECLARATION FOR THE WHOLE FAMILY. It used to be typed in
+    /// test/DiamondLedgerIdentity.t.sol alone, which was the only suite on this
+    /// base that had been rewritten for the entry bond; it lives here now
+    /// because seventeen more assertions on seven other suites need the same
+    /// number, and two literals for one fact is how the first one goes stale.
+    uint256 internal constant ENTRY_BOND = 10_000_000;
+
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// IS STILL NOT WHERE IT IS PAID. The entry bond is taken by the seating
+    /// door, in the same transaction as the seat, out of the man's own wallet.
+    /// The name of this helper is kept because every rig below calls it; what it
+    /// does is what a seated arbiter needs ON TOP of that — money and an
+    /// allowance for the bond he posts PER CASE, at the moment he claims a
+    /// dispute.
+    ///
+    /// ⚠️ WHAT THIS DOCSTRING USED TO CLAIM WAS MEASURED FALSE ON 8 NOVEMBER
+    /// 2026, and the claim is kept here as the correction it needs. It said:
+    /// "`seatBondHeld` stays a field and now reads zero, so every assertion
+    /// below that says 'the diamond keeps nothing beyond the arbiter's bond'
+    /// goes on saying the true thing without being rewritten one by one."
+    /// Eighteen of those assertions went red the moment the seating stopped
+    /// dying in setUp, every one of them by exactly `ENTRY_BOND` or a multiple
+    /// of it. The entrance really is paid, so the scenes really do have to name
+    /// it; the ones whose WORDS said a seat carries no money were rewritten by
+    /// what they mean, not by their number.
     function _postSeatBond(address who) internal {
         usdc.mint(who, CASE_BOND_PURSE);
         vm.prank(who); usdc.approve(address(diamond), type(uint256).max);

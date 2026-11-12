@@ -38,8 +38,8 @@ after this table.
 | **Redraw every receipt NFT** | `JobReceiptFacet.setSvgRenderer` | The renderer contract behind every token image, including tokens already minted. |
 | **Set the treasury's four numbers** | `TreasuryLinkFacet.setTreasuryShares` / `setVaultTargetDisputes` | The facet was cut on 4 September 2026 and `ProtocolTreasury` deployed on 5 September. The split itself — the order of the ladder, who may receive, and the CEILING on every share — is frozen in `ProtocolTreasury`, a contract outside the diamond with no admin and no upgrade path. What the owner can move are the numbers under those ceilings: the foundation's share can be lowered and can never be raised above 60%, and once governance activates that ceiling drops to 20% — the treasury re-reads the diamond's own answer every time it distributes, so the drop needs no press. ~~And the treasury latches it forever~~ at that moment: the handover is written down permanently on the first `distribute()` that has income to split, or by `latchDao()`, which anybody may call and which exists for exactly this window. Until one of the two lands, a facet replacement that makes the diamond answer "not yet" lifts the ceiling back to 60%; after it, the treasury stops asking. The reserve keeps at least 10% of income by arithmetic, not by promise. Live shares: vault 10%, arbiter payroll 20%, foundation 50%. **And the payroll's 20% does not stay the arbiters' if they never come for it.** It is booked per case judged, in 30-day periods; a period's unclaimed remainder becomes sweepable 365 days after that period ends, and `TreasuryLinkFacet.sweepPayrollPeriod` sends it to the foundation. That door is not a lever and is not in the table below: it is open to anybody, the recipient is read off the chain, and the deadline is a constant — pressing it decides nothing. What it decides is the destination, and the destination is the foundation rather than the arbiters it was set aside for. ⚠️ **On today's numbers this is not an edge case.** No dispute has ever been finalized on the live diamond — measured 12 October 2026, `getHandoverReadiness()` on the proxy answering a clean-dispute total of 0 against its floor of 8, and `getUniqueActiveUsers()` answering 8 against a threshold of 1 000 — so every period that closes from here has its whole payroll share swept. Re-check with those two calls rather than with this paragraph. Until arbiters actually judge, the foundation's effective share of income is **70%, not 50%** — and the length of that 365-day window is what decides how much of the arbiters' fifth becomes foundation money. |
 | **Pause new deals** | `FactoryFacet.pauseNewDeals` / `resumeNewDeals` | Cut on 3 September 2026. Closes **twelve** doors for 72 hours and lets go by itself: ten on the two boards and the factory's own two — posting, requesting, hiring on either board, and the direct hire. ~~Eleven doors where money enters~~ was wrong in both halves: there are twelve, and two of them (`editJob`, `editService`) move no money at all. Those two are braked anyway, so that a board where nothing can be hired does not go on advertising rewritten work. It cannot reach a deal that already exists: those are EIP-1167 clones running on their own clocks. It cannot trap money either: cancel, reject, remove and withdraw carry no gate. Holding it longer than 72 hours takes another signed transaction, and every press is a log entry with a name against it. This is not a new power — the owner could already stop the marketplace by replacing a facet; it is the same power made fast and reversible. |
-| **The arbiter roster** | `ArbiterRegistryFacet`, `ArbiterApplicationsFacet` | Two doors lead onto the roster and only one of them is a power. `applyAsArbiter` seats the caller in the same transaction: no modifier, no role check, no money, and the single thing the contract reads is a run of deals closed without a dispute — nobody approves an entry and nobody can refuse one. The owner's door is `addArbiter`, which measures nothing. ⚠️ **Both facts hold at once, and the one in use is the second: every seat on the chain today was given by the owner, and nobody has yet come through the open door.** ~~Approving and refusing applications~~ left the diamond with the cut of 22-24 September 2026, together with the seat bond — there is no application left to decide, and the selectors answer the zero address (see the roll-call below). Taking back a seat that has nothing on its record is the owner's (and, within limits, a chief arbiter's). Restoring an arbiter who was removed for cause is the owner's alone. |
-| **Suspend or remove an arbiter** | `ArbiterAccountabilityFacet` | `suspendArbiter` stops an arbiter for 72 hours from the press and expires on its own; pressing again starts the 72 hours again, and it takes no written reason. ~~With no limit on presses~~ **until 8 October 2026, when the restart was given a ceiling: three presses against one arbiter (`HAND_SUSPENSION_LIMIT`), and the fourth refuses in words that name the removal door instead. The count returns to zero once the arbiter has stood a week with nobody pressing at him (`HAND_SUSPENSION_SILENCE`), measured from the last press, so a calendar boundary cannot be stood on to double it.** The ceiling is on the hand and not on the chain: the automatic suspension that follows a third judicial mistake is written by the protocol itself and is not counted against it. While it lasts he cannot claim disputes or resign, and a verdict he has already submitted is not executed — ~~the escrow of that deal waits~~ **the escrow of that deal waits, and — ⚠️ WRITTEN 16 October 2026 AND NOT ON THE CHAIN YET, so the sentences that follow describe the repository and not the deployed diamond, which still holds with no end at all — it is to wait no longer than a ceiling: a suspension holds the execution of an ALREADY SUBMITTED verdict only until the finalisation delay plus 72 hours (`SUSPENSION_HOLD_WINDOW`) have run from the SUBMISSION of that verdict — 144 hours in all, whatever the number of presses and whoever pressed. Past that the escrow is released although the suspension still stands and still shuts the other three doors. It is read by the clock, with no button to press. Before it, the hold had no end at all: three presses end to end held a stranger's escrow for nine days, then four days were open while the count of presses went out, and the cycle could be repeated.** `removeArbiterForCause` does not expire: it takes the seat and writes a permanent public accusation against a real address. ~~and forfeits the bond that seat carries into the arbiter vault~~ — **there is no such bond any more, and that is the row above speaking.** The seat bond left the diamond with the cut of 22-24 September 2026; a seat costs nothing to take and therefore carries nothing to lose. The transfer into the arbiter vault is still written in the facet and still runs, and what it moves is measured at zero: as of 8 October 2026 not one function in this protocol writes a non-zero bond for an arbiter, so `getArbiterBond` answers zero for every address and the forfeiture moves that zero. **What a removal costs today is the seat and the public record, and nothing else** — which is also what the section below pricing a removal has to be read against. **Removal is not one button**: it runs only through a `proposeRemoval` that has stood for 48 hours (`REMOVAL_DELAY`) and is executed inside a 14-day window (`PROPOSAL_TTL`), on the same cause code that was served. The section on removal below gives the mechanics, and the section after it prices what a removal costs today. |
+| **The arbiter roster** | `ArbiterRegistryFacet`, `ArbiterApplicationsFacet` | Two doors lead onto the roster and only one of them is a power. `applyAsArbiter` seats the caller in the same transaction: no modifier, no role check, and the single thing the contract reads is a run of deals closed without a dispute — nobody approves an entry and nobody can refuse one. It takes the **entry bond** in that same transaction, and has done on the chain since the cut of **10 November 2026**. The owner's door is `addArbiter`, which measures nothing and, since that same cut, **seats nobody**: it records an invitation, the invited man answers it himself with `acceptArbiterInvitation`, and that call takes the same bond from him. The owner can open a door; he cannot put anybody through it and he cannot pay for anybody. ⚠️ **Both facts hold at once, and the one in use is the second: every seat on the chain today was given by the owner — measured 10 November 2026, `getSeatedBy` answers the owner's address for all four — and nobody has yet come through the open door.** ~~Approving and refusing applications~~ left the diamond with the cut of 22-24 September 2026, together with the seat bond — there is no application left to decide, and the selectors answer the zero address (see the roll-call below). Taking back a seat that has nothing on its record is the owner's (and, within limits, a chief arbiter's). Restoring an arbiter who was removed for cause is the owner's alone. |
+| **Suspend or remove an arbiter** | `ArbiterAccountabilityFacet` | `suspendArbiter` stops an arbiter for 72 hours from the press and expires on its own; pressing again starts the 72 hours again, and it takes no written reason. ~~With no limit on presses~~ **until 8 October 2026, when the restart was given a ceiling: three presses against one arbiter (`HAND_SUSPENSION_LIMIT`), and the fourth refuses in words that name the removal door instead. The count returns to zero once the arbiter has stood a week with nobody pressing at him (`HAND_SUSPENSION_SILENCE`), measured from the last press, so a calendar boundary cannot be stood on to double it.** The ceiling is on the hand and not on the chain: the automatic suspension that follows a third judicial mistake is written by the protocol itself and is not counted against it. While it lasts he cannot claim disputes or resign, and a verdict he has already submitted is not executed — ~~the escrow of that deal waits~~ **the escrow of that deal waits, and — ⚠️ WRITTEN 16 October 2026 AND NOT ON THE CHAIN YET, so the sentences that follow describe the repository and not the deployed diamond, which still holds with no end at all — it is to wait no longer than a ceiling: a suspension holds the execution of an ALREADY SUBMITTED verdict only until the finalisation delay plus 72 hours (`SUSPENSION_HOLD_WINDOW`) have run from the SUBMISSION of that verdict — 144 hours in all, whatever the number of presses and whoever pressed. Past that the escrow is released although the suspension still stands and still shuts the other three doors. It is read by the clock, with no button to press. Before it, the hold had no end at all: three presses end to end held a stranger's escrow for nine days, then four days were open while the count of presses went out, and the cycle could be repeated.** `removeArbiterForCause` does not expire: it takes the seat and writes a permanent public accusation against a real address. ~~and forfeits the bond that seat carries into the arbiter vault~~ — **struck through on 8 October 2026 and true again since 10 November 2026, when the bond came back onto the seat: a seat taken from that cut onwards does forfeit it.** ~~The seat bond left the diamond with the cut of 22-24 September 2026; a seat costs nothing to take and therefore carries nothing to lose.~~ **It came back with the cut of 10 November 2026, and this row changed with it.** A seat taken from that cut onwards carries the **entry bond**; the transfer into the arbiter vault is the same line it always was, and it now moves real money again. What it moves for the four seats already sitting is still zero, because the bond is taken at the door and all four came through before the cut: measured 10 November 2026, `getArbiterBond` answers 0 for each of the addresses in `getArbiters()`. **So a removal costs the seat, the public record, and — for every seat taken from 10 November 2026 onwards — the entry bond** — which is also what the section below pricing a removal has to be read against. **Removal is not one button**: it runs only through a `proposeRemoval` that has stood for 48 hours (`REMOVAL_DELAY`) and is executed inside a 14-day window (`PROPOSAL_TTL`), on the same cause code that was served. The section on removal below gives the mechanics, and the section after it prices what a removal costs today. |
 
 > ⚠️ **One hold can still be standing, and it is not a power — it is the residue of one.** A
 > verdict a hand froze BEFORE 9 October 2026 still carries its flag and its timestamp, and the
@@ -75,7 +75,7 @@ the table omits, a row the code does not gate, or a different set of callers or 
 does, when the reason is required.
 
 <!-- role-levers:begin -->
-Counted from the code: **38 functions**. The owner is admitted to 34, the chief arbiter to 5, the DAO address to 7, the fee recipient to 2, the pending owner to 1 and the pending DAO address to 1; 3 take words.
+Counted from the code: **39 functions**. The owner is admitted to 35, the chief arbiter to 5, the DAO address to 7, the fee recipient to 2, the pending owner to 1 and the pending DAO address to 1; 3 take words.
 
 > **40 → 37 on 9 October 2026.** Three doors were removed from the protocol, not renamed or moved: the governance hand over a submitted verdict — overturning one, freezing it and releasing it. They were the only three a DAO address shared with the owner on equal terms, which is why the owner's count and the DAO address's count both fall by three. Nothing took their place: a verdict can now be overturned only by a panel of five arbiters voting on an appeal — three of those five votes overturn it — and the only hold left on a verdict is the appeal's own.
 
@@ -101,8 +101,8 @@ Counted from the code: **38 functions**. The owner is admitted to 34, the chief 
 | 18 | `ArbiterRegistryFacet.activateDAO` | owner | no | The governance switch, and it is manual: refuses until a DAO address has accepted, until the diamond counts at least 1,000 unique active users, and until the court is live on its own three floors — 15 deals open at the moment of the press, 8 disputes finalized on an arbiter's verdict in a row with no governance hand in any of them, and 3 different arbiters among them; one-way. See "The four stages". |
 | 19 | `ArbiterRegistryFacet.setDAOAddress` | owner, DAO address | no | Only *proposes* a DAO address; `acceptDAOAddress` takes office. The owner proposes until governance is active with a DAO address in office; after that only the sitting DAO address may. The zero address is refused. |
 | 20 | `ArbiterRegistryFacet.clearStuckVerdict` | owner | no | Deletes the pending-verdict record of a deal that is no longer `DISPUTED`; nothing else limits it. |
-| 21 | `ArbiterAccountabilityFacet.removeArbiterForCause` | owner, DAO address | unless the chain verifies the cause | Executes a human-laid removal proposal that is at least 48 hours old and under 14 days, on the same cause code. Takes the seat. **It forfeits no money, on the chain since 24 September 2026**: the only field it takes is `arbiterBond`, which is zero for every seat now that the bond is posted per CASE, and a case's bond is not touched by a removal at all. Rewards already earned are not touched either. A cause the chain verifies (at least two judicial mistakes in a row, or a recorded silence) is checked; any other cause needs an evidence digest and words. The caller is the removal authority: the owner until governance is active with a DAO address in office, then only the DAO address. |
-| 22 | `ArbiterRegistryFacet.addArbiter` | owner | no | Seats an arbiter, by name, taking no money and measuring nothing. **The chief lost this door with the cut of 24 September 2026**: it is the one entrance that asks for no record at all, which makes it the widest hole in the corps (why it exists, what the alternative was, and when it closes is under "How an arbiter gets a seat" below), and it was held by a man who had himself been appointed. The cap on his bloc went with the power rather than being kept beside it. Closes for everyone once governance is active with a DAO address in office. |
+| 21 | `ArbiterAccountabilityFacet.removeArbiterForCause` | owner, DAO address | unless the chain verifies the cause | Executes a human-laid removal proposal that is at least 48 hours old and under 14 days, on the same cause code. Takes the seat. **It forfeits whatever stands against the seat**: the only field it takes is `arbiterBond`, and a case's bond is not touched by a removal at all. That field was zero for every seat between the cut of 24 September 2026 and the cut of 10 November 2026, which put the entry bond back on the entrance; it is still zero for the four seats sitting today (measured 10 November 2026), and it holds the entry bond for every seat taken from that cut onwards. Rewards already earned are not touched either. A cause the chain verifies (at least two judicial mistakes in a row, or a recorded silence) is checked; any other cause needs an evidence digest and words. The caller is the removal authority: the owner until governance is active with a DAO address in office, then only the DAO address. |
+| 22 | `ArbiterRegistryFacet.addArbiter` | owner | no | ~~Seats an arbiter, by name~~ — since the cut of **10 November 2026** it **records an invitation** instead, by name, taking no money and measuring nothing; it stands seven days, and the man answers it himself with `acceptArbiterInvitation`, which takes his entry bond and seats him in that one call. **The chief lost this door with the cut of 24 September 2026**: it is the one entrance that asks for no record at all, which makes it the widest hole in the corps (why it exists, what the alternative was, and when it closes is under "How an arbiter gets a seat" below), and it was held by a man who had himself been appointed. The cap on his bloc went with the power rather than being kept beside it. Closes for everyone once governance is active with a DAO address in office. |
 | 23 | `ArbiterAccountabilityFacet.suspendArbiter` | owner, chief arbiter | no | 72 hours from the press. ~~Restartable without limit~~ **until 8 October 2026, when the restart was given a ceiling: three presses against one arbiter, and the fourth refuses in words that name the removal door instead. The count goes back to zero once the arbiter has stood a week with nobody pressing at him — measured from the last press, so a calendar boundary cannot be stood on to double it.** The ceiling is on the HAND and not on the chain: the automatic suspension that follows a third judicial mistake is written by the protocol itself and is not counted here. Blocks new claims and resignation, and ~~holds execution of verdicts he already submitted~~ **holds execution of verdicts he already submitted only up to a ceiling — ⚠️ WRITTEN 16 October 2026, NOT ON THE CHAIN YET: the finalisation delay plus 72 hours from the SUBMISSION of that verdict, 144 hours in all, independent of how many times anybody pressed. The other three doors it shuts have no such ceiling.** The two who hold this door share one count between them. The chief loses it when governance activates; the owner keeps it. |
 | 24 | `ArbiterAccountabilityFacet.liftSuspension` | owner, chief arbiter, DAO address | no | Ends a suspension early. An ordinary one: owner or chief (the chief only until governance activates, the owner always). One left by a removal, or one standing while the chain's own accusation is live: only the removal authority (`removeArbiterForCause`, row 21). |
 | 25 | `ArbiterAccountabilityFacet.proposeRemoval` | owner, chief arbiter, DAO address | unless the chain verifies the cause | Serves the 48-hour notice a removal needs. Owner or chief until governance is active with a DAO address in office, then only the DAO address. A cause the chain does not verify needs an evidence digest and words; a verified cause is checked only when the removal is executed. |
@@ -113,12 +113,13 @@ Counted from the code: **38 functions**. The owner is admitted to 34, the chief 
 | 30 | `FactoryFacet.initFactory` | owner | no | Spent, and no longer routed: `facetAddress()` for its selector is the zero address, so the diamond answers the owner `Diamond: function not found` like anyone else. |
 | 31 | `RegistryFacet.initRegistry` | owner | no | Spent. Still routed, and reverts `AlreadyInitialized` even when called from the owner's address. |
 | 32 | `FactoryFacet.initFeeModel` | owner | no | Spent, and no longer routed either — the zero address again. |
-| 33 | `ArbiterApplicationsFacet.revokeUnprovenSeat` | owner, chief arbiter | always | Takes back a seat that has nothing on its record — no dispute ever taken, no verdict, no mistake, no earnings, no one seated by it, not the chief — while no suspension or removal proposal stands. It refunds whatever bond the seat carries, which is zero for every seat since the bond moved onto the case. The owner may revoke any granted seat, a chief only a seat he granted. Closes once governance is active. |
+| 33 | `ArbiterApplicationsFacet.revokeUnprovenSeat` | owner, chief arbiter | always | Takes back a seat that has nothing on its record — no dispute ever taken, no verdict, no mistake, no earnings, no one seated by it, not the chief — while no suspension or removal proposal stands. It refunds whatever bond the seat carries: zero for the four seats sitting today, and the entry bond for any seat taken since the cut of 10 November 2026. The owner may revoke any granted seat, a chief only a seat he granted. Closes once governance is active. |
 | 34 | `OwnershipFacet.acceptOwnership` | pending owner | no | The named successor takes the key, and with it every power on this page. |
 | 35 | `ArbiterRegistryFacet.acceptDAOAddress` | pending DAO address | no | The proposed DAO address takes office by its own transaction — a raw `msg.sender` check, deliberately not a gasless path. Carries no owner check. |
 | 36 | `ProtocolTreasury.withdrawReserve` | DAO address | no | Pays the reserve to the DAO address, only while the diamond reports at least `getDaoThreshold()` unique active users. Does not ask `isDaoActive()`. |
 | 37 | `Treasury.withdrawReserve` | DAO address | no | The same door on the earlier treasury, whose own bar is 100,000 users. That contract is no longer the fee recipient. |
 | 38 | `FactoryFacet.liftDealCap` | owner | no | Switches the deal cap off for good. Until it is pressed, one deal's escrow is bounded by `max($500, settled volume × min(2%, feeBps/2))`, and a deal's own ceiling is frozen at its birth so a later fee cut cannot shrink the room under a deal already running. After the press nothing in the protocol bounds the size of a deal. Nothing in the repository writes the flag back, so undoing it takes a `diamondCut` — visible in the loupe to anyone watching the proxy — rather than a quiet setter. It has no argument and no counterpart, and a second press is refused by name. **Not reachable through the relayer on purpose** (`script/gasless-sender.allow`): a one-way button should not have a road to it through somebody else's machine and key. |
+| 39 | `ArbiterApplicationsFacet.revokeArbiterInvitation` | owner | no | Takes back an invitation nobody has answered: it deletes the record `addArbiter` (row 22) wrote and raises `ArbiterInvitationRevoked`. New with the cut of **10 November 2026**, selector `0x2693a9d5`. It takes no money and gives none back — an unanswered invitation never held any — and it cannot reach a man who is already seated: answering an invitation deletes the record, so a seated man meets `NoSeatInvitation` here. A seat already taken goes back through `revokeUnprovenSeat` (row 33) or through the removal procedure, and this door is neither. It is the only way to take a press of `addArbiter` back before the seven days run out. Nothing in it closes at the handover — with `addArbiter` shut there is simply no new invitation left for it to withdraw. |
 <!-- role-levers:end -->
 
 **Measured against the chain on 9 October 2026**, block 47 878 598, re-checkable by anyone
@@ -135,15 +136,16 @@ isDaoActive()            → false
 facets()                 → 14 facets, 264 selectors
 ```
 
-- **Rows 1–35 are functions of the diamond's facets**, and so is
-  `liftDealCap` (row 38); `ProtocolTreasury.withdrawReserve` (row 36) and
+- **Rows 1–35 are functions of the diamond's facets**, and so are
+  `liftDealCap` (row 38) and `revokeArbiterInvitation` (row 39);
+  `ProtocolTreasury.withdrawReserve` (row 36) and
   `Treasury.withdrawReserve` (row 37) are separate contracts, and that selector is present in
-  the deployed bytecode of both. `liftDealCap` (row 38) sits after the two outside contracts
-  rather than among its own kind on purpose: the entries here are cited BY NUMBER throughout
-  this page and from elsewhere in the repository, so a new facet function is appended rather
-  than inserted. Renumbering to keep the grouping tidy would silently repoint every one of
-  those citations. The count line above is generated from the code, not counted by hand, which is
-  why it is the one place a total is written down.
+  the deployed bytecode of both. The last two facet functions sit after the two outside
+  contracts rather than among their own kind on purpose: the entries here are cited BY NUMBER
+  throughout this page and from elsewhere in the repository, so a new facet function is
+  appended rather than inserted. Renumbering to keep the grouping tidy would silently repoint
+  every one of those citations. The count line above is generated from the code, not counted by
+  hand, which is why it is the one place a total is written down.
 - Rows 30–32 are the spent initializers, and no two of them fail the same way. Called from the
   owner's address with `eth_call` on 9 October 2026: `RegistryFacet.initRegistry` (row 31) is
   still routed and reverts `AlreadyInitialized()` (`0x0dc149f0`), while
@@ -208,16 +210,66 @@ the upgrade key after handover, and a replaced facet can open any of them again.
 
 ### How an arbiter gets a seat, and what that means for the bond
 
-**A seat costs nothing.** There are two doors, and neither of them takes money.
+> ⚠️ **THE ENTRANCE COSTS THE ENTRY BOND, AND IT HAS DONE ON THE DEPLOYED DIAMOND SINCE
+> 10 NOVEMBER 2026.** The owner's decision of 8 November puts a bond back on the entrance — the
+> same amount at both doors, returned in full when a man lets his seat go — and turns seating by
+> hand into an **invitation** the man answers himself. ~~None of it is on the diamond~~ **— all
+> of it is on the diamond now:** the cut landed on **10 November 2026**, blocks 56 872 216 and
+> 56 872 217, and what is stated below as a reading of the deployed diamond is that rule and no
+> longer the rule of 24 September. The repository's state and the chain's are still kept apart
+> sentence by sentence on this page, because the chain is normally the one behind; on this rule
+> they now say the same thing.
+>
+> Measured on the proxy `0x760F07367888C62f7c2Dfb619A5e534132855ce5` at block 56 873 762 the
+> same day, and re-checkable by anyone with an RPC endpoint:
+> `getApplicationRequirements()` answers `(0, 5, 10000000, 604800)`. The **third** word is the
+> bond, and it was a hard `0` from 22 September until this cut. The fourth is the seven days,
+> which this cut gave a job back: it times the **invitation** now, and the application door it
+> used to time is still gone. The diamond routes **282** selectors over **15** facets, against
+> 277 before the cut. The five new ones are the two doors that answer an invitation (the second
+> of them on a signature), the signature twin of the self-service door, the owner's door to
+> withdraw an invitation he has not had answered, and the read that shows one.
+>
+> ⚠️ **The amount, and what the "ten dollars" in it rests on.** There is one declaration —
+> `ArbiterRegistryStorage.ENTRY_BOND`, ten million units — read by the four doors that charge it
+> and by the form above, so a screen cannot quote a price different from the one a door takes.
+> Ten million units of the token the diamond is configured with is **ten dollars while that
+> token keeps six decimals**, and nothing in the protocol asks the token: the six decimals are a
+> comment beside the constant, not a reading. The token address is written once, by an
+> initializer that refuses a second call, so it moves only through a `diamondCut` — but a token
+> with other decimals would move the price without moving the number, and that is a thing this
+> page would rather state than be asked.
+>
+> What that cut changed, in three lines:
+>
+> * both doors charge the same bond, and it is taken in the **same call** that seats the man —
+>   so there is no way to end up with a payment and no seat, which is the property the free
+>   seat was arranged around and the thing the new bond had to preserve;
+> * `addArbiter` **stops seating anybody**. It records an invitation that stands for seven
+>   days; the man answers with `acceptArbiterInvitation`, which takes his bond and seats him
+>   at once. The owner's reason: a man seated by hand with no bond would sit in the state
+>   "I am seated and I cannot judge", and an invitation removes that state instead of
+>   explaining it;
+> * `resignAsArbiter` hands the bond back in full, and the `ArbiterResigned` log carries the
+>   real number instead of the hard zero it has carried since 22 September 2026.
+>
+> The money an arbiter puts **at risk** is unchanged and is still posted per CASE. What the
+> entrance bond buys is a price on the ADDRESS, which a free door cannot have.
 
-Everything in this section is on the deployed diamond. The cut that retired the seat bond
-and moved the money onto the case landed on **24 September 2026**, and the reading under
-"What the bond is worth today" below was taken after it.
+**On the deployed diamond, a seat costs the entry bond.** There are two entrances to the corps,
+the bond is the same at both because there is one declaration behind them, and neither of them
+can seat a man without taking it — the money and the seat are written in the same call, so there
+is no way to end up with a payment and no seat, and no way to be seated without having paid.
+~~There are two doors there, and neither of them takes money.~~ That held from the cut of
+**24 September 2026**, which retired the seat bond and moved the money onto the case, until the
+cut of **10 November 2026**, which put a bond back on the entrance. Both readings are below, each
+with its date, under "What the bond is worth today".
 
-| Door | Who opens it | What it costs |
-|---|---|---|
-| `ArbiterRegistryFacet.applyAsArbiter` | The applicant alone, no approval step | Nothing. Open on the chain since the cut of 24 September 2026: the `isDaoActive()` gate that stood on its first line is gone. |
-| `ArbiterRegistryFacet.addArbiter` | The owner, and since the same cut nobody else | Nothing |
+| Door | Who opens it | What it costs on the chain since 10 November 2026 | What it cost on the chain before that cut |
+|---|---|---|---|
+| `ArbiterRegistryFacet.applyAsArbiter` | The applicant alone, no approval step | The entry bond, taken in the same call that seats him. A twin next door, `ArbiterApplicationsFacet.applyAsArbiterWithPermit`, carries the allowance in as a signature, because an `approve` is a transaction sent to USDC and cannot be relayed by us for anybody, ever. | Nothing. Open on the chain since the cut of 24 September 2026: the `isDaoActive()` gate that stood on its first line is gone. |
+| `ArbiterRegistryFacet.addArbiter` | The owner, and since the cut of 24 September 2026 nobody else | Nothing, and **it no longer seats anybody.** It records an invitation that stands seven days; the owner pays nothing and seats nobody. | Nothing, and it seated the man on the spot. |
+| `ArbiterApplicationsFacet.acceptArbiterInvitation` | The invited man alone, inside the seven days | The entry bond — the same declaration the self-service door reads — taken in the call that seats him, so an invited seat is a paid seat too. A permit twin carries the allowance in on a signature, which is the door an invited man with no ETH uses. | It did not exist. Measured 10 November 2026: `facetAddress(0x592cb55c)` answers `0x10eE3C98…`, the applications facet; the same call in the same place answers the zero address for `0x6fb78a56`, the application door removed in September, so the reading tells "mounted" from "not routed" rather than assuming it. |
 
 > ⚠️ **THERE WERE THREE, AND THE MIDDLE ONE IS GONE FROM THE CHAIN.** An applicant used
 > to be able to file (`applyForArbiterSeat`) and be seated by the owner or the chief
@@ -263,11 +315,21 @@ what it is.
 **What keeps it honest, and all three are checkable by anyone with an RPC endpoint.** Every
 hand-given seat is marked as such on the chain, permanently: `seatedBy` records who gave it,
 `seatedCountBy` counts them per giver, and an `ArbiterSeated` event is emitted with its last
-argument `false` to distinguish a granted seat from a self-taken one. The door takes no money
-and gives the owner nothing he does not already hold. And it has a named end rather than
-being permanent: `addArbiter` **closes for everyone** — the owner included — the moment
-governance is active with a DAO address in office, which is listed under "When each power
-leaves the key" below.
+argument `false` to distinguish a granted seat from a self-taken one. ⚠️ **Since the cut of
+10 November 2026 all three are written by the invited man's own transaction and not by the
+owner's press**, because the press no longer seats anybody: `addArbiter` records an invitation
+and raises `ArbiterInvited`, and the seat is taken in `acceptArbiterInvitation`, which writes
+those three marks through `ArbiterRegistryStorage.seatOnInvitation` and takes the entry bond
+from the man himself in the same call. `seatedBy` holds the **inviter** and deliberately not
+the caller: the caller on that path is the man, or the forwarder relaying him, and writing
+either would record every invited arbiter as self-seated in the one field the protocol reads
+to tell a vouched-for seat from an earned one. So the owner can open a door; he cannot put
+anybody through it and he cannot pay for anybody. The door takes no money and gives the owner
+nothing he does not already hold. And it has a named end rather than being permanent:
+`addArbiter` **closes for everyone** — the owner included — the moment governance is active
+with a DAO address in office, and the two doors that answer an invitation close on the same
+condition, so an invitation already standing cannot be cashed in after the handover. That is
+listed under "When each power leaves the key" below.
 
 ⚠️ This does not make the door smaller than it is. It remains the one entrance that asks for
 no record whatsoever, and as of today every seat on the chain came through it. It is stated
@@ -287,11 +349,29 @@ The streak fell from ten deals to five in the same change. A removal for cause n
 streak, because the streak is the key to the door and a removal takes the key; experience is
 left alone, because it is a record of work done.
 
-**No function in the whole of `src/` writes a non-zero bond against a seat.** Five of them did
-until this change, and the count is worth keeping in view because it used to be the whole of
-what an arbiter had at risk. The claim is one grep for `arbiterBond` wide over the contracts in
-this mirror, so it can be checked rather than taken on trust; a gate in the working repository
-re-counts it on every build.
+**Exactly four functions in the whole of `src/` write a non-zero bond against a seat, and all
+four are doors a man opens for himself:** `ArbiterRegistryFacet.applyAsArbiter`, and
+`ArbiterApplicationsFacet.applyAsArbiterWithPermit`, `acceptArbiterInvitation` and
+`acceptArbiterInvitationWithPermit`. **No door that SEATS a man writes one** — because there is
+no such door any more: every seat is taken by the man himself, in the same call that takes his
+money.
+
+The count has moved with the rule and is worth keeping in view, because what an arbiter has at
+risk is the one number this whole document is about: **no function at all** from 22 September
+2026 until 8 November, five before that, three before 17 September, four before the 13th, two
+before the 10th. The claim is one grep for `arbiterBond` wide over the contracts in this
+mirror, so it can be checked rather than taken on trust; a gate in the working repository
+re-counts it from the compiler's own syntax tree on every build and names any door that
+appears without being argued for.
+
+> ⚠️ **THIS COUNT WAS ABOUT THE REPOSITORY ALONE UNTIL 10 NOVEMBER 2026, AND NOW HOLDS OF THE
+> DIAMOND TOO.** The cut of that date replaced both arbiter facets whole, so the four doors named
+> above are the four doors the chain routes. What stays true of the four seats already sitting on
+> Base Sepolia is that they hold **zero**: the bond is taken at the door, and all four of them
+> came through before the cut.
+> They each paid 50 USDC under the rule of 8 September 2026 and were each repaid once, by the
+> September cut's own initialiser, when the per-case bond went out. Measured 10 November 2026:
+> `getArbiterBond` answers 0 for each of the four addresses `getArbiters()` returns.
 
 #### What an arbiter now puts at risk, and when
 
@@ -374,10 +454,13 @@ which comes back to him when his appeal carries, so no part of this bond is his.
 — he let it go, a stranger abandoned it for him, the deal timed out — leaves the bond his, and
 he collects it with `ArbiterVaultFacet.withdrawCaseBond`.
 
-**A removal for cause therefore forfeits nothing.** It used to burn 50 USDC into the arbiter
-vault; there is nothing standing to burn. What punishes a bad arbiter is the permanent record,
-the suspension and the loss of the seat — and, while a verdict of his is still open to appeal,
-that case's own bond.
+**A removal for cause forfeits the seat's own bond, and for the seats sitting today that is
+nothing.** It burned 50 USDC into the arbiter vault under the rule of 8 September 2026, then had
+nothing to burn from 24 September; since the cut of **10 November 2026** a seat carries the entry
+bond again, so a removal takes that. The four addresses sitting today hold zero against their
+seats (measured 10 November 2026), so a removal of any of them still burns nothing. What punishes
+a bad arbiter beyond the money is the permanent record, the suspension and the loss of the
+seat — and, while a verdict of his is still open to appeal, that case's own bond.
 
 **Up to three cases at once, and one until he has earned the other two.** A seat holds one
 case while `getCleanVerdicts` reads under three, and three once three of his verdicts have
@@ -553,17 +636,43 @@ facetAddress(0x8e7e21be) → 0x0000…0000        # rejectArbiterApplication, re
 facets()             → 14 facets, 264 selectors
 ```
 
-So **no seat on the chain holds any money, and every seat can act.** Every bond that had been locked behind a seat went back in the cut's own
-transaction. `getBondState` still answers
-— it reads 1 (seated, nothing posted) with a bond of 0 for each of them — and it is a leftover
-reader rather than a state anything depends on; nothing posts a seat bond any more.
+⚠️ **AND THE ENTRANCE HAS A PRICE AGAIN SINCE 10 NOVEMBER 2026.** The reading above keeps its
+date and is no longer the reading of today: the cut of 10 November put the entry bond back on
+both doors and mounted the invitation. Measured on the same proxy on **10 November 2026**, block
+56 873 762:
+
+```
+facets()             → 15 facets, 282 selectors   # 14 and 264 on 9 October; 277 before this cut
+getApplicationRequirements()
+                     → (0, 5, 10000000, 604800)   # the third word is the bond, a hard 0 until this cut.
+                                                  # The fourth is the seven days, and it times the
+                                                  # INVITATION now; the door it used to time is still gone.
+getArbiters()        → the same 4 seats, getArbiterBond → 0 and isArbiterActive → true for each
+getSeatedBy(each)    → the owner's address
+facetAddress(0x592cb55c) → 0x10eE3C98…            # acceptArbiterInvitation, mounted by this cut
+facetAddress(0x6fb78a56) → 0x0000…0000            # applyForArbiterSeat, still removed — and this line is
+                                                  # the control on the one above it: the same call, in the
+                                                  # same place, answering non-zero for a door that is
+                                                  # mounted and zero for a door that is not
+```
+
+So **no seat on the chain holds any money today, and every seat can act** — true of the four
+addresses above and measured again on 10 November 2026, and no longer true of a seat taken from
+here on, which holds the entry bond. Every bond that had been locked behind a seat went back in
+the September cut's own transaction. `getBondState` still answers — it reads 1 (seated, nothing
+posted) with a bond of 0 for each of them — and ~~it is a leftover reader rather than a state
+anything depends on; nothing posts a seat bond any more~~ **four doors post one again since
+10 November 2026, so it is a live reader: the deal clones call this selector, and the cut
+replaced the code behind it.**
 
 **What that does to the price of a corrupt verdict, said plainly.** An arbiter risks the bond
 of the case he is ruling on
 — ~~which an appeal that overturns him draws on first, to the unit~~ **which it takes whole, as it has since 19 October 2026** —
 his seat, his future dispute fees, and a permanent public accusation against his address. What
-he no longer risks is a standing sum: **a removal for cause forfeits nothing.** `_performRemoval`
-takes `arbiterBond`, and that field is zero for everybody.
+he no longer risks is a standing sum **of the size the seat bond used to be**: `_performRemoval`
+takes `arbiterBond`, that field is zero for all four seats sitting today (measured
+10 November 2026), and since the cut of 10 November 2026 it holds the entry bond for every seat
+taken from that date — ten dollars rather than the fifty of the rule of 8 September 2026.
 
 ~~The bond a case carries is either already spent on the appellant's refund or goes home to him
 in full~~ **was replaced by a third ending, and that ending is retired here on 21 October 2026.**
@@ -787,12 +896,17 @@ written here rather than left to be found.
 |---|---|
 | 1,000 unique active users | **about $500.** XP is earned on a settled deal of $10 or more, and a deal has TWO sides, so one deal between two addresses the same person holds counts TWO new "people". The fee is `max(amount × 5%, $1)` = **$1** per deal, and the $10 escrow comes straight back, because the buyer is both sides. 500 deals, $500, and no capital beyond $10 at a time. |
 | 15 deals open | **about $15**, the same way, escrow returning again. They can be the same deals, left open. |
-| 8 clean disputes in a row, 3 different arbiters | **about $18 for the three seats** (below), plus about $4 in dispute fees — 3% of a $10 pot, twelve times. ⚠️ This row said $16 until 16 October 2026 and had been stale since 12 October: it was never updated when the streak began to count distinct clients. It was then written as ~~$25~~ until later on 16 October 2026: $25 primed every client THROUGH the candidate, which a buyer has no reason to do, and the measured figure is $18. |
+| 8 clean disputes in a row, 3 different arbiters | **about $18 for the three seats** (below), plus about $4 in dispute fees — 3% of a $10 pot, twelve times — plus, since 10 November 2026, **three entry bonds standing at once**, which come home when the three seats resign and are therefore capital rather than bill. ⚠️ This row said $16 until 16 October 2026 and had been stale since 12 October: it was never updated when the streak began to count distinct clients. It was then written as ~~$25~~ until later on 16 October 2026: $25 primed every client THROUGH the candidate, which a buyer has no reason to do, and the measured figure is $18. |
 
 **The arbiter corps is open, and that is the honest part.** `applyAsArbiter()` seats the
-caller directly: no approval, no owner, no chief, and — since the bond moved onto the case on
-22 September 2026 — no money. One bar stands in front of it, `MIN_CLEAN_STREAK_TO_REGISTER`,
-and it is **five deals closed clean in a row**.
+caller directly: no approval, no owner, no chief. ~~and — since the bond moved onto the case on
+22 September 2026 — no money~~ **— and, since the cut of 10 November 2026, the entry bond, taken
+in the same call that seats him.** ⚠️ **That bond is a deposit and not a price, and the
+difference decides the numbers below:** `resignAsArbiter` hands it back in full, so it raises the
+money a buyer of seats must have standing at one time and it does not raise his bill. Every price
+in this section is therefore left where it was, with the capital named beside it. One bar stands
+in front of the door, `MIN_CLEAN_STREAK_TO_REGISTER`, and it is **five deals closed clean in a
+row**.
 
 The code used to argue that this bar is the hard one to manufacture, because a clean streak
 only advances on a deal whose COUNTERPARTY already carried standing of its own —
@@ -835,7 +949,8 @@ later. The caution outlives its own case, which is why it stays here: it belongs
 any rule this page describes between the day it is written and the day it is cut — the page is
 exported from the repository, and the repository always runs ahead of the chain.
 
-One seat is therefore about **$10 in fees** and sixteen days of waiting, instead of $6 and
+One seat is therefore about **$10 in fees**, sixteen days of waiting and — since
+10 November 2026 — one entry bond standing while the seat is held, instead of $6 and
 twenty seconds — and the cheap walk does not go through the candidate at all. A counted win is
 paid to BOTH sides of a deal and `_pairKey` is symmetric, so five client wallets closed into a
 RING prime EACH OTHER: each has exactly two neighbours, which is exactly the bar, so five
@@ -855,7 +970,8 @@ is the cheaper walk, and the cheaper walk is what is quoted here. Both numbers a
 measured in the suite that prices a seat, by scenes that close real deals and seed no counter.
 
 That makes the whole switch cost **roughly $540 in fees** (it read $545 earlier on 16 October,
-with the three seats at $25), with every escrow and every case bond coming home.
+with the three seats at $25), with every escrow, every case bond and — since 10 November 2026 —
+every entry bond coming home.
 
 The case bond is real money and it is forfeitable — but only to **the losing party of that
 case**, and `raiseAppeal` admits nobody else (`NotLosingParty`). Somebody holding both sides of

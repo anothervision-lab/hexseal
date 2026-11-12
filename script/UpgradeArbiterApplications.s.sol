@@ -93,6 +93,51 @@ contract UpgradeArbiterApplications is Script {
     string internal constant ARTIFACT_PATH =
         "out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json";
 
+    // ════════════════════════════════════════════════════════════════════
+    //  THE FIVE DOORS THE FACET GAINED AFTER THIS ADD LIST WAS SIGNED
+    //
+    //  Not doors this cut mounts -- those come from the type, in
+    //  `addSelectors()`, so a renamed signature is caught by the compiler.
+    //  These five are the growth ALLOWANCE used by
+    //  `assertAddListCoversTheWholeFacet`: the compiled facet implements them,
+    //  this landed cut's Add list does not, and the Add list is the record of
+    //  what went on chain and is not rewritten. Why each one is here is
+    //  written out at the allowance itself.
+    //
+    //  ⚠️ BY THEIR BYTES AND NOT THROUGH `.selector`, for the reason spelt out
+    //  at the allowance: a `.selector` follows a rename and would keep this
+    //  exception green through a signature change.
+    //
+    //  ⚠️ AND EACH IS SPELT TWICE -- the four bytes, and the signature text
+    //  they must be the keccak of. The two are compared in Solidity by
+    //  `assertTheGrowthAllowanceIsSpeltTheSameTwice()` and again, with no
+    //  compiler at all, by script/check-cut-selector-literals.sh over the text
+    //  of this file. Neither side is derived from the other: both are things a
+    //  person wrote. Taken from `cast sig` on 10 November 2026 and each
+    //  signature read back against its declaration in
+    //  src/facets/ArbiterApplicationsFacet.sol.
+    // ════════════════════════════════════════════════════════════════════
+
+    bytes4 internal constant GAINED_SINCE_SIGNED_ACCEPT = 0x592cb55c;
+    string internal constant GAINED_SINCE_SIGNED_ACCEPT_TEXT =
+        "acceptArbiterInvitation()";
+
+    bytes4 internal constant GAINED_SINCE_SIGNED_ACCEPT_PERMIT = 0x237d29f6;
+    string internal constant GAINED_SINCE_SIGNED_ACCEPT_PERMIT_TEXT =
+        "acceptArbiterInvitationWithPermit(uint256,uint8,bytes32,bytes32)";
+
+    bytes4 internal constant GAINED_SINCE_SIGNED_READ_INVITATION = 0x49fe0690;
+    string internal constant GAINED_SINCE_SIGNED_READ_INVITATION_TEXT =
+        "getArbiterInvitation(address)";
+
+    bytes4 internal constant GAINED_SINCE_SIGNED_APPLY_PERMIT = 0x205d501d;
+    string internal constant GAINED_SINCE_SIGNED_APPLY_PERMIT_TEXT =
+        "applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)";
+
+    bytes4 internal constant GAINED_SINCE_SIGNED_REVOKE_INVITATION = 0x2693a9d5;
+    string internal constant GAINED_SINCE_SIGNED_REVOKE_INVITATION_TEXT =
+        "revokeArbiterInvitation(address)";
+
     /// Named by the census fixture, and compared against by the offline stand
     /// rather than against a literal there. The trap worth catching is not "the
     /// census is stale" but "an old census was reused for a NEW script".
@@ -132,6 +177,11 @@ contract UpgradeArbiterApplications is Script {
                 "upgrade: the signer is not the diamond owner - diamondCut would revert after a paid deploy"
             );
         }
+
+        // The five handwritten literals of the growth allowance against each
+        // other, before anything downstream believes them. Costs no chain read
+        // and no environment, so it stands here rather than after the loupe.
+        assertTheGrowthAllowanceIsSpeltTheSameTwice();
 
         bytes4[] memory addSels = addSelectors();
 
@@ -269,6 +319,43 @@ contract UpgradeArbiterApplications is Script {
     // against a locally built diamond, not only through run() on a live chain.
     // ════════════════════════════════════════════════════════════════════
 
+    /// ⚠️ EVERY HANDWRITTEN FOUR BYTES OF THE GROWTH ALLOWANCE AGAINST THE
+    /// SIGNATURE IT CLAIMS TO BE.
+    ///
+    /// The one check in this file whose expected value comes from neither the
+    /// chain nor the build artifact: keccak of a text a person wrote, against
+    /// four bytes the same person wrote somewhere else. What it catches is a
+    /// copy-paste, and a copy-paste here is the failure that looks most like a
+    /// measurement -- wrong four bytes write off as "gained" a door the facet
+    /// never gained, which both hides a door the cut forgot to mount and lets
+    /// the allowance cover a hole in this very cut.
+    ///
+    /// Public and `pure` so a stand can drive it with no chain and no
+    /// environment. The same comparison over the TEXT of this file, with no
+    /// compiler at all, is script/check-cut-selector-literals.sh.
+    function assertTheGrowthAllowanceIsSpeltTheSameTwice() public pure {
+        require(
+            bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_ACCEPT_TEXT))) == GAINED_SINCE_SIGNED_ACCEPT,
+            "upgrade: GAINED_SINCE_SIGNED_ACCEPT is not the keccak of its text"
+        );
+        require(
+            bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_ACCEPT_PERMIT_TEXT))) == GAINED_SINCE_SIGNED_ACCEPT_PERMIT,
+            "upgrade: GAINED_SINCE_SIGNED_ACCEPT_PERMIT is not the keccak of its text"
+        );
+        require(
+            bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_READ_INVITATION_TEXT))) == GAINED_SINCE_SIGNED_READ_INVITATION,
+            "upgrade: GAINED_SINCE_SIGNED_READ_INVITATION is not the keccak of its text"
+        );
+        require(
+            bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_APPLY_PERMIT_TEXT))) == GAINED_SINCE_SIGNED_APPLY_PERMIT,
+            "upgrade: GAINED_SINCE_SIGNED_APPLY_PERMIT is not the keccak of its text"
+        );
+        require(
+            bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_REVOKE_INVITATION_TEXT))) == GAINED_SINCE_SIGNED_REVOKE_INVITATION,
+            "upgrade: GAINED_SINCE_SIGNED_REVOKE_INVITATION is not the keccak of its text"
+        );
+    }
+
     /// The hand-written Add list against solc's `methodIdentifiers`. Set
     /// equality, not a count: a count agrees on a swap.
     ///
@@ -291,11 +378,109 @@ contract UpgradeArbiterApplications is Script {
             bytes4(0x8e7e21be)  // rejectArbiterApplication(address,string)
         ];
 
+        // ⚠️ AND THE MIRROR OF THAT EXCEPTION SINCE 8 NOVEMBER 2026: FIVE
+        // DOORS THE FACET HAS GAINED. Three of them come from the owner's
+        // entry-bond decision that morning.
+        // `addArbiter` stopped seating anybody, so the seat is taken by the man
+        // who was invited, through his own call:
+        //
+        //   · acceptArbiterInvitation()                                     and
+        //   · acceptArbiterInvitationWithPermit(uint256,uint8,bytes32,bytes32)
+        //     -- the two doors an invited man answers through, the second
+        //     carrying the bond's allowance in on a signature because an
+        //     `approve` is a transaction sent TO USDC, which has never heard of
+        //     our forwarder;
+        //   · getArbiterInvitation(address) -- everything about one standing
+        //     invitation, which a form needs the moment the press stopped being
+        //     the seating.
+        //
+        // ⚠️ AND TWO MORE THE SAME EVENING, FOR ROOM AND NOT FOR MEANING.
+        // `applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)` and
+        // `revokeArbiterInvitation(address)` were compiled on
+        // ArbiterRegistryFacet that morning and moved here that evening: the
+        // registry stood 3 716 bytes under EIP-170 where the appeal split of
+        // 15 October had bought it 4 937, and
+        // test/AppealFacetSplitCut.t.sol::test_BothFacetsFitUnderEip170 said so
+        // by name. The move cost nothing on chain, because the cut that mounts
+        // the five is not signed yet. Their SELECTORS did not change -- a
+        // selector is the signature, not the facet -- so what this allowance
+        // records is that the compiled facet implements two more functions than
+        // the Add list this script signed, exactly like the three above.
+        //
+        // `script/DeployFull.s.sol` fills `sels[13..17]` with the five, and the
+        // compiled facet reads eighteen methodIdentifiers against the thirteen
+        // of 22 September. This script is the RECORD of a cut that went on
+        // chain and its Add list is not rewritten; what moved is the compiled
+        // facet, so the difference is carried here.
+        //
+        // ⚠️ BY THEIR BYTES AND NOT BY `.selector`, although all five exist in
+        // this checkout. A `.selector` follows a rename and would keep this
+        // allowance green through a signature change; four bytes out of
+        // `cast sig`, written by a person, do not move. Held honest in both
+        // directions below: each must really be in the compiled facet, and none
+        // may be in this cut's Add list.
+        //
+        // ⚠️ AND THE TERM IS ADDED TO THE CUT'S SIDE HERE, WHILE THE SIBLING
+        // SCRIPTS NEED NO SUCH TERM AT ALL. It depends on who hands the lists
+        // in. This check has exactly one shape of caller -- `run()` and
+        // test/ArbiterApplicationsUpgrade.t.sol both pass `addSelectors()`,
+        // the signed record, with nothing concated onto it -- so the term
+        // belongs on the cut's side. `UpgradeAppealDepositSoftRefund`,
+        // `UpgradeDisputeVaultDiscount` and `UpgradeGovernanceHandover` were
+        // given the same allowance on 8 November and it was taken back out
+        // again: every one of THEIR callers hands in a side the stand has
+        // already filtered, so the term was a no-op there and their stands'
+        // own growth lists are the whole fix. Measured both ways rather than
+        // reasoned: with the allowance removed, this file's two pre-flight
+        // tests red and theirs do not.
+        //
+        // ⚠️ AND EACH OF THE FIVE IS SPELT TWICE, at the top of this file: the
+        // four bytes, and the signature text they must be the keccak of. Until
+        // 10 November 2026 they were anonymous array slots whose only signature
+        // was a trailing comment -- and two trailing comments in THIS file are
+        // known to disagree with the literal beside them, so a comment is not a
+        // second spelling of anything. The pair is compared in Solidity by
+        // `assertTheGrowthAllowanceIsSpeltTheSameTwice()`, called from `run()`
+        // before this allowance is believed, and over the text of this file by
+        // script/check-cut-selector-literals.sh, which needs no compiler and so
+        // can run before a rehearsal rather than during one.
+        bytes4[5] memory sinceAdded = [
+            GAINED_SINCE_SIGNED_ACCEPT,
+            GAINED_SINCE_SIGNED_ACCEPT_PERMIT,
+            GAINED_SINCE_SIGNED_READ_INVITATION,
+            GAINED_SINCE_SIGNED_APPLY_PERMIT,      // moved from the registry 8 Nov 2026
+            GAINED_SINCE_SIGNED_REVOKE_INVITATION  // moved from the registry 8 Nov 2026
+        ];
+
         require(
-            sels.length == fromArtifact.length + sinceRemoved.length,
+            sels.length + sinceAdded.length == fromArtifact.length + sinceRemoved.length,
             "pre-flight: the Add list and the compiled facet disagree on how many functions it has"
         );
+        // Each door written off as gained really is in the compiled facet, and
+        // none of them is in this cut's own list -- so the allowance can
+        // neither go stale nor cover a hole in this very cut.
+        for (uint256 i = 0; i < sinceAdded.length; i++) {
+            bool present;
+            for (uint256 j = 0; j < fromArtifact.length; j++) {
+                if (sinceAdded[i] == fromArtifact[j]) { present = true; break; }
+            }
+            require(
+                present,
+                "pre-flight: a door written off as gained since this cut is not in the compiled facet - delete the exception"
+            );
+            for (uint256 j = 0; j < sels.length; j++) {
+                require(
+                    sinceAdded[i] != sels[j],
+                    "pre-flight: the growth allowance covers a selector this cut MOUNTS - it would hide a hole in this very cut"
+                );
+            }
+        }
         for (uint256 i = 0; i < fromArtifact.length; i++) {
+            bool isGrowth;
+            for (uint256 j = 0; j < sinceAdded.length; j++) {
+                if (fromArtifact[i] == sinceAdded[j]) { isGrowth = true; break; }
+            }
+            if (isGrowth) continue;
             bool found;
             for (uint256 j = 0; j < sels.length; j++) {
                 if (fromArtifact[i] == sels[j]) { found = true; break; }

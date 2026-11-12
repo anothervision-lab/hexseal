@@ -87,8 +87,65 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     // `rejectArbiterApplication` were removed by the owner's decision. The
     // script's own pre-flight names those three as the whole of the difference,
     // so a fourth would still be red, and so would one of the three coming back.
+    //
+    // ⚠️ AND THEY MET AGAIN ON 8 NOVEMBER 2026, AT SIXTEEN EACH, FOR UNRELATED
+    // REASONS -- which is why the two numbers are still two numbers and not one.
+    // The Add list is SIXTEEN because that is what the cut mounted; the facet
+    // compiles to SIXTEEN because the thirteen of 22 September gained three with
+    // the owner's entry-bond decision: `acceptArbiterInvitation()`,
+    // `acceptArbiterInvitationWithPermit(uint256,uint8,bytes32,bytes32)` and
+    // `getArbiterInvitation(address)` -- `addArbiter` stopped seating anybody,
+    // so a seat is now taken by the man who was invited, through his own call.
+    //
+    // ⚠️ AND THEY PARTED AGAIN THE SAME EVENING, 8 NOVEMBER 2026, AT SIXTEEN
+    // AND EIGHTEEN -- AND IT IS A MOVE, NOT GROWTH. This facet did not gain a
+    // function of its own.
+    // `applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)` and
+    // `revokeArbiterInvitation(address)` were compiled on ArbiterRegistryFacet
+    // that MORNING and moved here that EVENING, because the registry stood
+    // 3 716 bytes under EIP-170 where the appeal split of 15 October had
+    // bought it 4 937, and
+    // test/AppealFacetSplitCut.t.sol::test_BothFacetsFitUnderEip170 asks for
+    // more than 4 096 free and said so by name. Nothing was mounted on chain
+    // by that move -- the cut that carries the five is not signed yet -- and
+    // their SELECTORS did not change, a selector being the signature and not
+    // the facet. So nobody put two new doors on this facet: the registry gave
+    // two away, and `DeployFull.arbiterRegistryFacetSelectors()` went
+    // 29 -> 27 in the same commit.
+    //
+    // ⚠️ WHICH IS WHY ONLY `COMPILED_SELECTORS` MOVES AND `ADDED_SELECTORS`
+    // MUST NOT. They are two numbers of two different natures. The Add list is
+    // the RECORD of a cut that mounted sixteen selectors, and the rest of this
+    // file spends it as that record -- the one element's own length, the routed
+    // count moving by exactly +Add, the rollback taking the same number away
+    // again -- so moving it would rewrite what went on chain. The compiled
+    // count is solc's answer for the facet TODAY, and today is what moved.
+    //
+    // Worked out by hand, because the two sides move independently and the
+    // pre-flight's arithmetic has to hold them apart:
+    //     the Add list, the record of the cut            16
+    //   + the three invitation doors (8 Nov, morning)      3
+    //   + the two moved in from the registry
+    //     (8 Nov, evening): applyAsArbiterWithPermit
+    //     and revokeArbiterInvitation                      2
+    //   ------------------------------------------------- 21
+    //     the compiled facet today                       18
+    //   + the three doors removed since (22 September)     3
+    //   ------------------------------------------------- 21
+    //
+    // ⚠️ EIGHTEEN WRITTEN BY HAND, NEVER DERIVED FROM THE SCRIPT'S OWN
+    // NUMBERS. `UpgradeArbiterApplications.assertAddListCoversTheWholeFacet`
+    // holds a five-door `sinceAdded` and a three-door `sinceRemoved`, so
+    // `ADDED_SELECTORS + 5 - 3` also reads eighteen -- and would agree with
+    // itself through any drift in the very thing being checked. That is the
+    // fourth way to be fooled by a measurement, which this file's header
+    // already records costing a whole cut once.
+    //
+    // Measured on this checkout: `out/ArbiterApplicationsFacet.sol/
+    // ArbiterApplicationsFacet.json` has eighteen `methodIdentifiers`, and
+    // `DeployFull.arbiterApplicationsFacetSelectors()` fills eighteen.
     uint256 constant ADDED_SELECTORS = 16;
-    uint256 constant COMPILED_SELECTORS = 13;
+    uint256 constant COMPILED_SELECTORS = 18;
 
     /// The one selector DealMetadataFacet ever answered, written out here
     /// rather than borrowed from DeployFull.
@@ -296,6 +353,70 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
         assertEq(
             _routed(), CHAIN_ROUTED_BEFORE,
             "the rollback did not restore the pre-cut shape"
+        );
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // THE FACET'S OWN ROOM UNDER EIP-170
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// ⚠️ WHO NOTICES WHEN THIS FACET MOVES. Until 8 November 2026 the answer
+    /// was NOBODY, which is a finding and not an answer. The two ratchets that
+    /// watch facet sizes to the byte --
+    /// test_BothFacetsFitUnderEip170AndTheRegistrysHeadroomIsStated in
+    /// test/UpgradeOctoberBatchRehearsal.t.sol and
+    /// test_EveryContractThisRunDeploysFitsAndItsMarginIsStated in
+    /// test/UpgradeDealCapAndCorpsEntryRehearsal.t.sol -- between them pin six
+    /// facets and the Agreement implementation, and ArbiterApplicationsFacet is
+    /// in neither cut's groups. Both of those files say so in their own notes.
+    /// What was left watching it was `script/check-facet-sizes.sh`, which asks
+    /// only for 512 bytes of room: on this facet that is silence until 24 064
+    /// bytes, sixteen and a half kilobytes from here.
+    ///
+    /// ⚠️ THIS SCENE AND NOT A SECOND FLOOR IN test/AppealFacetSplitCut.t.sol,
+    /// where the registry's `> 4 096` floor lives. That file rehearses ONE cut
+    /// -- the 15 October split of ArbiterRegistryFacet into registry plus
+    /// ArbiterAppealFacet -- and measures `.code.length` off the two addresses
+    /// it actually cut to, which is why the floor is phrased as "the split did
+    /// not leave the registry at least 4 KiB of room". The applications facet
+    /// is not in that split, is never deployed by that stand, and has no room
+    /// that the split bought. A pin for it there would be a number about a
+    /// facet the file does not touch. It belongs here, in the stand for the cut
+    /// that mounts this facet.
+    ///
+    /// ⚠️ AN EQUALITY AND NOT A FLOOR, and the reason is named rather than
+    /// defaulted to. What this scene must catch is THE NEXT THING TO LAND ON
+    /// THIS FACET -- one byte of it, on the run after it lands, by the name of
+    /// this test. A floor would not: the facet has 16 995 bytes of room, so any
+    /// floor worth setting under it is years of growth away and would be green
+    /// through every edit anybody will actually make. The cost of the equality
+    /// is stated too, because it is real: this
+    /// line goes red on growth that is perfectly fine, and the answer is to
+    /// RE-MEASURE AND RE-DATE it, as the two ratchets' own notes do, never to
+    /// loosen it to a `>=`.
+    ///
+    /// The number, by hand, with the relation measured behind it rather than
+    /// reasoned:
+    ///
+    ///   · 7 581 bytes of deployed code, 16 995 free under 24 576. Read off
+    ///     out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json on
+    ///     this checkout, the evening of 8 November 2026.
+    ///   · Before the two doors moved in it was 6 863 bytes, 17 713 free. The
+    ///     move cost this facet 718 bytes.
+    ///   · And the registry, which gave them away, won back only 616 --
+    ///     20 860 -> 20 244 bytes, 3 716 -> 4 332 free, the figure pinned by
+    ///     both ratchets. 718 against 616 is measured on both artifacts and not
+    ///     assumed symmetric: the eligibility rule and the seating moved into
+    ///     `ArbiterRegistryStorage` and `applyAsArbiter` still inlines both, so
+    ///     the registry kept some of the code it handed over.
+    function test_ThisFacetsHeadroomUnderEip170IsStated() public view {
+        uint256 size = vm.getDeployedCode(
+            "out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json"
+        ).length;
+        assertLe(size, 24576, "the applications facet is over the EIP-170 ceiling and cannot be deployed at all");
+        assertEq(
+            24576 - size, 16995,
+            "the applications facet's headroom is not the 16995 bytes measured on the evening of 8 November 2026 - re-measure, re-date and say in the commit what landed on this facet, rather than loosening this line"
         );
     }
 

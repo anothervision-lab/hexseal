@@ -14,6 +14,7 @@ import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
 import {DealCapOff} from "./DealCapOff.sol";
 import {pullAppealLot} from "./AppealLotRig.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {fundEntryBond, inviteAndSeatArbiter, mountAcceptDoor} from "./ArbiterSeatRig.sol";
 
 contract MockUSDC {
     mapping(address => uint256) public balanceOf;
@@ -170,6 +171,12 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     string constant TERMS_HASH = "test terms";
     bytes32 constant DISPUTE_SALT = bytes32("hexseal-test-salt");
     uint256 constant ARBITER_BOND = 50 * 10**6; // must match ArbiterRegistryFacet.ARBITER_BOND
+
+    /// ⚠️ TEN DOLLARS AT EITHER ENTRANCE, AS A LITERAL FIXED BY A PERSON (the
+    /// owner's decision of 8 November 2026). Never read back out of
+    /// `ArbiterRegistryStorage.ENTRY_BOND`: a scene whose expected side comes
+    /// out of the declaration under test is green at any price.
+    uint256 constant ENTRY_BOND = 10_000_000;
     // erc7201:hexseal.reputation.storage — `xp` is field 0 of the struct, so the
     // per-address slot is keccak256(abi.encode(who, REP_BASE)).
     bytes32 constant REP_BASE = 0xa32193c5e38bd2de27c8550f156d709eafdc63aaa4290e5e27473f2ffc097400;
@@ -419,7 +426,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         RegistryFacet(address(diamond)).initRegistry(address(diamond));
         FactoryFacet(address(diamond)).initFactory(address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+
+        // ⚠️ THE ANSWERING DOOR, MOUNTED ON PURPOSE (8 November 2026). This rig
+        // never mounted ArbiterApplicationsFacet at all, and from that day a seat
+        // is taken by the invited man through `acceptArbiterInvitation` — see
+        // ArbiterSeatRig.mountAcceptDoor. Without it every seating below would
+        // die in the diamond's fallback instead of saying what it was measuring.
+        mountAcceptDoor(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arbiter);
         _bondSeat(arbiter);
 
         // ⚠️ THIS SUITE IS NOT ABOUT THE DEAL CEILING. It is the diamond's own
@@ -474,13 +488,13 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         a3 = address(0x31);
         a4 = address(0x32);
         if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(a2)) {
-            ArbiterRegistryFacet(address(diamond)).addArbiter(a2);
+            inviteAndSeatArbiter(address(diamond), a2);
         }
         if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(a3)) {
-            ArbiterRegistryFacet(address(diamond)).addArbiter(a3);
+            inviteAndSeatArbiter(address(diamond), a3);
         }
         if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(a4)) {
-            ArbiterRegistryFacet(address(diamond)).addArbiter(a4);
+            inviteAndSeatArbiter(address(diamond), a4);
         }
         _bondSeat(a2);
         _bondSeat(a3);
@@ -602,11 +616,11 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         a2 = address(0x30);
         a3 = address(0x31);
         a4 = address(0x32);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(a2);
+        inviteAndSeatArbiter(address(diamond), a2);
         _bondSeat(a2);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(a3);
+        inviteAndSeatArbiter(address(diamond), a3);
         _bondSeat(a3);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(a4);
+        inviteAndSeatArbiter(address(diamond), a4);
         _bondSeat(a4);
     }
 
@@ -878,13 +892,19 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
     
+    /// ⚠️ THE REFUSED NUMBER MOVED FROM 7 TO 9 when MENA (7) and Africa (8) were
+    /// admitted. The literal here is the FIRST region past the end, and it is
+    /// typed rather than derived on purpose — a value read back out of the facet
+    /// would agree with whatever the facet says and prove nothing. The door-by-
+    /// door version of this claim, with 7 and 8 asserted as ACCEPTED on all ten
+    /// entrances, lives in test/RegionBoundIsEight.t.sol.
     function testFactoryDeployRevertIfInvalidRegion() public {
         vm.prank(client);
         usdc.approve(address(diamond), 10 * 10**6 + DISPUTE_DOOR_CHARGE);
         vm.prank(address(diamond));
         vm.expectRevert(FactoryFacet.InvalidRegion.selector);
         FactoryFacet(address(diamond)).deployAgreement(
-            client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 7
+            client, executor, arbiter, AMOUNT, DEADLINE, TERMS_HASH, 9
         );
     }
     
@@ -1294,13 +1314,16 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+        fundEntryBond(address(diamond), candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
-        // Zero, and it is the point rather than an omission: a seat costs
-        // nothing since 22 September 2026.
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
+        // ⚠️ TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026. This read `0` with the
+        // words "a seat costs nothing since 22 September 2026", which was the
+        // point of the scene then and is a lie now: the owner put the entrance
+        // price back, and the seat books exactly what the door took.
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ENTRY_BOND);
     }
 
     /// ⚠️ THE PREMISE OF THE PUBLIC DOCUMENT, TURNED ROUND (22 September 2026).
@@ -1343,6 +1366,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+        fundEntryBond(address(diamond), candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1350,15 +1374,23 @@ contract DiamondTest is Test, HandoverReadinessSeed {
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate),
             "the ladder still ends in a wall"
         );
+        // ⚠️ AND THE ENTRANCE TAKES TEN DOLLARS FROM HIM SINCE 8 NOVEMBER 2026.
+        // This asserted `0` under the message "and no bond was taken from him",
+        // which was true from 22 September until the owner put a price back on
+        // the door -- and `fundEntryBond` four lines up is this scene paying it.
+        // What the scene is about is untouched: the ladder of XP and clean
+        // streak ends in a seat and not in a wall, with the DAO asleep. The sum
+        // is named so that a door charging anything OTHER than the entrance
+        // bond reds here.
         assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0,
-            "and no bond was taken from him"
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ENTRY_BOND,
+            "the entrance took something other than the entry bond from him"
         );
     }
 
     function testArbiterDemotedAfterThreeOverturns() public {
         address flakyArbiter = address(uint160(42000));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(flakyArbiter);
+        inviteAndSeatArbiter(address(diamond), flakyArbiter);
         _bondSeat(flakyArbiter);
 
         _disputeAndOverturn(address(uint160(42100)), address(uint160(42200)), flakyArbiter);
@@ -1432,7 +1464,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _growXP(veteranArbiter, true, 10_000, 43500);
         uint256 xpBeforeDemotion = ReputationFacet(address(diamond)).getXP(veteranArbiter);
         assertGe(xpBeforeDemotion, 10_000, "setup: he carries a real record of work");
-        ArbiterRegistryFacet(address(diamond)).addArbiter(veteranArbiter);
+        inviteAndSeatArbiter(address(diamond), veteranArbiter);
         _bondSeat(veteranArbiter);
 
         _disputeAndOverturn(address(uint160(43100)), address(uint160(43200)), veteranArbiter);
@@ -1454,16 +1486,29 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         );
     }
 
-    /// ⚠️ THE SEAT IS FREE SINCE 22 SEPTEMBER 2026, and this scene is the
-    /// inverse of the one it replaces (`testApplyAsArbiterPullsBond`): the door
-    /// must take NOTHING. The money an arbiter puts at risk is posted per CASE,
-    /// inside `claimDispute`.
-    function testApplyAsArbiterTakesNothing() public {
+    /// ⚠️ TURNED ROUND TWICE NOW, AND THE SECOND TURN IS 8 NOVEMBER 2026. It
+    /// began as `testApplyAsArbiterPullsBond`; on 22 September it became
+    /// `testApplyAsArbiterTakesNothing`, asserting `bond == 0` and "not a cent
+    /// left his wallet"; the owner then put ten dollars back on the entrance,
+    /// so the door pulls again. The money an arbiter puts at risk per CASE is a
+    /// different thing and still lives inside `claimDispute`.
+    ///
+    /// ⚠️ AND THIS IS THE SCENE THAT WOULD HAVE LIED RATHER THAN GONE RED. "His
+    /// balance is where it was" is true both when the door charged nothing and
+    /// when a rig minted him exactly what the door charged — so had this file
+    /// been migrated by funding every candidate and leaving the assertions
+    /// alone, this test would have gone on passing with the word "nothing" in
+    /// its name. The wallet is therefore funded HERE, in the scene, before the
+    /// baseline is read, and both sides of the move are measured as
+    /// differences.
+    function testApplyAsArbiterTakesTheEntryBond() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45000));
         _growXP(candidate, true, 3000, 45500);
 
+        fundEntryBond(address(diamond), candidate);
         uint256 balanceBefore = usdc.balanceOf(candidate);
+        uint256 diamondBefore = usdc.balanceOf(address(diamond));
         // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
         // 2026). This suite EARNS its streak with real released deals, which
         // is why it needs a warp and not a seeded field: the run is genuine and
@@ -1476,14 +1521,30 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
-        assertEq(usdc.balanceOf(candidate), balanceBefore, "not a cent left his wallet");
+        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ENTRY_BOND);
+        assertEq(
+            balanceBefore - usdc.balanceOf(candidate), ENTRY_BOND,
+            "the entrance did not take the bond out of HIS wallet"
+        );
+        assertEq(
+            usdc.balanceOf(address(diamond)) - diamondBefore, ENTRY_BOND,
+            "the diamond is not holding the bond it charged"
+        );
     }
 
-    /// And it does not need an allowance either. This is the scene that used to
-    /// be `testApplyAsArbiterRevertsWithoutBondApproval`: an empty allowance was
-    /// the reason the door refused, and now it is not a reason at all.
-    function testApplyAsArbiterNeedsNoAllowance() public {
+    /// And an empty allowance is a reason to refuse again.
+    ///
+    /// ⚠️ TURNED ROUND TWICE, LIKE ITS NEIGHBOUR. It began as
+    /// `testApplyAsArbiterRevertsWithoutBondApproval`; on 22 September it became
+    /// `testApplyAsArbiterNeedsNoAllowance`, because the door had stopped moving
+    /// a token at all. From 8 November it moves one, so an empty allowance is
+    /// once again the reason it says no — and the refusal carries BOTH figures
+    /// (what he granted, what is needed) so a screen can tell him what to do
+    /// about it.
+    ///
+    /// The candidate has the money and no allowance, on purpose: a man who
+    /// could not have paid anyway proves nothing about the allowance check.
+    function testApplyAsArbiterRefusesWithoutAnAllowance() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45100));
         _growXP(candidate, true, 3000, 45600);
@@ -1497,25 +1558,58 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+
+        usdc.mint(candidate, ENTRY_BOND);
+        assertEq(
+            usdc.allowance(candidate, address(diamond)), 0,
+            "setup: he has already approved the diamond, so this measures nothing"
+        );
+
+        // ⚠️ A BASELINE AND NOT `ENTRY_BOND`, and the difference is a measured
+        // one: this candidate is not empty. `_growXP` above earns his streak
+        // with REAL released deals, so he is carrying his pay from them -- a
+        // million dollars and change on this fixture (1_002_810_000_000 at six
+        // decimals, measured 8 November 2026) on top of the ten the line above
+        // minted him. A hard `ENTRY_BOND` here read as "money moved" against a
+        // wallet that had simply been paid for work, which is a red about the
+        // fixture rather than about the door.
+        //
+        // What the line claims is the refusal costing him NOTHING, so it is
+        // written as the difference across the refused call and nothing else.
+        uint256 walletBefore = usdc.balanceOf(candidate);
+
         vm.prank(candidate);
+        vm.expectRevert(abi.encodeWithSelector(
+            ArbiterApplicationsFacet.BondNotApproved.selector, 0, ENTRY_BOND
+        ));
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
-        assertTrue(
+        assertFalse(
             ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate),
-            "a man who granted the diamond nothing is seated all the same"
+            "a man who granted the diamond nothing was seated all the same"
         );
+        assertEq(usdc.balanceOf(candidate), walletBefore, "money moved on a refused call");
     }
 
-    /// ⚠️ REWRITTEN 22 SEPTEMBER 2026, AND THE TITLE IS THE CHANGE. A removal
-    /// used to burn the seat bond into the arbiter bank. There is no seat bond,
-    /// so it burns nothing — and that is a consequence of the owner's decision
-    /// rather than a gap: the sanction for a bad arbiter is the record, the
-    /// suspension and the loss of the seat. The money an arbiter risks belongs
-    /// to a CASE and is drawn only by an appeal that overturns him.
+    /// ⚠️ REWRITTEN TWICE, AND THE SECOND TIME IS 8 NOVEMBER 2026. A removal
+    /// used to burn the seat bond into the arbiter bank; from 22 September there
+    /// was no seat bond and it burned nothing
+    /// (`testDemotionForfeitsNothingBecauseTheSeatCostsNothing`); from the day
+    /// the owner put ten dollars on the entrance there is a bond again, and
+    /// `_performRemoval` forfeits it into the bank by name — "a penalty, not a
+    /// parting", in its own words, and the opposite of `resignAsArbiter`.
+    ///
+    /// ⚠️ THIS IS A CLAIM IN A PUBLIC DOCUMENT AND NOT ONLY A NUMBER HERE.
+    /// docs/DECENTRALIZATION.md has carried "a removal forfeits whatever bond
+    /// the seat holds, and today that is provably zero" since September; the
+    /// second half of that sentence stopped being true with this cut. Flagged
+    /// for the owner rather than edited from a test file.
     ///
     /// The two halves the old scene measured still hold in order: the chain's
-    /// accusation touches no money, and neither does the removal.
-    function testDemotionForfeitsNothingBecauseTheSeatCostsNothing() public {
+    /// ACCUSATION touches no money — a man under a live proposal is still an
+    /// arbiter and the ten dollars are still his — and the REMOVAL is what
+    /// takes them.
+    function testDemotionForfeitsTheEntryBondIntoTheBank() public {
         // ⚠️ THE PANEL IS SEATED BEFORE THE HANDOVER, AND IT HAS TO BE (9 October
         // 2026). The mistake run below reaches its overturns through the appeal
         // panel now, and `addArbiter` answers `SeatingHandedOver` once governance
@@ -1533,6 +1627,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+        fundEntryBond(address(diamond), candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
         // He claims three disputes below, and each claim asks him for that
@@ -1561,8 +1656,8 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // the person is still an arbiter and the money is still theirs — an
         // accusation is not a punishment.
         assertEq(
-            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0,
-            "there is no seat bond for an accusation to touch"
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ENTRY_BOND,
+            "an accusation took his entrance money"
         );
 
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
@@ -1570,18 +1665,24 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         ArbiterAccountabilityFacet(address(diamond)).executeChainRemoval(candidate);
 
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
-        assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
-            "the bank did not grow: a removal forfeits nothing now"
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0,
+            "the removal left the bond standing against a man who is no longer an arbiter"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance() - vaultBefore, ENTRY_BOND,
+            "the bank did not take the forfeited entrance bond"
         );
     }
 
-    /// ⚠️ LEAVING PAYS NOTHING SINCE 22 SEPTEMBER 2026, and that is the whole
-    /// of what changed: a seat holds no money to give back. It still clears the
-    /// status, which is what the door is for, and the man walks out owning
-    /// exactly what he owned walking in.
-    function testResignAsArbiterPaysNothingAndClearsStatus() public {
+    /// ⚠️ LEAVING PAYS THE ENTRANCE BOND BACK AGAIN SINCE 8 NOVEMBER 2026. From
+    /// 22 September this scene was `testResignAsArbiterPaysNothingAndClearsStatus`
+    /// and its whole content was that a seat held no money to give back; the
+    /// owner put ten dollars on the entrance and said they go home when the man
+    /// lets the seat go, so the door both clears the status AND returns the
+    /// money. It is the opposite of a removal, deliberately: a parting, not a
+    /// penalty.
+    function testResignAsArbiterReturnsTheEntryBondAndClearsStatus() public {
         _handGovernanceToDao(address(0xDA0));
         address candidate = address(uint160(45300));
         _growXP(candidate, true, 3000, 45400);
@@ -1594,17 +1695,25 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+        fundEntryBond(address(diamond), candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
         uint256 balanceAfterApply = usdc.balanceOf(candidate);
+        assertEq(
+            ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ENTRY_BOND,
+            "setup: he sat down without paying, so this scene has nothing to give back"
+        );
 
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).resignAsArbiter();
 
         assertFalse(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(candidate));
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0);
-        assertEq(usdc.balanceOf(candidate), balanceAfterApply, "leaving the corps moves no money");
+        assertEq(
+            usdc.balanceOf(candidate) - balanceAfterApply, ENTRY_BOND,
+            "leaving the corps did not give the entrance bond back"
+        );
     }
 
     function testResignAsArbiterRevertsIfNotArbiter() public {
@@ -1704,7 +1813,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterTimeoutDecrementsOpenClaimCount() public {
         address flakyArbiter = address(uint160(46300));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(flakyArbiter);
+        inviteAndSeatArbiter(address(diamond), flakyArbiter);
         _bondSeat(flakyArbiter);
 
         _disputeAndArbiterTimeout(address(uint160(46400)), address(uint160(46500)), flakyArbiter, 10_000_000);
@@ -1727,6 +1836,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+        fundEntryBond(address(diamond), candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1769,6 +1879,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // forward here settles nothing else. The rule itself is measured in
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
+        fundEntryBond(address(diamond), candidate);
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1805,7 +1916,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testFinalizedVerdictResetsMistakeStreak() public {
         address recoveringArbiter = address(uint160(44000));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(recoveringArbiter);
+        inviteAndSeatArbiter(address(diamond), recoveringArbiter);
         _bondSeat(recoveringArbiter);
 
         // One overturned verdict — mistake streak becomes 1.
@@ -1965,7 +2076,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testThreeArbiterTimeoutsDemoteTheArbiter() public {
         address flakyArbiter = address(uint160(51000));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(flakyArbiter);
+        inviteAndSeatArbiter(address(diamond), flakyArbiter);
         _bondSeat(flakyArbiter);
 
         _disputeAndArbiterTimeout(address(uint160(51100)), address(uint160(51200)), flakyArbiter, 10_000_000);
@@ -2560,7 +2671,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
     function testArbiterRegistryAddArbiter() public {
         address newArbiter = address(0x10);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(newArbiter);
+        inviteAndSeatArbiter(address(diamond), newArbiter);
         _bondSeat(newArbiter);
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(newArbiter));
         address[] memory list = ArbiterVaultFacet(address(diamond)).getArbiters();
@@ -2603,7 +2714,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         // And the owner's press on the same man goes through, so the refusal is
         // about who pressed and not about the man.
-        ArbiterRegistryFacet(address(diamond)).addArbiter(address(0x21));
+        inviteAndSeatArbiter(address(diamond), address(0x21));
         assertTrue(ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(address(0x21)));
     }
 
@@ -2712,7 +2823,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
 
         // Second arbiter tries to claim the same dispute
         address arbiter2 = address(0x30);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter2);
+        inviteAndSeatArbiter(address(diamond), arbiter2);
         _bondSeat(arbiter2);
         bytes32 commitment2 = keccak256(abi.encodePacked(agreementAddr, arbiter2, DISPUTE_SALT));
         vm.prank(arbiter2);
@@ -4304,7 +4415,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     /// be wrong about.
     function test_AnArbiterTimeoutBooksAMistakeButNoOverturn() public {
         address flaky = address(uint160(51500));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(flaky);
+        inviteAndSeatArbiter(address(diamond), flaky);
         _bondSeat(flaky);
 
         _disputeAndArbiterTimeout(address(0x7401), address(0x7402), flaky, block.timestamp + 30 days);
@@ -4669,10 +4780,14 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
-    /// ⚠️ THERE IS NO SEAT BOND ANY MORE (22 September 2026), so this no
-    /// longer writes `arbiterBond` slot 12 by hand. What a seated arbiter now
-    /// needs is money and an allowance for the bond he posts PER CASE, inside
-    /// `claimDispute`. The name is kept because every rig in this file calls it.
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// HELPER STILL WRITES NO BOND. The entry bond is taken by the seating door
+    /// itself, inside the same transaction as the seat, out of the man's own
+    /// wallet — never by hand into `arbiterBond` from here. What this leaves him
+    /// with is what a seated arbiter still needs on top: money and an allowance
+    /// for the bond each CASE asks for, inside `claimDispute`. Two different
+    /// sums at two different moments, and the name is kept because every scene
+    /// in this file calls it.
     function _bondSeat(address who) internal {
         usdc.mint(who, CASE_BOND_PURSE);
         vm.prank(who);

@@ -30,6 +30,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/ReputationFacet.sol";
 import "../src/Treasury.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {inviteAndSeatArbiter, mountAcceptDoor} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC (a verbatim copy of the one in Extras) ----------
 
@@ -247,7 +248,14 @@ contract TreasuryIntegrationTest is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+
+        // ⚠️ THE ANSWERING DOOR, MOUNTED ON PURPOSE (8 November 2026). This rig
+        // never mounted ArbiterApplicationsFacet at all, and from that day a seat
+        // is taken by the invited man through `acceptArbiterInvitation` — see
+        // ArbiterSeatRig.mountAcceptDoor. Without it every seating below would
+        // die in the diamond's fallback instead of saying what it was measuring.
+        mountAcceptDoor(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arbiter);
     }
 
     // ============================================================

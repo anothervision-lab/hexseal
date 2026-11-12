@@ -301,6 +301,40 @@ contract SVGRenderer is ISVGRenderer {
     // fixes "ASIA/LATAM" and "US/CA" were correct labels for regions that were
     // genuinely shared; they are now distinct regions with distinct fees (see
     // FactoryFacet.getAllFees()), so the label has to tell them apart as well.
+    //
+    // 7 (MENA) and 8 (AFRICA) arrived on 3 November 2026 with
+    // UpgradeRegionMenaAndAfrica.s.sol, which raised the bound in ten doors
+    // across three facets to `region > 8`. Until that day this function
+    // answered "AU" for every number from 6 upward, so a MENA receipt would
+    // have been drawn as Australian. Measured the same day: of the 22 receipts
+    // on record not one carries 7 or 8 (19 in region 1, two in 5, one in 0),
+    // so no picture that exists today moves.
+    //
+    // ── WHY THE FALLTHROUGH STOPPED BEING AUSTRALIA ──────────────────────
+    // The silent "AU" IS the defect, not a special case of it. A label table
+    // whose last line is a country name answers confidently for a number it
+    // has never heard of, and the confident wrong answer is exactly what cost
+    // region 7 its name. So anything past 8 now renders "R" and the number:
+    // R9, R10, R255.
+    //
+    // The bound in the facets refuses 9 today (measured against Base Sepolia
+    // on 3 November 2026: region 8 passes the gate, region 9 answers
+    // InvalidRegion()), so a receipt numbered past 8 cannot be minted and this
+    // branch is unreachable through the product. It exists for the day the
+    // world changes: if a tenth region is ever let through, THE PERSON LOOKING
+    // AT THE RECEIPT SEES IT, with his own eyes, as R9 — rather than reading a
+    // wrong country and having no way to tell. That is the whole point of the
+    // branch, because nothing else here would notice.
+    //
+    // ⚠️ A revert was considered and rejected: `tokenURI` is a `view` that
+    // wallets and marketplaces draw the WHOLE card with, so reverting on one
+    // unknown region would blank the entire receipt instead of one row. A
+    // degraded row beats a blank card.
+    //
+    // These last two paragraphs are the implementer's defaults, written out in
+    // words rather than left to be inferred from the code, because the owner
+    // can overrule either of them with one sentence. The names themselves are
+    // his: decision 266 adds "the Middle Eastern and the African" regions.
     function _regionLabel(uint8 r) internal pure returns (string memory) {
         if (r == 0) return "CIS";
         if (r == 1) return "ASIA";
@@ -308,7 +342,10 @@ contract SVGRenderer is ISVGRenderer {
         if (r == 3) return "US";
         if (r == 4) return "LATAM";
         if (r == 5) return "CA";
-        return "AU";
+        if (r == 6) return "AU";
+        if (r == 7) return "MENA";
+        if (r == 8) return "AFRICA";
+        return string(abi.encodePacked("R", uint256(r).toString()));
     }
 
     function _padId(uint256 id) internal pure returns (string memory) {

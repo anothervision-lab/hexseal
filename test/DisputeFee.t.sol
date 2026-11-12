@@ -17,6 +17,8 @@ import "../src/Agreement.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {ArbiterApplicationsFacet} from "../src/facets/ArbiterApplicationsFacet.sol";
+import {inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -126,11 +128,21 @@ contract DisputeFeeTest is Test {
         // real claim on the dispute instead of passing arbiter_ as an argument (no
         // such argument exists in production, see creditDisputeFee), so the tests
         // now drive the agreement to DISPUTED and genuinely claim it as arbiter.
-        bytes4[] memory arbSels = new bytes4[](4);
+        // ⚠️ 4 -> 5 ON 8 NOVEMBER 2026, AND THE FIFTH IS NOT A DOOR THIS RIG
+        // PRESSES. `mountAcceptDoor` at the end of this setUp routes
+        // `acceptArbiterInvitation`, and that door asks whether the handover
+        // has happened before it writes a seat — the only way one facet can
+        // ask another, `ArbiterRegistryFacet(address(this)).isDaoActive()`, an
+        // external staticcall back into this same diamond. Mounting the accept
+        // door without this read moves the failure one frame inward and leaves
+        // it with the same nameless answer: `Diamond: function not found`,
+        // from inside setUp, taking the whole suite with it.
+        bytes4[] memory arbSels = new bytes4[](5);
         arbSels[0] = ArbiterRegistryFacet.addArbiter.selector;
         arbSels[1] = ArbiterRegistryFacet.commitDisputeClaim.selector;
         arbSels[2] = ArbiterRegistryFacet.claimDispute.selector;
         arbSels[3] = ArbiterRegistryFacet.submitVerdict.selector;
+        arbSels[4] = ArbiterRegistryFacet.isDaoActive.selector;
         bytes4[] memory arbSelsVault = new bytes4[](9);
         arbSelsVault[0] = ArbiterVaultFacet.creditDisputeFee.selector;
         arbSelsVault[1] = ArbiterVaultFacet.getTreasurySlice.selector;
@@ -155,7 +167,25 @@ contract DisputeFeeTest is Test {
         bytes4[] memory accSels = new bytes4[](1);
         accSels[0] = ArbiterAccountabilityFacet.getArbiterReward.selector;
 
-        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](5);
+        // ⚠️ THE ANSWERING DOOR, IN THE CONSTRUCTOR CUT AND NOT THROUGH THE RIG
+        // HELPER (8 November 2026). Since that day `addArbiter` only records an
+        // invitation and the seat is taken by the invited man through
+        // `ArbiterApplicationsFacet.acceptArbiterInvitation`, so a rig that
+        // seats anybody has to route it.
+        //
+        // `ArbiterSeatRig.mountAcceptDoor` would do this by itself, and it was
+        // tried here first: it CANNOT work on this rig, because it asks
+        // `IDiamondLoupe.facetAddress` whether the door is already there and
+        // then presses `diamondCut` — and the header above states, as a design
+        // decision rather than an oversight, that the loupe, the cut facet and
+        // OwnershipFacet are deliberately not mounted here. The helper's own
+        // first call therefore died in the fallback with the same nameless
+        // `Diamond: function not found` the seating would have. Routing the one
+        // selector here keeps that decision intact.
+        bytes4[] memory appSels = new bytes4[](1);
+        appSels[0] = ArbiterApplicationsFacet.acceptArbiterInvitation.selector;
+
+        IDiamondCut.FacetCut[] memory cut = new IDiamondCut.FacetCut[](6);
         cut[0] = IDiamondCut.FacetCut(address(registryFacet), IDiamondCut.FacetCutAction.Add, regSels);
         cut[1] = IDiamondCut.FacetCut(address(factoryFacet),  IDiamondCut.FacetCutAction.Add, facSels);
         cut[2] = IDiamondCut.FacetCut(address(arbiterFacet),  IDiamondCut.FacetCutAction.Add, arbSels);
@@ -163,6 +193,9 @@ contract DisputeFeeTest is Test {
             address(new ArbiterAccountabilityFacet()), IDiamondCut.FacetCutAction.Add, accSels
         );
         cut[4] = IDiamondCut.FacetCut(address(arbiterFacetVault),  IDiamondCut.FacetCutAction.Add, arbSelsVault);
+        cut[5] = IDiamondCut.FacetCut(
+            address(new ArbiterApplicationsFacet()), IDiamondCut.FacetCutAction.Add, appSels
+        );
 
         diamond = new DiamondProxy(owner, cut, address(0), "");
 
@@ -172,6 +205,7 @@ contract DisputeFeeTest is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
+
     }
 
     // ============================================================
@@ -280,7 +314,7 @@ contract DisputeFeeTest is Test {
         Agreement(agreement).raiseDispute();
 
         if (!ArbiterVaultFacet(address(diamond)).isRegisteredArbiter(arb)) {
-            ArbiterRegistryFacet(address(diamond)).addArbiter(arb);
+            inviteAndSeatArbiter(address(diamond), arb);
             _bondSeat(arb);
         }
 
@@ -561,10 +595,14 @@ contract DisputeFeeTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
-    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
-    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
-    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
-    /// name is kept because every scene in this file calls it.
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// HELPER STILL WRITES NO BOND. The entry bond is taken by the seating door
+    /// itself, inside the same transaction as the seat, out of the man's own
+    /// wallet — never by hand into `arbiterBond` from here. What this leaves him
+    /// with is what a seated arbiter still needs on top: money and an allowance
+    /// for the bond each CASE asks for, inside `claimDispute`. Two different
+    /// sums at two different moments, and the name is kept because every scene
+    /// in this file calls it.
     function _bondSeat(address who) internal {
         usdc.mint(who, 1_000_000_000);
         vm.prank(who);

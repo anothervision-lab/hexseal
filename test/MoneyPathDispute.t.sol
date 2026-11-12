@@ -158,6 +158,15 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         //     the top-up       20_000_000 - 10_000_000       = 10_000_000
         //     on the diamond   10_000_000 + 10_000_000       = 20_000_000
         //                                                     + seatBondHeld
+        //                                                     + ENTRY_BOND
+        //
+        // ⚠️ AND A THIRD TEN SINCE 8 NOVEMBER 2026, WHICH IS WHY NONE OF THEM
+        // IS SUMMED. The seat the fixture holds cost its man ten dollars at the
+        // entrance and the diamond still has them, so the sum here is
+        //     20_000_000 + 0 + 10_000_000 = 30_000_000
+        // and the three tens stand for a fee floor, a gap up to the arbiter
+        // floor and the price of a seat. A single literal would go on agreeing
+        // with itself while any two of the three moved against each other.
         //
         // ⚠️ AND THE TWO TENS ARE NAMED SEPARATELY RATHER THAN SUMMED TO
         // 20_000_000, because they are the same figure for different reasons --
@@ -167,7 +176,10 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         uint256 doorCharge = FEE_ON_HUNDRED;
         assertEq(doorCharge, 10_000_000, "arithmetic: the door charge on a $100 pot is not max( the $10 floor, 3% = $3 )");
         assertEq(topUp + doorCharge, RAISED_FLOOR, "arithmetic: the door charge and the top-up do not add to the raised floor");
-        assertEq(usdc.balanceOf(address(diamond)), doorCharge + topUp + seatBondHeld, "the door charge and the top-up do not both sit on the diamond");
+        assertEq(
+            usdc.balanceOf(address(diamond)), doorCharge + topUp + seatBondHeld + ENTRY_BOND,
+            "the door charge and the top-up do not both sit on the diamond"
+        );
         _assertDiamondBalances("after fundDispute");
 
         _claimByArbiter(a);
@@ -215,7 +227,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         // so he can post the bond each CASE asks for, and this deal's bond came
         // home at finalization.
         assertEq(usdc.balanceOf(arbiterAddr) - CASE_BOND_PURSE, RAISED_FLOOR, "arbiter paid the raised floor");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld, "diamond empty but for the arbiter's bond");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond empty but for the arbiter's bond");
         _assertDiamondBalances("after withdrawals");
     }
 
@@ -516,7 +528,7 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         // top-up for it to come off, which is why the floor is raised above.
         assertEq(
             usdc.balanceOf(address(diamond)),
-            47_000_000 + seatBondHeld,
+            47_000_000 + seatBondHeld + ENTRY_BOND,
             "only the vault remains, less the discount it gave and the arbiter's bond"
         );
         assertEq(ArbiterVaultFacet(address(diamond)).getVaultBalance(), 47_000_000);

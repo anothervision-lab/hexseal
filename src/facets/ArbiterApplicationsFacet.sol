@@ -5,8 +5,47 @@ pragma solidity ^0.8.20;
 // HEXSEAL — ArbiterApplicationsFacet.sol
 //
 // What is left of the interim admissions mechanism after the owner's decision
-// of 22 September 2026: the filter that takes back an unproven seat, the two
-// retired bond doors, and the reads a form needs.
+// of 22 September 2026 — the filter that takes back an unproven seat, the two
+// retired bond doors, and the reads a form needs — PLUS, since 8 November 2026,
+// the two doors by which an invited man answers, AND two more that arrived from
+// `ArbiterRegistryFacet` later the same day: `applyAsArbiterWithPermit` and
+// `revokeArbiterInvitation`.
+//
+// ⚠️ THE TWO IMMIGRANTS ARE HERE FOR A REASON THAT IS NOT ABOUT MEANING, AND
+// SAYING SO IS THE POINT. The registry stood 3 716 bytes under EIP-170, where
+// the appeal split of 15 October had bought it 4 937; the entry bond's own
+// doors had spent exactly that room. These two could leave without a single
+// chain write, because the cut that mounts them had not been signed — the
+// chain routed 277 selectors and no entry bond when it was measured. After
+// that cut the same move would have cost a second cut. The full argument, and
+// what travelled with them, is at the two doors and in the notes left where
+// they stood.
+//
+// ⚠️ THAT CUT WAS SIGNED ON 10 NOVEMBER 2026, so the window is shut: the
+// chain now routes 282 selectors over the same fifteen facets, this facet
+// among them with eighteen, and moving a door between facets from here on
+// costs its own cut. The window was used in time — both immigrants went over
+// inside it, at no chain cost. Measured at block 56 880 000.
+//
+// ⚠️ THE NEW DOORS ARE HERE AND NOT BESIDE THE SEAT, and the reason is one
+// number. `addArbiter` stopped seating people on 8 November: it records an
+// invitation, and the man answers with `acceptArbiterInvitation` /
+// `acceptArbiterInvitationWithPermit`, which take his ten-dollar entry bond and
+// seat him in one transaction. An invitation needs a LIFE, the owner's
+// instruction was that no new number about the world be introduced for it, and
+// the number that already has an owner is `APPLICATION_TTL` — declared in this
+// file. A door in the registry would have had to mirror it or reach for it
+// through a mounted selector; the door here reads the declaration. The SEATING
+// travels the other way instead, as `ArbiterRegistryStorage.seatOnInvitation`,
+// because the roster, the graves and the provenance belong to the registry.
+//
+// ⚠️ AND THE TWO RETIRED BOND DOORS STAY RETIRED, which looks like an oversight
+// and is not. `postArbiterBond` / `postArbiterBondWithPermit` existed for a
+// state this design does not have: a man already SEATED who still owes money,
+// or whose standing bond a won appeal had drawn down. The seat and the money
+// now move in one call and nothing sags, so there is nothing for those doors to
+// do. They go on answering `SeatBondRetired` by name, and they come off the
+// diamond when the screens pressing them do.
 //
 // ⚠️ THE DOOR THIS FACET WAS BUILT FOR IS GONE, and the reason is the reason
 // it existed. It was written because `ArbiterRegistryFacet.applyAsArbiter`
@@ -147,14 +186,26 @@ contract ArbiterApplicationsFacet {
     ///   * MIN_CLEAN_STREAK_MIRROR  vs the `need` field the registry itself
     ///                              puts into `InsufficientCleanStreak` when
     ///                              `applyAsArbiter` refuses;
-    ///   * ARBITER_BOND_MIRROR      used to be checked against the USDC a
-    ///                              successful `applyAsArbiter` actually moved.
-    ///                              ⚠️ DEAD SINCE THE SEAT BECAME FREE: that
-    ///                              door moves nothing, `getApplicationRequire-
-    ///                              ments` reports a bond of 0 rather than this
-    ///                              number, and nothing compares against it. It
-    ///                              is kept as the amount the four original
-    ///                              seats paid, not as a price anybody is asked.
+    ///   * ARBITER_BOND_MIRROR      ⚠️ GONE (8 November 2026), AND IT IS NOT
+    ///                              REPLACED BY A NEW MIRROR. It held 50 USDC
+    ///                              and was checked against the USDC a
+    ///                              successful `applyAsArbiter` actually moved;
+    ///                              from 22 September it was checked against
+    ///                              nothing and was kept "as the amount the
+    ///                              four original seats paid". The owner put a
+    ///                              real price back on the entrance that day,
+    ///                              and a dead fifty declared beside a live ten
+    ///                              is not a record — it is a second number
+    ///                              about one thing, which is the exact defect
+    ///                              this whole comment is about. The live one
+    ///                              is `ArbiterRegistryStorage.ENTRY_BOND`,
+    ///                              declared ONCE in the library both facets
+    ///                              import and read from there by the two
+    ///                              accept doors below and by
+    ///                              `getApplicationRequirements` — the same
+    ///                              arrangement `SUSPENSION_WINDOW` has, and
+    ///                              for the same reason: four doors in two
+    ///                              files charge it.
     ///
     /// See test/ArbiterApplications.t.sol, the "mirrors" section. A mirror that
     /// only agreed with a number typed in this same file would be a lock
@@ -171,7 +222,6 @@ contract ArbiterApplicationsFacet {
     /// have been removed — and the pair survives as what a form reads.
     uint256 private constant MIN_XP_MIRROR           = 0;
     uint256 private constant MIN_CLEAN_STREAK_MIRROR = 5;
-    uint256 private constant ARBITER_BOND_MIRROR     = 50_000_000; // 50 USDC, 6 decimals
 
     // ⚠️ `APPEAL_DECIDING_VOTES_MIRROR` STOOD HERE AND IS GONE
     // (22 September 2026). It capped the chief's bloc on the approval door, and
@@ -212,6 +262,26 @@ contract ArbiterApplicationsFacet {
     error ManualAdmissionClosed();
 
     error NotOwnerOrChief();
+
+    /// The owner and nobody else — not the chief, not a seated arbiter.
+    ///
+    /// ⚠️ ARRIVED WITH A DOOR RATHER THAN WITH A NEW RULE (8 November 2026).
+    /// `revokeArbiterInvitation` moved here from `ArbiterRegistryFacet`, where
+    /// it stood under that facet's `onlyOwner` modifier, and this is the same
+    /// refusal under the same name and the same four bytes. It is the FOURTH
+    /// declaration of `NotOwner()` in src/ (FactoryFacet, RegistryFacet,
+    /// TreasuryLinkFacet, ArbiterAccountabilityFacet and ArbiterRegistryFacet
+    /// already carry it) and both relay tables already decode it into words, so
+    /// the man who presses sees a sentence rather than four bytes — which is
+    /// the one thing the revert census asks of a new declaration.
+    ///
+    /// ⚠️ IT IS NOT `NotOwnerOrChief` ABOVE, and the difference is the whole of
+    /// why a second name was worth declaring. Every other administrative door
+    /// in this file lets the chief through until governance is live; taking
+    /// back an offer the OWNER made is the owner's, exactly as it was next
+    /// door. Widening it to the chief would be a new decision, not a move.
+    error NotOwner();
+
     // ⚠️ `ApplicantZeroAddress` STOOD HERE AND IS GONE (22 September 2026),
     // with the two doors that raised it. Deleted rather than kept as a type,
     // unlike the registry's `DAONotActive`: that one HAD been raised on the
@@ -254,6 +324,28 @@ contract ArbiterApplicationsFacet {
     // sentences to show a person, and neither of them is "your transaction
     // failed".
 
+    // ── THESE SIX NAMES SERVE THE ENTRY BOND FROM 8 NOVEMBER 2026 ──────────
+    //
+    // They were written for the SEAT bond and outlived it by six weeks with
+    // nothing raising them. The owner's decision of 8 November put a price back
+    // on the ENTRANCE, and the four doors that charge it raise exactly these
+    // six through `ArbiterRegistryStorage.takeEntryBond`,
+    // `presentEntryBondPermit` and `returnEntryBond` — two of those doors from
+    // the neighbouring facet, which imports this one for the names.
+    //
+    // ⚠️ REUSED RATHER THAN PARALLELED, and the reason is a gate. The entry
+    // bond first declared six new names of its own (`EntryBondNotApproved` and
+    // the rest) and they were deleted before the commit: the pre-commit revert
+    // census (`shared/revertCensus.mjs`) demands that every error under src/ be
+    // decoded into words by BOTH relay tables or argued for in
+    // `shared/unreachable-reverts.json`. These six ARE in both tables already,
+    // and they already say the right sentences. Six parallel names would have
+    // reached a real person — on `applyAsArbiter` and `resignAsArbiter`, which
+    // the browser has an ABI for — as four raw bytes.
+    //
+    // So every sentence below is still exactly true; what changed is WHICH bond
+    // it is about, and that it is about one again instead of none.
+
     /// The applicant never approved the diamond, or approved less, or spent
     /// the allowance elsewhere in the meantime.
     error BondNotApproved(uint256 allowance, uint256 required);
@@ -286,11 +378,26 @@ contract ArbiterApplicationsFacet {
     /// ⚠️ Since 13 September 2026 NO SEATING DOOR CAN RAISE THIS, and that is
     /// the change rather than an oversight: `addArbiter` writes no bond, and
     /// since 22 September it is the only door that seats by hand at all.
+    ///
+    /// ⚠️ AND NOTHING RAISES IT AT ALL FROM 8 NOVEMBER 2026, including the four
+    /// doors that charge the entry bond — which is worth saying because it looks
+    /// like the obvious guard for them and would be the wrong one. "Posted
+    /// twice" is unreachable by construction now: the money and the seat move in
+    /// ONE call, so the second attempt is refused by `AlreadyArbiter` before any
+    /// bond is looked at, and that is the name the man should read. Kept as a
+    /// type, because a refusal already in the chain's history stays decodable.
     error BondAlreadyPosted();
 
-    /// The seat bond is retired (22 September 2026, the owner's decision): a
-    /// seat costs nothing to hold, and the money an arbiter puts at risk is
-    /// posted per CASE, inside `claimDispute`.
+    /// The seat bond is retired (22 September 2026, the owner's decision): the
+    /// money an arbiter puts at risk is posted per CASE, inside `claimDispute`.
+    ///
+    /// ⚠️ STILL THE RIGHT ANSWER AFTER 8 NOVEMBER 2026, when an ENTRANCE price
+    /// came back. What these two doors served was a man who was already seated
+    /// and still owed money — and that state no longer exists in either
+    /// direction: the entry bond is taken in the same call that seats him
+    /// (`acceptArbiterInvitation`, `applyAsArbiter` and their permit twins), and
+    /// nothing draws it down afterwards, so there is never a seat to top up.
+    /// A door that answered "paid" here would be creating that state again.
     ///
     /// ⚠️ THE TWO DOORS REVERT INSTEAD OF BEING UNMOUNTED, by the same
     /// device `setRewardPerDispute` already uses in ArbiterVaultFacet. A
@@ -588,6 +695,49 @@ contract ArbiterApplicationsFacet {
         if (len == 0) revert ReasonRequired();
     }
 
+    // ── THE INVITATION'S TWO REFUSALS, 8 November 2026 ──────────────────────
+    //
+    // ⚠️ ALSO DECLARED IN `ArbiterRegistryFacet`, and the duplication is what
+    // the revert ledger asks for rather than an oversight. A `no-screen-door`
+    // entry in `shared/unreachable-reverts.json` must NAME the doors that can
+    // raise a refusal, and each named door must live in a file that DECLARES
+    // the error. The selector is the signature, so both declarations are the
+    // same four bytes; for a `()` error there is nothing that can drift, and
+    // for the other the argument list is held identical by the ledger itself,
+    // which compares `declaredIn` against src/ exactly.
+    //
+    // ⚠️ AND SINCE LATE ON 8 NOVEMBER 2026 EVERY DOOR THAT RAISES EITHER OF
+    // THEM IS IN THIS FILE. `revokeArbiterInvitation` was the owner's door next
+    // door and moved here with `applyAsArbiterWithPermit`, so the registry's
+    // copies now have no raiser at all — the position `SeatInvitationExpired`
+    // was already in on the day it was written. They stay declared over there
+    // on purpose, because the other half of the invitation story
+    // (`addArbiter`, `ArbiterInvited`, `ArbiterInvitationRevoked`) is still
+    // that facet's, and a refusal decodable from one facet's ABI and not the
+    // other's is four raw bytes to half the readers. The argument is written
+    // out beside those declarations.
+
+    /// Nobody asked him in — `seatInvitations[him].inviter` is the zero
+    /// address. It is also what a man who has already ANSWERED meets if he
+    /// presses twice, because the record is deleted on the answer; that second
+    /// press is caught one line earlier by `AlreadyArbiter`, which is the
+    /// refusal he should actually read.
+    error NoSeatInvitation();
+
+    /// The offer ran out. Carries the moment it expired AND the moment now, so
+    /// a form can say "it ran out on Tuesday" rather than "not allowed", and so
+    /// nobody has to go back to the chain to find out when — one day, about a
+    /// different block.
+    ///
+    /// ⚠️ THE WINDOW IS THE ONE THAT ALREADY HAS AN OWNER: `APPLICATION_TTL`,
+    /// seven days, declared in this file and published by
+    /// `getApplicationWindow()` and `getApplicationRequirements()`. No new
+    /// number about the world was introduced for the invitation, deliberately —
+    /// every number about the world needs somebody who answers for it, and this
+    /// one has had an owner since 24 August 2026. That is also the reason the
+    /// two accept doors are in THIS facet and not beside the seat.
+    error SeatInvitationExpired(uint256 expiredAt, uint256 nowTs);
+
     // ── THE BOUNDARY BETWEEN "FRESH" AND "WORKING", AND WHERE IT IS DRAWN ──
     //
     // The criterion was settled before the mechanism: what matters is what has
@@ -711,6 +861,328 @@ contract ArbiterApplicationsFacet {
         emit ArbiterApplicationWithdrawn(caller);
     }
 
+    // -------- THE INVITED MAN ANSWERS --------
+
+    /// Is there a live offer standing against this man, and may he take it?
+    ///
+    /// ⚠️ THE ORDER OF THE THREE REFUSALS IS PART OF THE ANSWER. The seat
+    /// first, so a man who has already answered is told THAT and not that his
+    /// invitation is missing (it is missing — it was deleted by his own
+    /// answer); then whether anybody asked him; then the clock. The name of a
+    /// refusal is the whole of what he is told, and a name that creates the
+    /// wrong expectation is a defect of its own — the same lesson
+    /// `applyAsArbiter` learned on 12 October 2026.
+    ///
+    /// ⚠️ NO COOLDOWN IS ASKED HERE, AND THAT IS A DECISION WITH A TEST
+    /// HOLDING IT. `requireCooldownPassed` guards every entrance a man opens
+    /// for HIMSELF; the owner's hand has always been exempt, because he
+    /// reverses his own removal with one press and a half-year binding him
+    /// would turn a mistaken removal into a sentence nobody can lift. When one
+    /// door became two, that exemption had to be given to one of the halves on
+    /// purpose: put the cooldown in THIS one and an invited man removed last
+    /// month hits six months of silence, with every scene in the tree still
+    /// green, because nothing in the tree had ever invited a removed arbiter.
+    /// The exemption therefore lives with the INVITATION — the owner's
+    /// judgement — and this door asks nothing about removals at all. Held by
+    /// name:
+    /// test/ArbiterEntryBond.t.sol::test_AnInvitedManInsideHisRemovalCooldownStillTakesTheSeat.
+    ///
+    /// ⚠️ NOR IS SUSPENSION ASKED. The seating routine LIFTS it
+    /// (`liftSuspension = true`, the owner's decision on this seam of
+    /// 16 August 2026), so refusing a suspended man here would make the
+    /// invitation unanswerable by exactly the men the owner most often means to
+    /// ask back.
+    ///
+    /// ⚠️ THE HANDOVER SHUTS THIS DOOR, and the predicate is the TWO-PART one
+    /// that guards `addArbiter` (`ArbiterRegistryFacet._requireSeatingNotHandedOver`)
+    /// and NOT the bare `_requireManualAdmissionOpen` the rest of this facet
+    /// uses. An unanswered invitation is not a seat: once seating has been
+    /// handed over, nobody seats by hand at all, and honouring a press the
+    /// owner made the day before would let him hand the DAO a bloc it did not
+    /// choose. The weaker half of the predicate matters here for the same
+    /// reason it matters there — until a successor is actually named, the owner
+    /// must still be able to fill the corps.
+    ///
+    /// ⚠️ IT IS A SECOND COPY OF THAT PREDICATE, said out loud rather than
+    /// hidden, because the original is `private` in the neighbouring facet and
+    /// a facet cannot call another facet's private body. What stops it drifting
+    /// is a scene that drives BOTH doors under a live handover —
+    /// test/ArbiterEntryBond.t.sol::test_TheHandoverShutsTheInvitationAndItsAnswerTogether.
+    function _requireLiveInvitation(ArbiterRegistryStorage.Data storage d, address who)
+        private
+        view
+    {
+        if (d.isArbiter[who]) revert ArbiterRegistryFacet.AlreadyArbiter();
+
+        ArbiterRegistryStorage.SeatInvitation storage inv = d.seatInvitations[who];
+        if (inv.inviter == address(0)) revert NoSeatInvitation();
+
+        if (_daoIsActive() && d.daoAddress != address(0)) {
+            revert ArbiterRegistryFacet.SeatingHandedOver();
+        }
+
+        // The window is this file's own `APPLICATION_TTL`, read from the
+        // declaration and not mirrored: that is the whole reason the two accept
+        // doors live in this facet rather than beside the seat.
+        uint256 expiresAt = uint256(inv.invitedAt) + APPLICATION_TTL;
+        if (block.timestamp >= expiresAt) {
+            revert SeatInvitationExpired(expiresAt, block.timestamp);
+        }
+    }
+
+    /// @notice Answer the owner's invitation: put down the entry bond and sit.
+    ///
+    /// The second half of the owner's decision of 8 November 2026. `addArbiter`
+    /// no longer seats anybody; it records an offer, and this is the call that
+    /// turns an offer into a seat. ONE transaction takes the money and gives
+    /// the seat, which is the property the whole design is arranged around —
+    /// there is no way to end up with a payment and no seat, and no way to end
+    /// up seated without having paid.
+    ///
+    /// ⚠️ THE ORDER OF THE MONEY AND THE SEAT IS THE UNINTUITIVE ONE, on
+    /// purpose, and the argument is written out once at
+    /// `ArbiterRegistryFacet.applyAsArbiter`: the seat is written first and the
+    /// token is touched LAST, because `transferFrom` hands control to a token
+    /// the owner configures, and a re-entrant one that found the invitation
+    /// still standing could pay twice for one seat. Here it finds the record
+    /// deleted and the man seated, so the inner call refuses and takes the
+    /// whole transaction down.
+    ///
+    /// ⚠️ THE SAME TEN DOLLARS AS THE SELF-SERVICE DOOR, read from
+    /// `ArbiterRegistryStorage.ENTRY_BOND`. The owner's rule is that the two
+    /// entrances ask exactly the same thing, and the only way to keep that true
+    /// is for there to be one declaration — not two agreeing numbers.
+    ///
+    /// Gasless by the sender and not by the allowance: `_msgSender()` means the
+    /// call relays through the `MinimalForwarder`, but an `approve` is a
+    /// transaction sent to USDC, which has never heard of our forwarder. The
+    /// twin below carries the allowance in as a signature, and that is the door
+    /// a man with no ETH actually uses.
+    function acceptArbiterInvitation() external {
+        address caller = _msgSender();
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+
+        _requireLiveInvitation(d, caller);
+
+        // `arbiterBond` is assigned HERE, by name, and not inside a shared
+        // writer — see the warning at `ArbiterRegistryStorage.takeEntryBond`
+        // and the pinned writer set in
+        // `script/check_arbiter_bond_writers.py`.
+        d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
+        ArbiterRegistryStorage.seatOnInvitation(d, caller);
+        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+
+        emit ArbiterRegistryFacet.ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
+    }
+
+    /// @notice The same answer, with the allowance carried in on a signature.
+    ///
+    /// The door an invited man with no ETH uses, and the reason it has to exist
+    /// is not a preference: `approve` is a transaction sent TO USDC, our
+    /// forwarder is trusted by our own contracts and by nothing else, so that
+    /// one step can never be relayed by us, for anybody, ever. The man the
+    /// owner just invited has by definition earned nothing in the protocol, so
+    /// the protocol is not where his ETH comes from either. The whole argument,
+    /// and what the signature does and does not authorise, is at
+    /// `ArbiterRegistryStorage.presentEntryBondPermit`.
+    ///
+    /// ⚠️ THE ARGUMENT SHAPE IS THE RETIRED DOOR'S — `(uint256 deadline,
+    /// uint8 v, bytes32 r, bytes32 s)` — kept deliberately, so that a screen
+    /// which once drove `postArbiterBondWithPermit` needs no new argument
+    /// order. The AMOUNT is not an argument and never was: it is `ENTRY_BOND`,
+    /// so a paper signed for any other number does not verify, and the SIGNER
+    /// is `_msgSender()`, so a paper signed by anybody else is refused by the
+    /// token. Neither refusal rests on a check written here, which is why
+    /// neither can be edited away here.
+    ///
+    /// ⚠️ THE PAPER IS PRESENTED BEFORE THE DOOR DECIDES. A refusal costs him
+    /// nothing — the transaction unwinds, the allowance with it, and USDC's
+    /// nonce with it, so the same signature still works on the next attempt —
+    /// while the reverse order would mean copying the rules above the call and
+    /// re-reading them below it, and the copy that drifted would be the one
+    /// saying yes.
+    function acceptArbiterInvitationWithPermit(
+        uint256 deadline,
+        uint8   v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        address caller = _msgSender();
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+
+        ArbiterRegistryStorage.presentEntryBondPermit(
+            caller, ArbiterRegistryStorage.ENTRY_BOND, deadline, v, r, s
+        );
+
+        _requireLiveInvitation(d, caller);
+
+        d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
+        ArbiterRegistryStorage.seatOnInvitation(d, caller);
+        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+
+        emit ArbiterRegistryFacet.ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
+    }
+
+    // ── THE EARNED ENTRANCE'S SIGNATURE TWIN, MOVED HERE 8 November 2026 ────
+    //
+    // ⚠️ THESE TWO DOORS ARE IMMIGRANTS FROM `ArbiterRegistryFacet` AND THE
+    // MOVE COST NOTHING ON CHAIN, which is the only reason it was done in this
+    // hour rather than later. The cut that mounts them had not been signed:
+    // the chain routed 277 selectors and no entry bond at all when this was
+    // measured, so the pending cut simply named the other facet for the same
+    // four bytes. After that cut it would have cost a SECOND cut and a second
+    // transaction.
+    //
+    // ⚠️ AND IT HAS BEEN SIGNED SINCE 10 NOVEMBER 2026: one `diamondCut`,
+    // block 56 872 217, receipt status 0x1, which Replaced this facet's
+    // thirteen mounted selectors onto 0x10eE3C98…, Added these five, and
+    // Replaced the registry's twenty-seven onto 0x22A0b090…. The chain routes
+    // 282 over fifteen facets as of block 56 880 000 and eighteen of them are
+    // here. The free window is closed; the next door that wants to change
+    // facets pays for its own cut.
+    //
+    // WHY THEY HAD TO LEAVE. `ArbiterRegistryFacet` stood 3 716 bytes under
+    // EIP-170 and the appeal split of 15 October had bought it 4 937: the entry
+    // bond spent exactly the room that split was performed to buy, and
+    // test/AppealFacetSplitCut.t.sol::test_BothFacetsFitUnderEip170 — whose
+    // floor was set "high enough that losing the room this work bought would
+    // red" — said so by name.
+    //
+    // WHY THIS FACET. The twin below is the same shape as
+    // `acceptArbiterInvitationWithPermit` above, line for line, and already
+    // calls the same two library routines; this file also holds the ERC-2771
+    // sender it needs and the six bond refusals it raises.
+    //
+    // ⚠️ THE SELECTORS DID NOT MOVE — 0x205d501d and 0x2693a9d5 are derived
+    // from the signatures and not from the facet. What changed is the address
+    // that answers them.
+    //
+    // ⚠️ AND THE RULES DID NOT GET A SECOND COPY. The eligibility test and the
+    // seating live in `ArbiterRegistryStorage` as `requireSelfEnrolmentEarned`
+    // and `seatSelfEnrolled` — one body, called from `applyAsArbiter` next door
+    // and from the twin below, exactly the device `seatOnInvitation` already
+    // uses. A copy in this file would have been a second set of entrance rules
+    // free to drift, with the half that drifted being the half that says yes.
+
+    /// @notice The earned entrance, with the allowance carried in on a
+    /// signature.
+    ///
+    /// Added 8 November 2026, because the entrance stopped being free and a
+    /// free entrance was the only reason this door did not already exist. The
+    /// whole argument — why `approve` can never be relayed by us, for anybody,
+    /// ever, and why the man at this door is precisely the one without ETH — is
+    /// at `ArbiterRegistryStorage.presentEntryBondPermit`.
+    ///
+    /// ⚠️ IT IS THE TWIN OF `ArbiterRegistryFacet.applyAsArbiter` AND NOT OF
+    /// THE TWO ACCEPT DOORS ABOVE, and the difference is who decided. Those
+    /// answer an offer the owner made; this one is the road in for a man NOBODY
+    /// invited, and the whole of what it asks is
+    /// `ArbiterRegistryStorage.requireSelfEnrolmentEarned` — five clean deals
+    /// with five distinct standing clients, sixteen days of calendar, and no
+    /// live removal cooldown.
+    ///
+    /// ⚠️ THE ARGUMENTS ARE THE PAPER AND NOTHING ELSE: a deadline and a
+    /// signature. The amount is `ENTRY_BOND`, read from the library, so a paper
+    /// signed for any other number does not verify; the payer is
+    /// `_msgSender()`, so a paper signed by somebody else is refused by USDC.
+    /// Neither refusal rests on a check written here, which is why neither can
+    /// be edited away here. The shape is the one `postArbiterBondWithPermit`
+    /// used — `(uint256 deadline, uint8 v, bytes32 r, bytes32 s)` — kept
+    /// deliberately so that a screen that once drove that door needs no new
+    /// argument order.
+    ///
+    /// ⚠️ THE PAPER IS PRESENTED BEFORE THE DOOR DECIDES, and a refusal costs
+    /// the candidate nothing: the transaction unwinds, the allowance with it,
+    /// and USDC's nonce with it, so the same signature still works on the next
+    /// attempt. Presenting it after the checks would mean copying the rules
+    /// above the call and re-reading them below it, and the copy that drifted
+    /// would be the one saying yes.
+    ///
+    /// ⚠️ THE ORDER OF THE SEAT AND THE MONEY IS THE UNINTUITIVE ONE, on
+    /// purpose, and the argument is written out once at
+    /// `ArbiterRegistryFacet.applyAsArbiter`: the seat is written first and the
+    /// token is touched LAST, because a re-entrant token that found the man
+    /// unseated could buy two seats for one entrance.
+    function applyAsArbiterWithPermit(uint256 deadline, uint8 v, bytes32 r, bytes32 s) external {
+        address caller = _msgSender();
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+
+        ArbiterRegistryStorage.presentEntryBondPermit(
+            caller, ArbiterRegistryStorage.ENTRY_BOND, deadline, v, r, s
+        );
+
+        ArbiterRegistryStorage.requireSelfEnrolmentEarned(d, caller);
+
+        // `arbiterBond` is assigned HERE, by name, and not inside a shared
+        // writer — see the warning at `ArbiterRegistryStorage.takeEntryBond`
+        // and the pinned writer set in
+        // `script/check_arbiter_bond_writers.py`.
+        d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
+        ArbiterRegistryStorage.seatSelfEnrolled(d, caller);
+        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+
+        emit ArbiterRegistryFacet.ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
+    }
+
+    /// @notice Take an unanswered invitation back. THE OWNER'S.
+    ///
+    /// ⚠️ THE DOOR IS KEPT BY THE OWNER'S WORD OF 8 NOVEMBER 2026, and
+    /// this paragraph is the RECORD OF THAT DECISION rather than a flag on it.
+    /// It began as an executor's addition — his own decision that day covered
+    /// the invitation and the bond and said nothing about withdrawing an offer
+    /// — so the price of both outcomes, keeping it and striking it out, was put
+    /// to him, and he kept the door. The argument he accepted: without it a
+    /// press cannot be undone AT ALL. An invitation stands for seven days, and
+    /// an owner who mistypes an address, or changes his mind about a man, has
+    /// no way to say so except to wait it out. What was given up for that is
+    /// named in the same record and not left implied: one more door in the
+    /// public surface that only the owner's key can press, and one more place
+    /// to read for anybody taking the protocol apart from outside.
+    ///
+    /// ⚠️ IT IS THEREFORE NOT TO BE STRUCK OUT AS UNATTRIBUTED. The
+    /// decision is kept as a written record rather than as anybody's memory on
+    /// purpose, because this mechanism is not one the owner keeps in his head:
+    /// a flag inviting him to strike the door out would come back round as a
+    /// question nobody could answer the same way twice. Taking the door out
+    /// again is his call and costs one `Remove` in a cut; nothing reads this
+    /// selector but his own hand.
+    ///
+    /// The half of that decision which says the door may not touch a man
+    /// ALREADY SEATED stopped resting on prose the same day. Held by name:
+    /// test/ArbiterEntryBond.t.sol::test_TheWithdrawalDoorRefusesAManWhoIsAlreadySeated.
+    ///
+    /// ⚠️ IT IS NOT A REMOVAL DOOR AND MUST NEVER GROW INTO ONE. It refuses
+    /// anybody who is already seated, by omission rather than by a check: an
+    /// answered invitation has been DELETED, so a seated man has no record here
+    /// and meets `NoSeatInvitation`. A seat already taken is given back through
+    /// `revokeUnprovenSeat` below (nothing earned in it, bond returned) or
+    /// through the removal procedure (an accusation, a 48-hour pause, a right
+    /// of reply), and neither of those is this.
+    ///
+    /// ⚠️ THE OWNER TEST IS WRITTEN INTO THE BODY RATHER THAN WORN AS A
+    /// MODIFIER, and that is the one thing the move changed. Next door it rode
+    /// `ArbiterRegistryFacet.onlyOwner`; this file has no such modifier — every
+    /// administrative door in it is owner-OR-CHIEF, and this one is not — so a
+    /// modifier declared for a single user would be the shape the linter
+    /// already complains about. Two raw `msg.sender` reads instead of one, both
+    /// recorded in `script/gasless-sender.allow`.
+    ///
+    /// Raw `msg.sender` twice, and for the same reason both times: the first
+    /// read IS the authorisation, and the second has to name the same address
+    /// the first one proved. Take the second through `_msgSender()` and a
+    /// forwarder could write anybody it liked into a permanent record while the
+    /// decision was the owner's — the rule written out at
+    /// `ArbiterRegistryFacet.addArbiter`.
+    function revokeArbiterInvitation(address arbiter) external {
+        if (msg.sender != OwnershipLib.contractOwner()) revert NotOwner();
+
+        ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
+        if (d.seatInvitations[arbiter].inviter == address(0)) revert NoSeatInvitation();
+
+        delete d.seatInvitations[arbiter];
+        emit ArbiterRegistryFacet.ArbiterInvitationRevoked(arbiter, msg.sender);
+    }
+
     // -------- OWNER / CHIEF: TAKE BACK AN UNPROVEN SEAT --------
 
     /// @notice Take back a granted seat that nothing has been earned in. No
@@ -726,14 +1198,21 @@ contract ArbiterApplicationsFacet {
     /// not need one. With no accusation left behind, nothing is stolen and nobody
     /// is cheated -- plainly a filter.
     ///
-    /// ⚠️ WHAT IT IS FOR HAS NARROWED, AND IT IS WORTH SAYING OUT LOUD
-    /// (22 September 2026). It was written when a seat was created by two doors
-    /// and carried a 50 USDC bond; there is one door now, it is the owner's, and
-    /// it carries no money — so the `bondReturned` branch below can only ever
-    /// refund a seat bond posted before the per-case cut, of which there are
-    /// none left. What remains is the owner taking back a seat he granted by
-    /// hand before anything was earned in it, which is still a real thing to
-    /// want and still the only alternative to accusing a man of something.
+    /// ⚠️ WHAT IT IS FOR NARROWED ON 22 SEPTEMBER 2026 AND WIDENED BACK ON
+    /// 8 NOVEMBER, AND BOTH HALVES ARE WORTH SAYING OUT LOUD. It was written
+    /// when a seat was created by two doors and carried a 50 USDC bond; from
+    /// 22 September there was one door, it was the owner's, and it carried no
+    /// money, so the `bondReturned` branch below could only refund a seat bond
+    /// posted before the per-case cut, of which there were none left — dead
+    /// code kept for the record.
+    ///
+    /// It is live code again. Since 8 November 2026 a seat is taken by a man
+    /// ANSWERING the owner's invitation and putting ten dollars down, so a seat
+    /// the owner takes back before anything was earned in it holds real money,
+    /// and this door is where it goes home. Nothing in the branch changed; what
+    /// changed is that `arbiterBond` is non-zero for the seats it reaches. The
+    /// direction is the one the whole design turns on: a filter returns the
+    /// money, an accusation forfeits it.
     ///
     /// WHAT IT IS NOT. It is not a second removal door and it must never grow
     /// into one. The procedure is untouched: every arbiter with a record behind
@@ -1109,8 +1588,49 @@ contract ArbiterApplicationsFacet {
     /// How long an application stands, and how long a refused applicant waits.
     /// One number, and the form is required to read it here rather than keep
     /// its own copy.
+    ///
+    /// ⚠️ IT IS ALSO HOW LONG AN INVITATION STANDS, from 8 November 2026, and
+    /// that is a reuse rather than a coincidence. The invitation needed a
+    /// window; a new number about the world needs somebody who answers for it,
+    /// and this one has had an owner since 24 August 2026. So the accept doors
+    /// read this declaration and no second figure was introduced. What it costs
+    /// is said out loud: shorten this number and you shorten the life of every
+    /// invitation in flight at the same moment, which is why the invitation
+    /// stores its own `invitedAt` and the expiry is computed, never frozen.
     function getApplicationWindow() external pure returns (uint256) {
         return APPLICATION_TTL;
+    }
+
+    /// @notice One read, everything about one standing invitation.
+    ///
+    /// The read a form needs the moment `addArbiter` stopped seating people
+    /// (8 November 2026): an invited man's screen has to be able to say "the
+    /// owner asked you in, you have four days left, it will cost you ten
+    /// dollars" without three round trips and without a copy of the window.
+    ///
+    /// `live` is the whole predicate the accept door applies to the RECORD —
+    /// somebody asked, and the clock has not run out. It deliberately does NOT
+    /// fold in the seat or the handover: a man who has already answered reads
+    /// `inviter == 0` here (the record is deleted by his own answer) and
+    /// `isRegisteredArbiter` true, which are two different sentences to show
+    /// him; and whether seating has been handed over is a fact about the
+    /// protocol rather than about him, answered by `isManualAdmissionOpen`.
+    ///
+    /// `expiresAt` is zero when nobody asked, rather than `APPLICATION_TTL`
+    /// counted from the epoch — a form showing a countdown must not be handed a
+    /// date in 1977.
+    function getArbiterInvitation(address who)
+        external
+        view
+        returns (address inviter, uint256 invitedAt, uint256 expiresAt, bool live)
+    {
+        ArbiterRegistryStorage.SeatInvitation storage inv =
+            ArbiterRegistryStorage.data().seatInvitations[who];
+
+        inviter   = inv.inviter;
+        invitedAt = inv.invitedAt;
+        expiresAt = inv.inviter == address(0) ? 0 : uint256(inv.invitedAt) + APPLICATION_TTL;
+        live      = inv.inviter != address(0) && block.timestamp < expiresAt;
     }
 
     /// What the applicant needs before he signs anything. Four numbers in one
@@ -1122,10 +1642,25 @@ contract ArbiterApplicationsFacet {
         pure
         returns (uint256 minXP, uint256 minCleanStreak, uint256 bond, uint256 window)
     {
-        // ⚠️ `bond` IS ZERO FROM 22 SEPTEMBER 2026 and the tuple keeps its
-        // shape: a seat costs nothing, and a form that reads this number now
-        // reads the truth instead of a price nobody charges.
-        return (MIN_XP_MIRROR, MIN_CLEAN_STREAK_MIRROR, 0, APPLICATION_TTL);
+        // ⚠️ `bond` STOPPED BEING A HARD ZERO ON 8 NOVEMBER 2026, and the
+        // tuple keeps its shape. From 22 September it returned a literal `0`
+        // because a seat cost nothing — true then, a lie from the moment the
+        // owner put ten dollars back on the entrance. It is the DECLARATION
+        // that is returned, not a figure typed here: one number, read by the
+        // four doors that charge it and by this form, so a screen that prints
+        // it cannot print a price different from the one the door takes.
+        //
+        // ⚠️ IT IS THE NORM AND NOT WHAT ANY ONE MAN OWES. What a particular
+        // address has standing is `getBondState(addr)`, second return value.
+        // The two were the same question while the only way to hold a bond was
+        // to pay this exact amount, and they part company for the four seats on
+        // Base Sepolia that hold zero under an older rule.
+        return (
+            MIN_XP_MIRROR,
+            MIN_CLEAN_STREAK_MIRROR,
+            ArbiterRegistryStorage.ENTRY_BOND,
+            APPLICATION_TTL
+        );
     }
 
     /// @notice May this address act as an arbiter right now — seat AND bond.
@@ -1139,18 +1674,22 @@ contract ArbiterApplicationsFacet {
     ///
     /// ⚠️ SUSPENSION IS DELIBERATELY NOT FOLDED IN. It is a separate state with
     /// its own expiry and its own read (`ArbiterAccountabilityFacet.isSuspended`),
-    /// and merging them would leave a form unable to tell "post 50 USDC" from
-    /// "wait 72 hours" — two different sentences to show a person.
+    /// and merging them would leave a form unable to tell "you are not in the
+    /// corps" from "wait 72 hours" — two different sentences to show a person.
     ///
     /// How much to post is `getApplicationRequirements()`, third return value:
     /// the same number this facet charges, so a form need keep no copy of it.
     function isArbiterActive(address addr) external view returns (bool) {
-        // ⚠️ THE BOND HALF IS GONE (22 September 2026): a seat is free to hold
-        // and the money is posted per case. What is left is the seat, which is
-        // what this read now answers — the same thing `isRegisteredArbiter`
-        // answers, and the duplication is kept on purpose: a form built against
-        // this name goes on working, and the two will part company again the
-        // day another condition is added to what "may act" means.
+        // ⚠️ THE BOND HALF IS GONE (22 September 2026) AND DID NOT COME BACK
+        // WITH THE MONEY (8 November 2026). It was a separate question while
+        // "seated" and "paid" were two states a man could be in one at a time;
+        // the entry bond is taken in the same call as the seat, so a seat
+        // implies a paid bond by construction and asking twice would be asking
+        // the same thing. What is left is the seat — the same thing
+        // `isRegisteredArbiter` answers, and the duplication is kept on
+        // purpose: a form built against this name goes on working, and the two
+        // will part company again the day another condition is added to what
+        // "may act" means.
         return ArbiterRegistryStorage.data().isArbiter[addr];
     }
 
@@ -1169,10 +1708,33 @@ contract ArbiterApplicationsFacet {
 
     /// @notice Where a seat's bond stands.
     ///
-    /// ⚠️ IT ANSWERS "NONE" OR "UNPOSTED" AND NOTHING ELSE FROM 22 SEPTEMBER
-    /// 2026, because from that day nothing writes a seat bond. A seat costs
-    /// nothing to hold; the money is posted per CASE, when the arbiter claims
-    /// a dispute, and lives in `ArbiterRegistryStorage.Data.caseBonds`.
+    /// ⚠️⚠️ THE `state` HALF MUST GO ON ANSWERING "NONE" OR "UNPOSTED" ONLY,
+    /// AND THE REASON IS NOT IN THIS FILE. Since 8 November 2026 the second
+    /// return value (`bond`) is non-zero again for every seat that paid its
+    /// entry bond — and the temptation that comes with it is to make `state`
+    /// report WHOLE (3) when the money is there, which would read as tidying up
+    /// and would be the most expensive line in this facet.
+    ///
+    /// EVERY LIVE Agreement CLONE READS THIS SELECTOR, and it reads it to
+    /// decide rule B: `Agreement._holdsArbiterBond` staticcalls
+    /// `getBondState(who)`, decodes the tuple and refuses the man as a PARTY if
+    /// `state >= BOND_STATE_SAGGING` (2). A clone is nailed to its
+    /// implementation for life — no upgrade reaches it — so a `state` of 2 or 3
+    /// would switch rule B back on across every deal that already exists and
+    /// every deal those implementations ever create, silently, with no cut and
+    /// no line of src/ to point at. Rule B in its wide form ("an arbiter may
+    /// never be a party") is exactly what the owner removed on 22 September
+    /// 2026, because it cost a man his living; what stands in its place is
+    /// "he does not trade WHILE HE IS JUDGING" (`MarketPresence.requireNotJudging`).
+    /// Held by name:
+    /// test/ArbiterEntryBond.t.sol::test_ANonZeroEntryBondDoesNotTurnRuleBBackOnForTheClones.
+    ///
+    /// So: `bond` tells the truth about the money, `state` tells the truth about
+    /// the RULE, and they are deliberately not the same question any more.
+    ///
+    /// The money a judge puts at risk per CASE is a third thing again, and it
+    /// is not here either — it lives in
+    /// `ArbiterRegistryStorage.Data.caseBonds`, keyed by the deal.
     ///
     /// ⚠️ IT IS KEPT MOUNTED, AND THAT IS DELIBERATE. Every live Agreement
     /// clone calls this selector to ask rule B ("is this person an arbiter
@@ -1185,10 +1747,16 @@ contract ArbiterApplicationsFacet {
     /// which is exactly what the owner decided on 22 September 2026.
     ///
     /// The two live states are unchanged in meaning: NONE for a man who holds
-    /// no seat, UNPOSTED for a seat. WHOLE and SAGGING are unreachable and
-    /// their constants are kept — an old refusal in the chain's history stays
-    /// readable, and `Agreement.BOND_STATE_SAGGING` is a copy that cannot be
+    /// no seat, UNPOSTED for a seat. WHOLE and SAGGING stay unreachable — see
+    /// the double warning at the top of this docstring, which is the whole
+    /// reason the entry bond did not change this line — and their constants
+    /// are kept so that an old refusal in the chain's history stays readable,
+    /// and because `Agreement.BOND_STATE_SAGGING` is a copy that cannot be
     /// edited on the clones that already exist.
+    ///
+    /// `toPost` stays zero, and from 8 November 2026 that is a fact rather than
+    /// a leftover: there is no such thing as a seat that owes money. A man
+    /// either paid at the door and sat down, or he did neither.
     function getBondState(address addr) external view returns (uint8 state, uint256 bond, uint256 toPost) {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
         bond = d.arbiterBond[addr];

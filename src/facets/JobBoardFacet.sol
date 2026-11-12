@@ -436,7 +436,7 @@ contract JobBoardFacet {
         if (bytes(description).length > 500) revert DescriptionTooLong();
         if (amount == 0) revert ZeroAmount();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         // Rule B, on the PARAMETER and not on the sender: this door is pressed
         // by the relayer and the money is pulled from `client`'s wallet on his
@@ -507,7 +507,7 @@ contract JobBoardFacet {
         if (bytes(description).length > 500) revert DescriptionTooLong();
         if (amount == 0) revert ZeroAmount();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         // Rule B: a seat with a bond behind it does not post work. The address
         // asked is `_msgSender()`, so the answer is about the PERSON on the
@@ -798,7 +798,7 @@ contract JobBoardFacet {
         if (titleLen == 0 || titleLen > 100) revert TitleInvalid();
         if (bytes(description).length > 500) revert DescriptionTooLong();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         // --- Effects ---
         job.title        = title;

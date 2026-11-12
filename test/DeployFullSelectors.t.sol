@@ -872,7 +872,96 @@ contract DeployFullSelectorsTest is Test {
         // `_pendingCut()`, and the cut that lands them needs ONE group: `Add`.
         // The chain's own count was last measured on 20 October 2026 against
         // 0x760F0736…; nothing here re-reads it.
-        assertEq(totalRouted, 277, "diamond should route exactly 277 selectors total");
+        //
+        // ⚠️ THOSE THREE LANDED ON 21 OCTOBER 2026 and the chain went to 277,
+        // which the paragraph above could not know and this one records: the
+        // five of script/UpgradeFlatPrices.s.sol arrived in one `Add` group at
+        // block 48 399 912 and the census beside the sibling file was re-read
+        // at fifteen facets and 277 selectors. The two figures agreed exactly
+        // from that day until the one below.
+        //
+        // ⚠️ 277 -> 282 ON 8 NOVEMBER 2026, AND ONLY THE TREE SIDE MOVED. The
+        // entrance to the arbiter corps stopped being free (commit 1e896163):
+        // a candidate puts a bond down, and seating by hand became an
+        // INVITATION the man answers himself. Five doors, and ALL FIVE on
+        // ArbiterApplicationsFacet (13 -> 18) since the evening of that day:
+        //
+        //   acceptArbiterInvitation()                     0x592cb55c
+        //   acceptArbiterInvitationWithPermit(uint256,uint8,bytes32,bytes32)
+        //                                                 0x237d29f6
+        //   getArbiterInvitation(address)                 0x49fe0690
+        //   applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)
+        //                                                 0x205d501d
+        //   revokeArbiterInvitation(address)              0x2693a9d5
+        //
+        // ⚠️ IT WAS 3 + 2 UNTIL THAT EVENING: the last two were compiled on
+        // ArbiterRegistryFacet (27 -> 29) and moved to the applications facet,
+        // which went 16 -> 18 while the registry went back to 27. The registry
+        // stood 3 716 bytes under EIP-170 where the appeal split of 15 October
+        // had bought it 4 937, and the entry bond had spent exactly that room.
+        // ⚠️ THE 282 BELOW DID NOT MOVE WITH THEM, and that is the control the
+        // move was checked by: the routing table does not care which facet a
+        // selector sits on, and a selector is derived from the signature rather
+        // than from the facet.
+        //
+        // `script/DeployFull.s.sol` mounts all five, because `addArbiter` keeps
+        // its four bytes on a fresh diamond and seats NOBODY there: without
+        // `acceptArbiterInvitation` an invited arbiter would have no way to
+        // take the seat he was offered, and the entrance would be a door that
+        // opens onto nothing.
+        //
+        // ⚠️ THE LIVE CHAIN ROUTES 277 AND THIS FIGURE IS STILL NOT A
+        // MEASUREMENT OF IT. Measured on Base Sepolia 8 November 2026 over the
+        // public node, block 56 004 625: `facetAddresses()` answered FIFTEEN,
+        // `facets()` summed to 277, and `facetAddress` answered the ZERO
+        // address for each of the five above — while `facetAddress(0x1f931c1c)`
+        // answered the cut facet 0x0A7BfC4F… and `addArbiter(address)`
+        // 0xb538d3bc answered the live registry 0x1f71796D… in the same breath,
+        // so the five zeros are absences and not a read that fails quietly.
+        // All five are named one by one in DeployFullMatchesChain.t.sol
+        // `_pendingCut()`, which is the stand that holds this tree against the
+        // chain; the cut that lands them needs TWO kinds of group, a `Replace`
+        // for each of the two facets' existing selectors and one `Add` for the
+        // five, because the code around them changed and `addArbiter` kept its
+        // selector. This note must be corrected — not deleted — in the same
+        // commit as that cut.
+        //
+        // ⚠️ THOSE FIVE LANDED ON 10 NOVEMBER 2026 and the chain went to 282,
+        // which is the correction the paragraph above asked for, and the first
+        // time since 21 October that this figure is a measurement of the live
+        // diamond again rather than a claim about the tree alone. One
+        // `diamondCut` of exactly the three groups that paragraph predicted —
+        // `Replace` 13 on the applications facet, `Add` 5, `Replace` 27 on the
+        // registry, and no `Remove` group — block 56 872 217, receipt status
+        // 0x1, gasUsed 847 972 on the cut itself.
+        //
+        // Measured on Base Sepolia over the public node at block 56 880 000:
+        // `facetAddresses()` answered FIFTEEN and `facets()` summed to 282, all
+        // 282 distinct, cross-read by `facetFunctionSelectors` over
+        // `facetAddresses()` and agreeing on the order of the groups and the
+        // order inside every group. `facetAddress` answers 0x10eE3C98… — the
+        // NEW applications facet — for each of the five above, where it
+        // answered the zero address two days earlier. ⚠️ The zero that is gone
+        // was controlled the same way the zeros were: at the same block
+        // `facetAddress(0x1f931c1c)` answered 0x0A7BfC4F… and
+        // `addArbiter(address)` 0xb538d3bc answered 0x22A0b090…, the NEW
+        // registry, so the five non-zeros are arrivals and not an instrument
+        // that answers something for everything.
+        //
+        // ⚠️ AND THE 282 BELOW STILL DID NOT MOVE. It did not move when the two
+        // doors changed facet on 8 November and it did not move when the chain
+        // caught up on 10 November, because it is the TREE's count and the tree
+        // has built 282 since the evening of 8 November. The two sides are
+        // equal again, which is the state this stand's sibling
+        // test/DeployFullMatchesChain.t.sol calls the strict case; its
+        // `_pendingCut()` is empty in the same commit as this note.
+        //
+        // ⚠️ The two facet addresses above and below are named from their
+        // DEPLOYED BYTECODE against out/, not from the broadcast receipt
+        // labels — which for this run attach ALL THREE of its transaction
+        // hashes to the wrong transaction bodies, so a reader joining them by
+        // hash reads the diamondCut as a facet deployment.
+        assertEq(totalRouted, 282, "diamond should route exactly 282 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

@@ -70,6 +70,7 @@ import "../script/DeployFull.s.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {pullAppealLot} from "./AppealLotRig.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 contract MockUSDCCleanStreak {
     mapping(address => uint256) public balanceOf;
@@ -196,10 +197,11 @@ contract HandoverCleanStreakTest is Test {
     /// unbonded seat is refused by every arbiter door — so the bond is paid
     /// with real money through the real door.
     function _seat(address who) internal {
-        ArbiterRegistryFacet(address(diamond)).addArbiter(who);
-        // ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026. What a seated arbiter now
-        // needs is money and an allowance for the bond he posts PER CASE, and
-        // that is what this leaves him with.
+        inviteAndSeatArbiter(address(diamond), who);
+        // ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and the
+        // seating line above pays it through the real door. What is added here
+        // is what a seated arbiter still needs on top: money and an allowance
+        // for the bond he posts PER CASE.
         usdc.mint(who, 1_000_000_000);
         vm.prank(who);
         usdc.approve(address(diamond), type(uint256).max);

@@ -56,6 +56,7 @@ contract WrongSuspensionWindowStub {
 
 import {DeployFull} from "../script/DeployFull.s.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {inviteAndSeatArbiter, openTheEntranceOn} from "./ArbiterSeatRig.sol";
 
 /// ⚠️ THE ONE LINE OF run() THIS REHEARSAL REPLACES, AND WHY (16 September
 /// 2026). This cut mounts its whole registry group on ONE address, the shape
@@ -219,6 +220,21 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         sels[21] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
         sels[22] = bytes4(keccak256("settleDisputeFee(bool)"));
         sels[23] = bytes4(keccak256("getHeldDisputeFee(address)"));
+        // ⚠️ AND THE ENTRY BOND'S TWO STOOD ON THIS LIST FOR ONE DAY AND ARE
+        // GONE FROM IT (the evening of 8 NOVEMBER 2026).
+        // `applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)` 0x205d501d
+        // and `revokeArbiterInvitation(address)` 0x2693a9d5 are compiled on
+        // ArbiterApplicationsFacet now, and this list is about the registry
+        // pair's ABI -- registry, vault and appeal artifacts, never the
+        // applications facet -- so a line for either of them here would be
+        // stale by exactly the test that checks this list is not.
+        //
+        // WHY THEY MOVED: ArbiterRegistryFacet stood 3 716 bytes under EIP-170
+        // where the appeal split of 15 October had bought it 4 937, and the
+        // entry bond had spent exactly that room. The move cost nothing on
+        // chain, because the cut that mounts these doors is not signed yet, and
+        // the SELECTORS did not change -- a selector is the signature, not the
+        // facet. Neither is routed by the chain either way.
     }
 
     /// The same thing for the OTHER facet, which until 29 August 2026 had not
@@ -266,6 +282,13 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     /// test_SeatedBySlotOffsetIsProvenByGetter.
     uint256 constant SLOT_SEATED_BY = 25;
     uint256 constant SLOT_SEATED_COUNT_BY = 26;
+
+    /// The two fields the roster IS: `isArbiter` is slot 0 and `arbiterList` is
+    /// slot 1. Not taken on trust either — `_seatArbiterWithoutProvenance` writes
+    /// both and reads them back through the production getters, exactly as
+    /// `_setVaultBalance` does for slot 9.
+    uint256 constant SLOT_IS_ARBITER = 0;
+    uint256 constant SLOT_ARBITER_LIST = 1;
 
     function setUp() public {
         upgrade = new AccountabilityRehearsal();
@@ -1130,16 +1153,70 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         vm.setEnv("DIAMOND_ADDRESS", vm.toString(address(diamond)));
     }
 
-    /// An arbiter in the state of the live chain: registered, but with an EMPTY
-    /// provenance — the seatedBy field did not exist when they were seated. It is
-    /// reproduced by writing raw zeroes over what addArbiter had set.
+    /// An arbiter in the state of the live chain: registered, carrying no entry
+    /// bond, and with an EMPTY provenance — neither `arbiterBond` nor `seatedBy`
+    /// existed when the chain's arbiters were seated. The seat is written
+    /// straight into the two roster fields and then read back through the
+    /// production getters.
+    ///
+    /// ⚠️ IT WENT THROUGH THE REAL DOOR FOR ONE DAY (8 November 2026) AND THAT
+    /// WAS WRONG, FOR A REASON THE BENCH ITSELF PINS. The seating is two
+    /// transactions now, and this bench has neither thing the second one needs:
+    /// its census is the live chain's sixty-four selectors, which do not include
+    /// `acceptArbiterInvitation`, and it never calls `initFactory`, so there is
+    /// no bond token. `ArbiterSeatRig.openTheEntranceOn` supplies both — but the
+    /// first half it supplies by an `Add`, which makes the routing table one
+    /// selector wider than the chain's, and
+    /// `test_RunEndToEndOnLocalDiamond` pins that table at `10 + 64` AFTER
+    /// calling this helper. The bench cannot both walk the new road and stay the
+    /// chain's layout selector for selector, and the layout is what this file
+    /// exists to rehearse a cut against.
+    ///
+    /// ⚠️ AND THE NEW ROAD WAS THE LONGER WAY TO A WORSE STATE. It wrote a
+    /// provenance and a bond and then put the provenance back to nought by hand
+    /// — reconstructing by subtraction a seat the chain simply has — and it had
+    /// to fake a bond token into `FactoryStorage.usdc` on a diamond that mounts
+    /// no Factory at all. Writing the roster reaches the chain's state directly,
+    /// and the helper now does what its name says.
+    ///
+    /// ⚠️ THE OFFSETS ARE NOT TAKEN ON TRUST — both are read back through the
+    /// live getters, the device `_setVaultBalance` below uses for slot 9, so a
+    /// layout that moves reddens this helper by name instead of seating nobody
+    /// and leaving the whole migration bench to search an empty roster. The
+    /// provenance is NOT asserted here: `getSeatedBy` arrives with the cut under
+    /// rehearsal, and every caller runs this before that cut.
+    ///
+    /// A scene that needs a man seated through today's real road calls
+    /// `openTheEntranceOn` and `inviteAndSeatArbiter` itself, next to the rest of
+    /// its wiring, and so says out loud that its own table is one wider.
     function _seatArbiterWithoutProvenance(DiamondProxy diamond, address arb) internal {
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arb);
-        vm.store(address(diamond), keccak256(abi.encode(arb, uint256(ARB_POS) + SLOT_SEATED_BY)), bytes32(0));
+        ArbiterVaultFacet v = ArbiterVaultFacet(address(diamond));
+        uint256 seatedBefore = v.getArbiters().length;
+
+        // isArbiter[arb] = true
         vm.store(
             address(diamond),
-            keccak256(abi.encode(address(this), uint256(ARB_POS) + SLOT_SEATED_COUNT_BY)),
-            bytes32(0)
+            keccak256(abi.encode(arb, uint256(ARB_POS) + SLOT_IS_ARBITER)),
+            bytes32(uint256(1))
+        );
+        // arbiterList.push(arb) — the element first, then the length.
+        bytes32 lengthSlot = bytes32(uint256(ARB_POS) + SLOT_ARBITER_LIST);
+        vm.store(
+            address(diamond),
+            bytes32(uint256(keccak256(abi.encode(lengthSlot))) + seatedBefore),
+            bytes32(uint256(uint160(arb)))
+        );
+        vm.store(address(diamond), lengthSlot, bytes32(seatedBefore + 1));
+
+        address[] memory seated = v.getArbiters();
+        assertEq(
+            seated.length, seatedBefore + 1,
+            "rig: the arbiterList length offset missed - no seat was written"
+        );
+        assertEq(seated[seatedBefore], arb, "rig: the arbiterList data slot missed");
+        assertTrue(
+            v.isRegisteredArbiter(arb),
+            "rig: the isArbiter offset missed - the roster holds a seat the diamond's own door denies"
         );
     }
 
@@ -1461,17 +1538,26 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
     // ════════════════════════════════════════════════════════════════════
 
     /// The seatedBy offset is proved by a round-trip measurement through the PRODUCTION
-    /// getter rather than taken on trust: addArbiter writes the provenance, the getter
-    /// sees it, and a raw write of zero into the same slot puts it out. Were the slot
-    /// the wrong one, _seatArbiterWithoutProvenance would put nothing out, and the whole
-    /// migration bench would be checking an already recorded provenance — that is,
-    /// nothing.
+    /// getter rather than taken on trust: the real road in writes the provenance, the
+    /// getter sees it, and a raw write of zero into the same slot puts it out.
+    ///
+    /// ⚠️ WHAT IT UNDERWRITES CHANGED ON 8 NOVEMBER 2026, and the old sentence here
+    /// is no longer true. It used to read "were the slot the wrong one,
+    /// _seatArbiterWithoutProvenance would put nothing out" — that helper no longer
+    /// writes these two slots at all; it writes the roster and leaves the provenance
+    /// unborn, which is the chain's own state. What this scene still holds up is the
+    /// premise the whole migration bench rests on: that `getSeatedBy` and
+    /// `getSeatedCountBy` read the fields a raw write lands in, so that
+    /// `arbitersMissingProvenance` really can tell an empty seat from a recorded one.
+    /// Were the offsets wrong, it would answer about some other field and the
+    /// migration would be checked against nothing.
     function test_SeatedBySlotOffsetIsProvenByGetter() public {
         DiamondProxy diamond = _deployMinimalDiamond();
         _mountLiveLayout(diamond);
 
         address arb = address(0xA12BE12);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arb);
+        openTheEntranceOn(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arb);
 
         // The provenance getters arrive with this very cut — the cut comes first.
         ArbiterRegistryFacet newReg = new ArbiterRegistryFacet();
@@ -1509,7 +1595,20 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         address blank = address(0xB1A2C);
         address known = address(0xC0FFEE);
         _seatArbiterWithoutProvenance(diamond, blank);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(known); // provenance = address(this)
+        // provenance = address(this): the answer credits the INVITER, not the
+        // address that sent it, which is the whole subject of this file.
+        //
+        // ⚠️ THE REAL ROAD, AND THE DOOR IS OPENED HERE BY NAME. It used to ride
+        // in as a side effect of the helper above; the helper stopped mounting it
+        // on 8 November 2026 so that the benches which only need a SEAT keep the
+        // chain's routing table selector for selector. This scene is the one that
+        // needs a seat with a real provenance on it, so it pays for the door
+        // itself — and from this line on its own table is one selector wider than
+        // Base Sepolia's. Nothing here pins that count, and
+        // `acceptArbiterInvitation` is in neither group of the cut applied below,
+        // so no `Add` collides with it.
+        openTheEntranceOn(address(diamond));
+        inviteAndSeatArbiter(address(diamond), known);
 
         ArbiterRegistryFacet newReg = new ArbiterRegistryFacet();
         ArbiterAccountabilityFacet newAcc = new ArbiterAccountabilityFacet();
@@ -1608,7 +1707,9 @@ contract ArbiterAccountabilityUpgradeTest is Test, ArbiterChainCensus, ArbiterSp
         _mountLiveLayout(diamond);
 
         address arb = address(0xA5EA7ED);
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arb); // provenance = address(this)
+        openTheEntranceOn(address(diamond));
+        // provenance = address(this), for the reason above.
+        inviteAndSeatArbiter(address(diamond), arb);
 
         address ownerAddr = _armRun(diamond);
         upgrade.run();

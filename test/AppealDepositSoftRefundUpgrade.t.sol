@@ -69,6 +69,7 @@ import {UpgradeAppealDepositSoftRefund} from "../script/UpgradeAppealDepositSoft
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterSplitRig} from "./ArbiterSplitRig.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
+import {inviteAndSeatArbiter, openTheEntranceOn} from "./ArbiterSeatRig.sol";
 
 /// A facet standing in for "some other code entirely behind the same selector".
 /// Used to prove the codehash probe is reading the CODE and not merely noticing
@@ -293,6 +294,21 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
         sels[17] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
         sels[18] = bytes4(keccak256("settleDisputeFee(bool)"));
         sels[19] = bytes4(keccak256("getHeldDisputeFee(address)"));
+        // ⚠️ AND THE ENTRY BOND'S TWO STOOD ON THIS LIST FOR ONE DAY AND ARE
+        // GONE FROM IT (the evening of 8 NOVEMBER 2026).
+        // `applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)` 0x205d501d
+        // and `revokeArbiterInvitation(address)` 0x2693a9d5 are compiled on
+        // ArbiterApplicationsFacet now, and this list is about the registry
+        // pair's ABI -- registry, vault and appeal artifacts, never the
+        // applications facet -- so a line for either of them here would be
+        // stale by exactly the test that checks this list is not.
+        //
+        // WHY THEY MOVED: ArbiterRegistryFacet stood 3 716 bytes under EIP-170
+        // where the appeal split of 15 October had bought it 4 937, and the
+        // entry bond had spent exactly that room. The move cost nothing on
+        // chain, because the cut that mounts these doors is not signed yet, and
+        // the SELECTORS did not change -- a selector is the signature, not the
+        // facet. Neither is routed by the chain either way.
     }
 
     /// The compiled pair minus the named growth. Every name must actually be in
@@ -530,8 +546,19 @@ contract AppealDepositSoftRefundUpgradeTest is Test, ArbiterSplitRig {
     /// replace the old one without complaint and read the wrong words from the
     /// same slots.
     function test_TheArbiterStorageReadsTheSameOnBothSidesOfTheCut() public {
-        vm.prank(address(this));
-        ArbiterRegistryFacet(address(diamond)).addArbiter(address(0xA1));
+        // ⚠️ TWO TRANSACTIONS SINCE 8 NOVEMBER 2026, and the SECOND one is the
+        // seating: `addArbiter` records an invitation, the invited man answers
+        // it and sits. The precondition below (`arbiterCount == 1`) is what
+        // makes the continuity claim mean anything, and a bare press would
+        // leave the roster empty and that precondition red.
+        //
+        // ⚠️ AND THE ANSWERING DOOR HAS TO BE PUT BACK ON THIS RIG FIRST. The
+        // diamond here is conformed to the live chain's census, which predates
+        // the selector — so the rig that is a faithful picture of Base Sepolia
+        // is exactly the rig that cannot seat anybody. `openTheEntranceOn` adds
+        // it back, after the conforming and before the cut.
+        openTheEntranceOn(address(diamond));
+        inviteAndSeatArbiter(address(diamond), address(0xA1));
 
         UpgradeAppealDepositSoftRefund.StorageSnapshot memory before_ =
             upgrade.snapshotArbiterStorage(address(diamond));

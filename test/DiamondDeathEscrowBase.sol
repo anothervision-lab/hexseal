@@ -68,6 +68,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/ReputationFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {DealCapOff} from "./DealCapOff.sol";
+import {inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -361,7 +362,7 @@ abstract contract DiamondDeathEscrowBase is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
+        inviteAndSeatArbiter(address(diamond), arbiterAddr);
 
         _postSeatBond(arbiterAddr);
 
@@ -403,15 +404,22 @@ abstract contract DiamondDeathEscrowBase is Test {
     /// stack slot from the via_ir limit, and a fourth memory array there does
     /// not fit.
     function _applicationsSelectors() internal pure returns (bytes4[] memory appSels) {
-        appSels = new bytes4[](3);
+        appSels = new bytes4[](4);
         appSels[0] = ArbiterApplicationsFacet.postArbiterBond.selector;
         appSels[1] = ArbiterApplicationsFacet.isArbiterActive.selector;
         appSels[2] = ArbiterApplicationsFacet.getApplicationRequirements.selector;
+        // ⚠️ THE FOURTH ARRIVED ON 8 NOVEMBER 2026 AND IS NOT OPTIONAL: from
+        // that day `addArbiter` records an INVITATION and seats nobody, and
+        // this is the door the invited man answers through. A rig without it
+        // routes every seating into the diamond's fallback.
+        appSels[3] = ArbiterApplicationsFacet.acceptArbiterInvitation.selector;
     }
 
-    /// ⚠️ THERE IS NO SEAT BOND ANY MORE (22 September 2026). The name is
-    /// kept because the rigs below call it; what it does is what a seated
-    /// arbiter now needs — money and an allowance for the bond he posts PER
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// IS STILL NOT WHERE IT IS PAID — the seating door takes it, in the same
+    /// transaction as the seat, out of the man's own wallet. The name is kept
+    /// because the rigs below call it; what it does is what a seated arbiter
+    /// needs ON TOP of that — money and an allowance for the bond he posts PER
     /// CASE, when he claims a dispute.
     function _postSeatBond(address who) internal {
         usdc.mint(who, 1_000_000_000);

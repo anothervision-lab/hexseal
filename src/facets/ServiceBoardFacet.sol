@@ -282,7 +282,7 @@ contract ServiceBoardFacet {
         if (titleLen == 0 || titleLen > 100) revert TitleInvalid();
         if (bytes(description).length > 500) revert DescriptionTooLong();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         // Rule B: a seat with a bond behind it does not sell work. Asked of
         // `_msgSender()`, so the answer is about the person and not about the
@@ -337,7 +337,7 @@ contract ServiceBoardFacet {
         if (titleLen == 0 || titleLen > 100) revert TitleInvalid();
         if (bytes(description).length > 500) revert DescriptionTooLong();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         // Rule B, on the PARAMETER: this door is pressed by the relayer and the
         // floor is pulled from `executor`'s wallet on his permit signature, so
@@ -437,7 +437,7 @@ contract ServiceBoardFacet {
         if (titleLen == 0 || titleLen > 100) revert TitleInvalid();
         if (bytes(description).length > 500) revert DescriptionTooLong();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         // --- Effects ---
         svc.title        = title;
@@ -470,7 +470,7 @@ contract ServiceBoardFacet {
 
         if (amount == 0) revert ZeroAmount();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         ServiceBoardStorage.Layout storage s = ServiceBoardStorage.store();
         ServiceBoardStorage.Service storage svc = s.services[serviceId];
@@ -543,7 +543,7 @@ contract ServiceBoardFacet {
     ) external nonReentrant whenNotPaused returns (uint256 requestId) {
         if (amount == 0) revert ZeroAmount();
         if (deadlineDays == 0 || deadlineDays > 365) revert DeadlineInvalid();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
 
         ServiceBoardStorage.Layout storage st = ServiceBoardStorage.store();
         ServiceBoardStorage.Service storage svc = st.services[serviceId];

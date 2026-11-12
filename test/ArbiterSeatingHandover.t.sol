@@ -72,6 +72,7 @@ import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterTwoFacetBench} from "./ArbiterTwoFacetBench.sol";
 import {HandoverReadinessSeed} from "./HandoverReadinessSeed.sol";
+import {inviteAndSeatArbiter} from "./ArbiterSeatRig.sol";
 
 contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadinessSeed {
     ArbiterRegistryFacet facet;
@@ -129,7 +130,7 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
     // ---------- addArbiter ----------
 
     function test_AddArbiterWorksBeforeDao() public {
-        facet.addArbiter(address(0xA1));
+        inviteAndSeatArbiter(address(facet), address(0xA1));
         assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "before the DAO the owner seats as before");
     }
 
@@ -190,7 +191,7 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
 
         assertFalse(facet.isDaoActive(), "a counter of outsiders does not switch governance on");
 
-        facet.addArbiter(address(0xA1));
+        inviteAndSeatArbiter(address(facet), address(0xA1));
         assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "the owner still has seating");
         facet.setChiefArbiter(address(0xC4));
         assertEq(facetVault.getChiefArbiter(), address(0xC4), "the chief is not abolished");
@@ -453,7 +454,7 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
         assertFalse(facet.isDaoActive(), "the counter is over the line and governance is not on");
         assertEq(facetVault.getDAOAddress(), address(0), "setup: there is no successor yet");
 
-        facet.addArbiter(address(0xA1));
+        inviteAndSeatArbiter(address(facet), address(0xA1));
 
         assertTrue(
             facetVault.isRegisteredArbiter(address(0xA1)),
@@ -540,7 +541,7 @@ contract ArbiterSeatingHandoverTest is Test, ArbiterTwoFacetBench, HandoverReadi
 
         // The owner's press on the same man goes through, so the refusal is
         // about who pressed.
-        facet.addArbiter(address(0xA1));
+        inviteAndSeatArbiter(address(facet), address(0xA1));
         assertTrue(facetVault.isRegisteredArbiter(address(0xA1)), "the owner lost the door too");
     }
 

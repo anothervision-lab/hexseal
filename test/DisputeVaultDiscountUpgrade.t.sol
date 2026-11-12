@@ -81,6 +81,19 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
     address constant CHIEF   = address(0xB0B);
     address constant FEE_RECIPIENT = address(0xFEE);
 
+    /// The namespace of ArbiterRegistryStorage, pinned by test/StorageLayout.t.sol
+    /// and carried here the same way test/ArbiterUnprovenSeatRevocation.t.sol and
+    /// test/ArbiterSeatBondRefund.t.sol carry it.
+    bytes32 constant ARB_BASE =
+        0xaae71de0594cbcb5434f0ab7f7501c1be178552bf788b418a1c2624ba9718d00;
+
+    /// The two fields the roster IS, as `ArbiterRegistryStorage.Data` numbers
+    /// them. NOT taken on trust: `_seatArbiterByStorage` writes both and reads
+    /// them straight back through the diamond's own getters, so a layout that
+    /// moves reddens the seeding and not the scene.
+    uint256 constant SLOT_IS_ARBITER    = 0;
+    uint256 constant SLOT_ARBITER_LIST  = 1;
+
     /// The census, and the things it is held to before it is believed.
     string constant CENSUS_PATH = "test/fixtures/chain-2026-08-29-arbiter-discount-selectors.json";
     address constant CENSUS_DIAMOND = 0x760F07367888C62f7c2Dfb619A5e534132855ce5;
@@ -211,6 +224,21 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         sels[17] = bytes4(keccak256("holdDisputeFee(address,uint256)"));
         sels[18] = bytes4(keccak256("settleDisputeFee(bool)"));
         sels[19] = bytes4(keccak256("getHeldDisputeFee(address)"));
+        // ⚠️ AND THE ENTRY BOND'S TWO STOOD ON THIS LIST FOR ONE DAY AND ARE
+        // GONE FROM IT (the evening of 8 NOVEMBER 2026).
+        // `applyAsArbiterWithPermit(uint256,uint8,bytes32,bytes32)` 0x205d501d
+        // and `revokeArbiterInvitation(address)` 0x2693a9d5 are compiled on
+        // ArbiterApplicationsFacet now, and this list is about the registry
+        // pair's ABI -- registry, vault and appeal artifacts, never the
+        // applications facet -- so a line for either of them here would be
+        // stale by exactly the test that checks this list is not.
+        //
+        // WHY THEY MOVED: ArbiterRegistryFacet stood 3 716 bytes under EIP-170
+        // where the appeal split of 15 October had bought it 4 937, and the
+        // entry bond had spent exactly that room. The move cost nothing on
+        // chain, because the cut that mounts these doors is not signed yet, and
+        // the SELECTORS did not change -- a selector is the signature, not the
+        // facet. Neither is routed by the chain either way.
     }
 
     /// The same device for the OTHER facet, which until 20 September 2026 had
@@ -1018,13 +1046,94 @@ contract DisputeVaultDiscountUpgradeTest is Test, ArbiterSplitRig {
         }
     }
 
-    /// Puts the rig into the shape the live diamond is in: a seated arbiter, a
+    /// A seat written straight into the roster, the way the chain holds one, and
+    /// then read back through the diamond's own getters.
+    ///
+    /// ⚠️ WHY NOT THE REAL DOOR — the obvious objection, answered by a
+    /// measurement rather than by taste. Since 8 November 2026 the road into the
+    /// corps is two transactions: `addArbiter` records an invitation, and
+    /// `acceptArbiterInvitation` answers it, takes the entry bond and writes the
+    /// seat. That second selector IS NOT IN THE CENSUS THIS RIG IS CONFORMED TO
+    /// — the chain does not route it — so reaching it means `Add`ing it with
+    /// `ArbiterSeatRig.openTheEntranceOn`, and this rig's whole reason for
+    /// existing is that its routing table is Base Sepolia's, selector for
+    /// selector. Measured: with that door mounted,
+    /// `test_TheContinuityCheckCatchesAVaultThatMovedAcrossTheCut` finds 222
+    /// routed selectors against the `CHAIN_ROUTED + ADDED_BY_THIS_CUT` it pins.
+    ///
+    /// ⚠️ AND THE SEAT THIS WRITES IS THE ONE THE CHAIN REALLY HAS, not a
+    /// stand-in for it. The census was read on 29 August 2026 and its own header
+    /// records `"seatedArbiters": 1` — a seat made by the door of that day,
+    /// which seated a man directly, charged him nothing, and left no invitation
+    /// behind him. Walking today's road would have put a BONDED seat, created by
+    /// an invitation, on a diamond whose chain has no door to buy one through,
+    /// and would have left a standing invitation beside an occupied seat: a pair
+    /// the contract itself forbids and no chain can be in.
+    ///
+    /// ⚠️ THE OFFSETS ARE NOT TAKEN ON TRUST. Both are written and then read
+    /// back through the live getters — the device `_seedBond` in
+    /// test/ArbiterSeatBondRefund.t.sol and `_setVaultBalance` in
+    /// test/ArbiterAccountabilityUpgrade.t.sol both use — so a layout that moves
+    /// turns THIS helper red, by name, instead of seeding nobody and leaving
+    /// `arbiterCount` and `firstArbiter` to be compared as `0 == 0` and
+    /// `address(0) == address(0)` in every continuity check below.
+    ///
+    /// `seatTakenAtBlock` is deliberately left at nought: the field did not
+    /// exist when the chain's arbiters were seated, and nothing in this rig
+    /// reads it.
+    function _seatArbiterByStorage(address who) internal {
+        ArbiterVaultFacet v = ArbiterVaultFacet(address(diamond));
+        uint256 seatedBefore = v.getArbiters().length;
+
+        // isArbiter[who] = true
+        vm.store(
+            address(diamond),
+            keccak256(abi.encode(who, uint256(ARB_BASE) + SLOT_IS_ARBITER)),
+            bytes32(uint256(1))
+        );
+        // arbiterList.push(who) — the element first, then the length.
+        bytes32 lengthSlot = bytes32(uint256(ARB_BASE) + SLOT_ARBITER_LIST);
+        vm.store(
+            address(diamond),
+            bytes32(uint256(keccak256(abi.encode(lengthSlot))) + seatedBefore),
+            bytes32(uint256(uint160(who)))
+        );
+        vm.store(address(diamond), lengthSlot, bytes32(seatedBefore + 1));
+
+        address[] memory seated = v.getArbiters();
+        assertEq(
+            seated.length, seatedBefore + 1,
+            "rig: the arbiterList length offset missed - no seat was written"
+        );
+        assertEq(seated[seatedBefore], who, "rig: the arbiterList data slot missed");
+        assertTrue(
+            v.isRegisteredArbiter(who),
+            "rig: the isArbiter offset missed - the roster holds a seat the diamond's own door denies"
+        );
+    }
+
+    /// Puts the rig into the shape the live diamond is in: a SEATED arbiter, a
     /// chief, a funded vault and a floor. The cut is then applied on top of a
     /// live arbitration namespace rather than an empty one, which is the only
     /// way the storage-continuity claim means anything — this work APPENDED two
     /// fields to `ArbiterRegistryStorage.Data`.
+    ///
+    /// ⚠️ THE PRESS NO LONGER SEATS ANYBODY, AND THE SEAT MOVED TO A RAW WRITE
+    /// (8 November 2026). `addArbiter(ARBITER)` stood on the first line here
+    /// until that day; since then it only records an invitation, which puts
+    /// nobody on the roster. The whole argument for the form that replaced it is
+    /// at `_seatArbiterByStorage` above.
+    ///
+    /// ⚠️ AND THE CLAIM THAT USED TO STAND HERE — "nothing in this file reads
+    /// the roster or `isArbiter`" — WAS FALSE, which is why the invitation could
+    /// not simply be left standing. This file reads the roster in two places,
+    /// both through `getArbiters()`: `before.arbiterCount` inside
+    /// `UpgradeDisputeVaultDiscount.snapshotArbitration` (asserted to be 1 in
+    /// `test_PreFlightPassesAndTheCutLandsWithoutLosingTheVault`) and
+    /// `getArbiters().length` in
+    /// `test_RollbackRestoresTheShapeAndTheVaultStillReads`.
     function _seedArbitration() internal {
-        ArbiterRegistryFacet(address(diamond)).addArbiter(ARBITER);
+        _seatArbiterByStorage(ARBITER);
         ArbiterRegistryFacet(address(diamond)).setChiefArbiter(CHIEF);
         ArbiterVaultFacet(address(diamond)).setArbiterFloor(7_000_000);
 

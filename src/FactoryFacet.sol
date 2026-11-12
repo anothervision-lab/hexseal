@@ -919,7 +919,7 @@ contract FactoryFacet {
         if (amount == 0) revert ZeroAmount();
         if (deadlineDays == 0) revert ZeroDeadline();
         if (deadlineDays > MAX_DEADLINE_DAYS) revert DeadlineTooLong();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
         if (msg.sender != address(this)) revert NotDiamond();
 
         // Rule B, on the line where EVERY deal in the protocol is born — the
@@ -1048,7 +1048,7 @@ contract FactoryFacet {
         if (amount == 0) revert ZeroAmount();
         if (deadlineDays == 0) revert ZeroDeadline();
         if (deadlineDays > MAX_DEADLINE_DAYS) revert DeadlineTooLong();
-        if (region > 6) revert InvalidRegion();
+        if (region > 8) revert InvalidRegion();
         if (_msgSender() != client) revert NotClient();
 
         // Rule B, both sides. The direct hire is the one entrance where the

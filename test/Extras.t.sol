@@ -17,6 +17,7 @@ import "../src/Agreement.sol";
 import "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {inviteAndSeatArbiter, mountAcceptDoor} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -232,11 +233,48 @@ contract ExtrasTest is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
-        // ⚠️ THE SEAT BOND IS GONE (22 September 2026), so slot 12 is no longer
-        // written by hand here. A seat costs nothing; what an arbiter needs is
-        // money and an allowance for the bond he posts PER CASE, inside
+
+        // ⚠️ THE ANSWERING DOOR, MOUNTED ON PURPOSE (8 November 2026). This rig
+        // never mounted ArbiterApplicationsFacet at all, and from that day a seat
+        // is taken by the invited man through `acceptArbiterInvitation` — see
+        // ArbiterSeatRig.mountAcceptDoor. Without it every seating below would
+        // die in the diamond's fallback instead of saying what it was measuring.
+        mountAcceptDoor(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arbiter);
+        // ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, and
+        // slot 12 is still not written by hand here: the seating door takes the
+        // entry bond itself. What is added below is what an arbiter needs on
+        // top — money and an allowance for the bond he posts PER CASE, inside
         // `claimDispute`.
+        // ⚠️ AND THE ENTRANCE MONEY GOES STRAIGHT BACK OFF THE DIAMOND, AND
+        // THIS FILE IS ONE OF THE TWO WHERE THAT IS NECESSARY (8 November 2026).
+        //
+        // The subject here is a CONSERVATION invariant:
+        // `_systemBalance() == INITIAL_TOTAL` at every step, where
+        // `_systemBalance` adds up the counted wallets AND THE DIAMOND and
+        // `INITIAL_TOTAL` is a literal sum of what the rig minted at the start.
+        // The seating above mints ten dollars to the arbiter — who is NOT one of
+        // the counted wallets, exactly as the purse minted to him a few lines
+        // below is not — and the entrance then moves those ten ONTO the
+        // diamond, which IS counted. So the sum would rise by ten and every invariant assertion in
+        // this file would fail by that amount, while saying nothing about the
+        // boards.
+        //
+        // Sent to an address this file never reads, which restores both the sum
+        // and the absolute figures ("the diamond is empty after accept").
+        //
+        // ⚠️ WHAT IS LEFT BEHIND, SAID OUT LOUD: `getArbiterBond(arbiter)` still
+        // reads ten dollars, and the money is no longer there to pay it. That is
+        // safe HERE for one reason and one only: nothing in this file refunds or
+        // forfeits a bond. A scene added later that resigns,
+        // removes or revokes this seat must stop using this shortcut.
+        vm.prank(address(diamond));
+        usdc.transfer(address(0xB1A), 10_000_000);
+        assertEq(
+            usdc.balanceOf(address(diamond)), 0,
+            "rig: the diamond is not empty at the start, so the invariant below measures something else"
+        );
+
         usdc.mint(arbiter, 1_000_000_000);
         vm.prank(arbiter);
         usdc.approve(address(diamond), type(uint256).max);

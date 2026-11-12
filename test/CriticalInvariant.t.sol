@@ -16,6 +16,7 @@ import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFac
 import "../src/facets/JobBoardFacet.sol";
 import "../src/facets/ServiceBoardFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
+import {inviteAndSeatArbiter, mountAcceptDoor} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC ----------
 
@@ -286,8 +287,44 @@ contract CriticalInvariantTest is Test {
             address(diamond),
             address(agDeployer)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiter);
+
+        // ⚠️ THE ANSWERING DOOR, MOUNTED ON PURPOSE (8 November 2026). This rig
+        // never mounted ArbiterApplicationsFacet at all, and from that day a seat
+        // is taken by the invited man through `acceptArbiterInvitation` — see
+        // ArbiterSeatRig.mountAcceptDoor. Without it every seating below would
+        // die in the diamond's fallback instead of saying what it was measuring.
+        mountAcceptDoor(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arbiter);
         _bondSeat(arbiter);
+        // ⚠️ AND THE ENTRANCE MONEY GOES STRAIGHT BACK OFF THE DIAMOND, AND
+        // THIS FILE IS ONE OF THE TWO WHERE THAT IS NECESSARY (8 November 2026).
+        //
+        // The subject here is a CONSERVATION invariant:
+        // `_systemBalance() == INITIAL_TOTAL` at every step, where
+        // `_systemBalance` adds up the counted wallets AND THE DIAMOND and
+        // `INITIAL_TOTAL` is a literal sum of what the rig minted at the start.
+        // The seating above mints ten dollars to the arbiter — who is NOT one of
+        // the counted wallets, exactly as `_bondSeat` already mints him a purse
+        // — and the entrance then moves those ten ONTO the diamond, which IS
+        // counted. So the sum would rise by ten and every invariant assertion in
+        // this file would fail by that amount, while saying nothing about the
+        // boards.
+        //
+        // Sent to an address this file never reads, which restores both the sum
+        // and the absolute figures ("the diamond is empty after accept").
+        //
+        // ⚠️ WHAT IS LEFT BEHIND, SAID OUT LOUD: `getArbiterBond(arbiter)` still
+        // reads ten dollars, and the money is no longer there to pay it. That is
+        // safe HERE for exactly the reason the comment on `_bondSeat` already
+        // gives — nothing in this file refunds or forfeits a bond — and it is
+        // the same caveat, not a new one. A scene added later that resigns,
+        // removes or revokes this seat must stop using this shortcut.
+        vm.prank(address(diamond));
+        usdc.transfer(address(0xB1A), 10_000_000);
+        assertEq(
+            usdc.balanceOf(address(diamond)), 0,
+            "rig: the diamond is not empty at the start, so the invariant below measures something else"
+        );
     }
 
     // ============================================================
@@ -775,10 +812,14 @@ contract CriticalInvariantTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
-    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
-    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
-    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
-    /// name is kept because every scene in this file calls it.
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// HELPER STILL WRITES NO BOND. The entry bond is taken by the seating door
+    /// itself, inside the same transaction as the seat, out of the man's own
+    /// wallet — never by hand into `arbiterBond` from here. What this leaves him
+    /// with is what a seated arbiter still needs on top: money and an allowance
+    /// for the bond each CASE asks for, inside `claimDispute`. Two different
+    /// sums at two different moments, and the name is kept because every scene
+    /// in this file calls it.
     function _bondSeat(address who) internal {
         usdc.mint(who, 1_000_000_000);
         vm.prank(who);

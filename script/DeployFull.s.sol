@@ -384,9 +384,27 @@ contract DeployFull is Script {
         JobReceiptFacet(address(diamond)).setSvgRenderer(address(svgRenderer));
 
         // ── 8. The first arbiter ──────────────────────────────────────────────
-        // Without this, a round of disputes cannot be closed other than by a timeout
-        // refunding the client (see the note at require(initialArbiter != address(0))
-        // above). chiefArbiter is NOT set — on a live diamond it stays zero.
+        // Without an arbiter, a round of disputes cannot be closed other than by a
+        // timeout refunding the client (see the note at
+        // require(initialArbiter != address(0)) above). chiefArbiter is NOT set — on
+        // a live diamond it stays zero.
+        //
+        // ⚠️⚠️ THIS LINE NO LONGER SEATS HIM (8 November 2026, the owner's
+        // decision), AND A FRESH DEPLOY THEREFORE LANDS WITH AN EMPTY CORPS.
+        // `addArbiter` records an INVITATION. The first arbiter has to answer it
+        // HIMSELF, from his own address, inside seven days, holding
+        // ten USDC and either an allowance to the diamond or an EIP-2612
+        // signature:
+        //
+        //     acceptArbiterInvitation()                              — with an allowance
+        //     acceptArbiterInvitationWithPermit(deadline, v, r, s)   — with a signature
+        //
+        // This is not a gap to be closed by the deployer pressing something else.
+        // The bond has to leave the ARBITER's own balance — that is the entire
+        // point of it — and a deploy script holding his keys would be paying it
+        // for him. So the step is deliberately left as an invitation, and the
+        // report below says so out loud rather than letting whoever deployed find
+        // out from a dispute that nobody can take.
         ArbiterRegistryFacet(address(diamond)).addArbiter(initialArbiter);
 
         vm.stopBroadcast();
@@ -423,6 +441,19 @@ contract DeployFull is Script {
         for (uint256 i = 0; i < arbiters.length; i++) {
             console.log("  Arbiter:     ", arbiters[i]);
         }
+        // ⚠️ THE COUNT ABOVE IS ZERO ON A FRESH DEPLOY, AND THAT IS THE NEW RULE
+        // RATHER THAN A FAILED STEP (8 November 2026). Said here because whoever
+        // deployed is looking at this block, and a corps of nought discovered
+        // later — from a dispute nobody can take — is the worst place to learn it.
+        console.log("--- The first arbiter is INVITED, not seated ---");
+        console.log("Invited:       ", initialArbiter);
+        console.log("He must answer HIMSELF, from that address, within 7 days:");
+        console.log("  acceptArbiterInvitation()                            (with an allowance)");
+        console.log("  acceptArbiterInvitationWithPermit(deadline,v,r,s)    (with a signature)");
+        console.log("He needs the entry bond in USDC. Read the amount off the chain:");
+        console.log("  cast call <diamond> 'getApplicationRequirements()(uint256,uint256,uint256,uint256)'");
+        console.log("  -- the THIRD value. Do not copy a figure out of a document.");
+        console.log("Until he answers, the corps is empty and a dispute can only time out.");
         console.log("=============================================");
         console.log("Update your .env:");
         console.log("DIAMOND_ADDRESS=", address(diamond));
@@ -729,16 +760,49 @@ contract DeployFull is Script {
         // `ArbiterSplitRig._mountRemovedVerdictHandDoors`. Those censuses are older
         // than the cut and route all three for ever, which is why that is a permanent
         // reconciliation and not an allowance waiting to be deleted.
+        // ⚠️ 27 -> 29 AND BACK TO 27 ON 8 NOVEMBER 2026, inside one day, and
+        // both halves are written down because the SECOND half is what the
+        // pending cut carries. The entry bond put `applyAsArbiterWithPermit`
+        // and `revokeArbiterInvitation` on this facet at `sels[27]` and
+        // `sels[28]`; both left for `ArbiterApplicationsFacet` the same evening
+        // — see `arbiterApplicationsFacetSelectors()` below, which went 16 -> 18
+        // in the same commit — because this facet stood 3 716 bytes under
+        // EIP-170 where the appeal split had bought it 4 937.
+        //
+        // ⚠️ THE TREE-WIDE TOTAL DID NOT MOVE: 282 before the move and 282
+        // after, which is the control the move was checked by. Two selectors
+        // changed the facet that answers them and nothing changed the routing
+        // table's size.
+        //
+        // ⚠️ AND NO INDEX BELOW MOVED EITHER, which is why they were appended
+        // at the end in the first place: every index here is quoted in notes
+        // and censuses written against it.
         sels = new bytes4[](27);
 
         // DAO mode
         sels[0] = ArbiterRegistryFacet.activateDAO.selector;
         sels[1] = ArbiterRegistryFacet.applyAsArbiter.selector;
         sels[2] = ArbiterRegistryFacet.resignAsArbiter.selector;
+        // ⚠️ `applyAsArbiterWithPermit` — the earned entrance on the gasless
+        // path — STOOD AT `sels[27]` AND IS NOW MOUNTED BY
+        // `arbiterApplicationsFacetSelectors()`. Same four bytes (0x205d501d),
+        // different facet: it is derived from the signature, not from the host.
 
         // Admin: managing arbiters
         sels[3] = ArbiterRegistryFacet.setChiefArbiter.selector;
+        // ⚠️ `addArbiter` NO LONGER SEATS ANYBODY (8 November 2026, the owner's
+        // decision). Same selector, same name, same owner — it records an
+        // INVITATION, and the man answers it himself through
+        // `ArbiterApplicationsFacet.acceptArbiterInvitation`, which takes his
+        // bond and seats him in one transaction. A fresh deploy therefore does
+        // NOT seat the initial arbiter by pressing this; see the note at
+        // `initialArbiter` below.
         sels[4] = ArbiterRegistryFacet.addArbiter.selector;
+        // ⚠️ `revokeArbiterInvitation` — taking an unanswered invitation back —
+        // STOOD AT `sels[28]` AND IS NOW MOUNTED BY
+        // `arbiterApplicationsFacetSelectors()`. Same four bytes (0x2693a9d5).
+        // The door is still the owner's alone; what moved is the facet that
+        // compiles it, so this list stops naming it and that one starts.
 
         // Claiming a dispute (commit-reveal)
         sels[5] = ArbiterRegistryFacet.commitDisputeClaim.selector;
@@ -1159,7 +1223,21 @@ contract DeployFull is Script {
     // — see the header of src/facets/ArbiterApplicationsFacet.sol: the registry
     // stands under a thousand bytes clear of the EIP-170 ceiling.
     function arbiterApplicationsFacetSelectors() public pure returns (bytes4[] memory sels) {
-        sels = new bytes4[](13);
+        // ⚠️ 13 -> 16 -> 18 ON 8 NOVEMBER 2026, in two steps on one day, and the
+        // two steps have two different reasons:
+        //
+        //   13 -> 16  the owner's decision: the two doors by which an invited
+        //             man answers, and the read his screen needs;
+        //   16 -> 18  room, not meaning: `applyAsArbiterWithPermit` and
+        //             `revokeArbiterInvitation` arrived from
+        //             `ArbiterRegistryFacet` the same evening, which went
+        //             29 -> 27 in the same commit, because it stood 3 716 bytes
+        //             under EIP-170 where the appeal split had bought it 4 937.
+        //
+        // ⚠️ THE TREE-WIDE TOTAL IS UNMOVED BY THE SECOND STEP — 282 either way.
+        // Appended at the end in both steps, because every index below is
+        // quoted in notes written against it.
+        sels = new bytes4[](18);
 
         // The applicant's own door out. Gasless (ERC-2771), like everything on
         // the applicant's side of this facet.
@@ -1211,6 +1289,63 @@ contract DeployFull is Script {
         // Agreement clone calls this selector and a clone is pinned to its
         // implementation for life.
         sels[12] = ArbiterApplicationsFacet.getBondState.selector;
+
+        // ── THE INVITED MAN ANSWERS (8 November 2026) ──────────────────────
+        //
+        // `addArbiter` stopped seating people; these are where a seat is
+        // actually taken by anybody the owner asked in. Both take the entry
+        // bond and seat him in the SAME call, which is the property the whole
+        // design is arranged around: there is no way to end up with a payment
+        // and no seat, and no way to be seated without having paid.
+        //
+        // ⚠️ THEY ARE IN THIS FACET AND NOT BESIDE THE SEAT FOR ONE REASON,
+        // AND IT IS A NUMBER. An invitation needs a life; the owner's
+        // instruction was that no new number about the world be introduced for
+        // it; the number that already has an owner is `APPLICATION_TTL`,
+        // declared in this facet. A door in the registry would have had to
+        // mirror it or reach for it through a mounted selector, and a mirror is
+        // a second number free to disagree. The SEATING travels the other way
+        // instead, as `ArbiterRegistryStorage.seatOnInvitation`.
+        sels[13] = ArbiterApplicationsFacet.acceptArbiterInvitation.selector;
+        sels[14] = ArbiterApplicationsFacet.acceptArbiterInvitationWithPermit.selector;
+
+        // One read, everything about one standing invitation: who asked, when,
+        // when it runs out, and whether it is live. A form needs it the moment
+        // the press stopped being the seating.
+        sels[15] = ArbiterApplicationsFacet.getArbiterInvitation.selector;
+
+        // ── THE TWO THAT CAME OVER FROM THE REGISTRY ──────────────────────
+        //
+        // ⚠️ THEY ARE HERE FOR ROOM AND NOT FOR MEANING, and that is said out
+        // loud because the two above are here for meaning. `ArbiterRegistryFacet`
+        // stood 3 716 bytes under EIP-170 and the appeal split of 15 October had
+        // bought it 4 937; the entry bond spent exactly that room, and
+        // test/AppealFacetSplitCut.t.sol::test_BothFacetsFitUnderEip170 said so
+        // by name. These two could move for the price of nothing, because the
+        // cut that mounts them had not been signed yet — the live diamond routed
+        // 277 selectors and no entry bond when that was measured.
+        //
+        // ⚠️ IT WAS SIGNED ON 10 NOVEMBER 2026 and the free move was used in
+        // time: the live diamond routes 282 selectors over fifteen facets as of
+        // block 56 880 000, with these two among the eighteen now answering on
+        // ArbiterApplicationsFacet at 0x10eE3C98…. From here a door that wants
+        // to change facets costs its own cut.
+        //
+        // The earned entrance on the gasless path. It exists because that
+        // entrance stopped being free, and a free entrance was the only reason
+        // it did not already exist: an `approve` is a transaction sent TO USDC,
+        // which has never heard of our forwarder, so the allowance half can
+        // never be relayed by us — for anybody, ever. A candidate has by
+        // definition earned nothing IN the protocol, so the protocol is not
+        // where his ETH comes from either.
+        sels[16] = ArbiterApplicationsFacet.applyAsArbiterWithPermit.selector;
+
+        // Taking an unanswered invitation back. The executor's addition of
+        // 8 November 2026 rather than the owner's word, flagged as such at the
+        // function: without it a mistyped address stands for seven days and
+        // nothing can be done about it. Still the owner's alone — this facet's
+        // other administrative doors admit the chief, and this one does not.
+        sels[17] = ArbiterApplicationsFacet.revokeArbiterInvitation.selector;
     }
 
     // TreasuryLinkFacet — count by the `new bytes4[](n)` literal below (9 until

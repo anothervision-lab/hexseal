@@ -25,6 +25,7 @@ import "../src/facets/ReputationFacet.sol";
 import "../src/MinimalForwarder.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {DealCapOff} from "./DealCapOff.sol";
+import {inviteAndSeatArbiter, mountAcceptDoor} from "./ArbiterSeatRig.sol";
 
 // ---------- MOCK USDC ----------
 // Copied from Extras and extended with a per-address blocking switch (imitating
@@ -279,7 +280,14 @@ contract DisputeSettlementTest is Test {
         FactoryFacet(address(diamond)).initFactory(
             address(usdc), feeRecipient, address(0xDEAD), address(diamond), address(agDeployer)
         );
-        ArbiterRegistryFacet(address(diamond)).addArbiter(arbiterAddr);
+
+        // ⚠️ THE ANSWERING DOOR, MOUNTED ON PURPOSE (8 November 2026). This rig
+        // never mounted ArbiterApplicationsFacet at all, and from that day a seat
+        // is taken by the invited man through `acceptArbiterInvitation` — see
+        // ArbiterSeatRig.mountAcceptDoor. Without it every seating below would
+        // die in the diamond's fallback instead of saying what it was measuring.
+        mountAcceptDoor(address(diamond));
+        inviteAndSeatArbiter(address(diamond), arbiterAddr);
         _bondSeat(arbiterAddr);
 
         // ⚠️ THIS SUITE IS NOT ABOUT THE DEAL CEILING. Its subject is what a
@@ -3439,10 +3447,14 @@ contract DisputeSettlementTest is Test {
     /// ⚠️ NO USDC MOVES. That is deliberate and safe HERE only because nothing
     /// in this file refunds or forfeits a bond; a rig that does either must
     /// move real money instead, or the diamond pays out what it never took.
-    /// ⚠️ NO SEAT BOND SINCE 22 SEPTEMBER 2026, so nothing is written into
-    /// `arbiterBond` by hand any more. What a seated arbiter needs is money and
-    /// an allowance: the bond is posted PER CASE, inside `claimDispute`. The
-    /// name is kept because every scene in this file calls it.
+    /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
+    /// HELPER STILL WRITES NO BOND. The entry bond is taken by the seating door
+    /// itself, inside the same transaction as the seat, out of the man's own
+    /// wallet — never by hand into `arbiterBond` from here. What this leaves him
+    /// with is what a seated arbiter still needs on top: money and an allowance
+    /// for the bond each CASE asks for, inside `claimDispute`. Two different
+    /// sums at two different moments, and the name is kept because every scene
+    /// in this file calls it.
     function _bondSeat(address who) internal {
         usdc.mint(who, 1_000_000_000);
         vm.prank(who);

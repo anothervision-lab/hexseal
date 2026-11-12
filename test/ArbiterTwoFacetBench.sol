@@ -45,6 +45,7 @@ import {DeployFull} from "../script/DeployFull.s.sol";
 import {LegacyPreSplitArbiterFacet} from "./legacy/LegacyPreSplitArbiterFacet.sol";
 import {ArbiterRegistryFacet, ArbiterRegistryStorage} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAccountabilityFacet} from "../src/facets/ArbiterAccountabilityFacet.sol";
+import {ArbiterApplicationsFacet} from "../src/facets/ArbiterApplicationsFacet.sol";
 import {ArbiterVaultFacet} from "../src/facets/ArbiterVaultFacet.sol";
 import {
     DiamondProxy,
@@ -121,7 +122,18 @@ abstract contract ArbiterTwoFacetBench {
 
         DiamondProxy diamond = new DiamondProxy(address(this), initCuts, address(0), "");
 
-        IDiamondCut.FacetCut[] memory arbCuts = new IDiamondCut.FacetCut[](3);
+        // ⚠️ FOUR FACETS SINCE 8 NOVEMBER 2026, and the fourth is here for the
+        // same reason the third was. `addArbiter` stopped seating anybody that
+        // day: it records an invitation, and the ANSWER to it
+        // (`acceptArbiterInvitation`) lives in ArbiterApplicationsFacet. A bench
+        // carrying only the first three routes that answer nowhere, so every
+        // scene that needs a seated arbiter would die in the diamond's fallback
+        // with nothing to say about what it was measuring.
+        //
+        // It is the production shape rather than a prop: DeployFull mounts all
+        // four on one diamond, which is also why the Add below cannot collide —
+        // the four selector groups are disjoint there.
+        IDiamondCut.FacetCut[] memory arbCuts = new IDiamondCut.FacetCut[](4);
         arbCuts[0] = IDiamondCut.FacetCut(
             address(new ArbiterRegistryFacet()),
             IDiamondCut.FacetCutAction.Add,
@@ -136,6 +148,11 @@ abstract contract ArbiterTwoFacetBench {
             address(new ArbiterVaultFacet()),
             IDiamondCut.FacetCutAction.Add,
             deployFull.arbiterVaultFacetSelectors()
+        );
+        arbCuts[3] = IDiamondCut.FacetCut(
+            address(new ArbiterApplicationsFacet()),
+            IDiamondCut.FacetCutAction.Add,
+            deployFull.arbiterApplicationsFacetSelectors()
         );
         IDiamondCut(address(diamond)).diamondCut(arbCuts, address(0), "");
 

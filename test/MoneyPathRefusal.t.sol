@@ -429,7 +429,10 @@ contract MoneyPathRefusalTest is MoneyPathBase {
 
         // Two full requests' worth is stuck on the diamond, and the books still
         // account for every cent of it.
-        assertEq(usdc.balanceOf(address(diamond)), (AMOUNT + AMOUNT_FEE) * 2 + seatBondHeld);
+        assertEq(
+            usdc.balanceOf(address(diamond)), (AMOUNT + AMOUNT_FEE) * 2 + seatBondHeld + ENTRY_BOND,
+            "two stuck requests and the entrance bond of the seat, and nothing else"
+        );
         _assertDiamondBalances("blocked client, two requests");
     }
 
