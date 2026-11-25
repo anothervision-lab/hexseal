@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hexseal — second door</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A static copy of the Hexseal money path. It reads the chain directly and signs with the connected wallet.">
+<!--
+  THE STYLE IS INLINE, AND SO IS EVERY ASSET THIS PAGE HAS.
+
+  ⚠️ NOTHING IS FETCHED. No font, no stylesheet, no icon, no analytics. A
+  second door that needs a second host is not a second door: this file plus
+  `door.js` beside it is the whole of it, and `hexseal-second-door.html` is the
+  same thing with the script folded in, for a filesystem.
+
+  ⚠️ THE CONTRAST IS A FIGURE, NOT A TASTE, because this project's screens are
+  read in daylight on a phone. Measured 22 November 2026 (WCAG relative
+  luminance, every pair in this file):
+
+    17.59:1  body ink on the page           light   #101014 on #f6f6f8
+    18.98:1  body ink on a card             light   #101014 on #ffffff
+     7.38:1  muted on a card                light   #55555e on #ffffff
+     6.83:1  muted on the page              light   #55555e on #f6f6f8
+     8.89:1  refusal on a card              light   #8f1d1d on #ffffff
+     8.07:1  ok on a card                   light   #155c2e on #ffffff
+     6.67:1  button ink on the accent       light   #ffffff on #0b5cad
+    17.69:1  body ink on the page           dark    #f2f2f4 on #0a0a0c
+    16.41:1  body ink on a card             dark    #f2f2f4 on #14141a
+     7.26:1  muted on a card                dark    #a2a2ad on #14141a
+     9.16:1  refusal on a card              dark    #ff9c9c on #14141a
+    11.85:1  ok on a card                   dark    #87e3a6 on #14141a
+     8.66:1  button ink on the accent       dark    #06121f on #6fb4ff
+
+  ⚠️ THIS BLOCK CARRIED «the muted grey is 5.4:1» UNTIL IT WAS MEASURED, and the
+  figure was simply made up — it is 6.83. The numbers above are the output of a
+  calculation over these very hex values, and the lowest of them, 6.67, is the
+  accent button. Nothing below 4.5:1 is in here, and no refusal is drawn in the
+  muted colour: every one of them uses the refusal colour, which is the second
+  highest pair in both themes.
+-->
+<style>
+  :root {
+    --bg: #f6f6f8;
+    --card: #ffffff;
+    --ink: #101014;
+    --muted: #55555e;
+    --line: #d7d7de;
+    --accent: #0b5cad;
+    --accent-ink: #ffffff;
+    --refuse: #8f1d1d;
+    --ok: #155c2e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0a0a0c;
+      --card: #14141a;
+      --ink: #f2f2f4;
+      --muted: #a2a2ad;
+      --line: #2b2b35;
+      --accent: #6fb4ff;
+      --accent-ink: #06121f;
+      --refuse: #ff9c9c;
+      --ok: #87e3a6;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0a0c;
+    --card: #14141a;
+    --ink: #f2f2f4;
+    --muted: #a2a2ad;
+    --line: #2b2b35;
+    --accent: #6fb4ff;
+    --accent-ink: #06121f;
+    --refuse: #ff9c9c;
+    --ok: #87e3a6;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  #door { max-width: 46rem; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.4rem; line-height: 1.25; margin: 0 0 8px; }
+  h2 { font-size: 1.05rem; margin: 0 0 10px; }
+  h3 { font-size: 0.95rem; margin: 18px 0 8px; }
+  p { margin: 0 0 10px; }
+  code {
+    font: 0.86em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow-wrap: anywhere;
+  }
+  .top { margin-bottom: 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    margin: 0 0 14px;
+  }
+  .line { color: var(--ink); }
+  .muted { color: var(--muted); font-size: 0.92rem; }
+  .refusal { color: var(--refuse); font-weight: 600; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 6px 0;
+    border-top: 1px solid var(--line);
+  }
+  .row:first-of-type { border-top: 0; }
+  .k { color: var(--muted); font-size: 0.9rem; min-width: 9rem; flex: 0 0 auto; }
+  .v { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .field {
+    flex: 1 1 14rem;
+    min-width: 0;
+    padding: 10px 12px;
+    font: inherit;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .btn {
+    padding: 10px 14px;
+    font: inherit;
+    font-weight: 600;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .btn.primary { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .btn.ghost { font-weight: 500; color: var(--muted); }
+  .btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .deal { border-left: 4px solid var(--accent); }
+  .clocks, .actions { margin-top: 14px; }
+  .action {
+    padding: 12px;
+    margin: 0 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  .action-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .tag {
+    padding: 1px 8px;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    background: var(--accent);
+    border-radius: 999px;
+  }
+  .action .btn { margin-top: 8px; }
+  /*
+    The second way out of one open door: sign it into a file instead of sending
+    it. Set in from the press above it, because it is an alternative to that
+    press and not a second one.
+  */
+  .bearer {
+    padding: 10px 12px;
+    margin: 10px 0 0;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+  }
+  .bearer h4 { margin: 0 0 6px; font-size: 0.95rem; }
+  .bearer p { margin: 0 0 6px; }
+  /*
+    ⚠️ MONOSPACE AND WRAPPING, because what is in it is a signature somebody has
+    to copy out by hand when the download is not available to him — a locked-down
+    phone, a kiosk, an in-app webview. A proportional font and a horizontal
+    scrollbar is how half a signature gets copied.
+  */
+  textarea.field {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    resize: vertical;
+    overflow-wrap: anywhere;
+  }
+  .dead-list { margin: 0; padding: 0; list-style: none; }
+  .dead-item { padding: 10px 0; border-top: 1px solid var(--line); }
+  .dead-item:first-child { border-top: 0; }
+  .dead-item p:last-child { margin-bottom: 0; }
+  /*
+    ⚠️ NO SPINNER AND NO PLACE FOR ONE. There is no keyframe in this file and no
+    indeterminate indicator anywhere on the page, by standing instruction: a
+    turning circle promises that something is coming, and here it very often is
+    not. Every wait on this page is a sentence that names what is being asked,
+    and every wait ends in either a figure or a named refusal.
+  */
+</style>
+</head>
+<body>
+<main id="door">
+  <!--
+    The script fills this. It is left EMPTY rather than pre-filled with a
+    heading, and that is deliberate: a heading drawn before the script runs
+    would still be on the screen if the script never ran, and a page that looks
+    like it is working while nothing works is the one state this door exists to
+    avoid. An empty element is visibly nothing.
+  -->
+</main>
+<script src="door.js"></script>
+</body>
+</html>

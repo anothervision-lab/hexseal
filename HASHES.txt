@@ -1,0 +1,16 @@
+The second door -- published artefacts
+
+build id : door-202611250558
+staged   : 2026-11-25 06:00 UTC
+
+sha256:
+9b21f389847219e48820804f9e0f672eaf86bb5dafffb01209031a81134ea499  index.html
+3d54f41d39c0ce2953f7c3386b1fb5609eed2c15be6d5787b1696edeab9a8d47  door.js
+a7d85d109e40bfd32b31af9c321a6af0d136921a66ac8118d1d770ace52e38e7  hexseal-second-door.html
+
+index.html + door.js -- served by a host; the wallet reaches it, so presses work.
+hexseal-second-door.html -- one file to hand over; from file:// it READS and never SIGNS.
+
+The door shows the diamond address, the token and this build id on its own
+screen. Nothing inside the artefact proves it is the real one; the hashes above,
+published where they have their own history, are what answers that.
