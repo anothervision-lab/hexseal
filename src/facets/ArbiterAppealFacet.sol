@@ -328,16 +328,41 @@ contract ArbiterAppealFacet {
     ///
     /// ⚠️ BUT THE VOTE FEE IS NOT THE ONLY CHARGE THAT LEAVES HIS CIRCLE, AND
     /// THIS SENTENCE SAID IT WAS UNTIL 18 OCTOBER 2026. Three charges leave it,
-    /// each under its own condition, and the deposit is the only one of them
-    /// that can come back:
-    ///   • the DISPUTE FEE, always, and before an appeal exists at all. The
-    ///     fee is taken out of the POT — on a deal he funded on both sides,
-    ///     out of his own money — at 3% of it with DISPUTE_FEE_CAP as the
-    ///     ceiling (`Agreement.disputeFee()`), and no branch sends it back. On
-    ///     the verdict he then overturns, the share the judge forfeits goes to
-    ///     the arbiter bank (`ArbiterVaultFacet._settleForfeitedShare`,
-    ///     `d.vaultBalance += share`) and the protocol keeps its levy in the
-    ///     treasury. Neither destination is his.
+    /// each under its own condition, and TWO of them can come back — the
+    /// deposit, and the dispute fee on a dispute nobody judged (⚠️ this line
+    /// said "the deposit is the only one" until 23 November 2026, item 555, and
+    /// the refund road under it had been open since 20 October):
+    ///   • the DISPUTE FEE, always, and before an appeal exists at all.
+    ///     ⚠️ IT COMES OUT OF HIS WALLET AT THE DISPUTE DOOR SINCE 20 OCTOBER
+    ///     2026 AND NOT OUT OF THE POT, which is what this row said until
+    ///     23 November: `Agreement.raiseDispute` calls
+    ///     `ArbiterVaultFacet.holdDisputeFee`, which pulls the money with
+    ///     `transferFrom(payer -> diamond)` and parks it in
+    ///     `disputeFeeHeld[agreement]`. The `pot - taken` subtraction that made
+    ///     the old sentence true is gone from `Agreement.resolveDispute` and the
+    ///     winner takes the escrow entire, so the fee no longer touches the pot
+    ///     at either end. The size is `Agreement.disputeFee()` — 3% of the pot
+    ///     with a FLOOR of DISPUTE_FEE_FLOOR applied BEFORE the
+    ///     DISPUTE_FEE_CAP ceiling, so on a small pot it is the floor and not a
+    ///     percentage of anything.
+    ///     ⚠️ AND ONE BRANCH DOES SEND IT HOME, which this row denied: no
+    ///     verdict ever came, and `ArbiterVaultFacet.settleDisputeFee(false)`
+    ///     returns it to `disputeFeePrepaidBy`. What has no road back is the fee
+    ///     on a dispute that WAS judged.
+    ///     ⚠️ AND ON THE VERDICT HE OVERTURNS IT GOES TO THE PANEL, NOT TO THE
+    ///     BANK (the owner, 20 October 2026). `resolveAppeal` below takes
+    ///     `disputeFeeHeld` into the pocket it divides, so three quarters of
+    ///     this charge reach the men who answered and the rest leaves as the
+    ///     toll to the treasury — and a circle holding one of those seats takes
+    ///     part of this charge back as a wage. ⚠️ THAT RECOVERY CARRIES NO
+    ///     NUMBER IN THIS FILE, so it is named as a mechanism and not as a
+    ///     measured cost. The arbiter bank
+    ///     (`ArbiterVaultFacet._settleForfeitedShare`,
+    ///     `d.vaultBalance += share`) is where a DIFFERENT sum lands: the
+    ///     judge's slice of a fee taken out of the POT at the verdict through
+    ///     `creditDisputeFee`, which is the road of the clones born before this
+    ///     door and pinned to the implementation that still calls it. Neither of
+    ///     those two destinations is his.
     ///   • THE WHOLE DEPOSIT, whenever his appeal did NOT carry and at least
     ///     one summoned arbiter answered: three quarters of it become the
     ///     panel's wage, divided among those who answered, the last quarter
@@ -920,9 +945,45 @@ contract ArbiterAppealFacet {
         // them are ever taken is settled at the END of the review window rather
         // than guessed at its start. What that costs, said plainly and not
         // discovered later: a deposit is now taken on an appeal that may find
-        // no reader at all. It comes back whole when that happens — the
+        // no reader at all, AND IT DOES NOT COME BACK WHEN THAT HAPPENS: the
+        // silent road sends the WHOLE deposit to the TREASURY (the owner,
+        // 19 October 2026 — `_nobodyAnswered` opens the branch, `toTreasury =
+        // deposit` is the whole of it, and the bottom of `resolveAppeal`
+        // credits `treasurySlice`).
+        //
+        // ⚠️ THESE LINES PROMISED THE REFUND UNTIL 23 NOVEMBER 2026, and the
+        // dead wording is quoted rather than erased because it is where the
+        // confusion comes from: "It comes back whole when that happens — the
         // no-panel branch of `resolveAppeal`, which already existed and only
-        // changed its reason.
+        // changed its reason". It was written while silence DID send the
+        // deposit home; the decision of 19 October 2026 moved that road to the
+        // treasury and this paragraph was not moved with it — while the
+        // `appealDeadline` paragraph of THIS SAME FUNCTION, a few lines below,
+        // already said "the whole price to the TREASURY, nothing back to the
+        // appellant". For five weeks the file promised a refund at the door
+        // that charges and refused one at the door that pays, and both
+        // sentences sat inside one function body.
+        //
+        // THE DEPOSIT FOLLOWS THE APPEAL'S OUTCOME AND NOTHING ELSE, and there
+        // are exactly three roads — argued in full, with their addressees, in
+        // the docstring of `resolveAppeal`:
+        //
+        //   verdict OVERTURNED → home to him WHOLE, and the panel is then paid
+        //                        out of what the overturned JUDGE forfeits
+        //                        rather than out of this deposit.
+        //   verdict STANDS and → three quarters of the deposit are the wage of
+        //   somebody read it     the men who answered and the last quarter
+        //                        crosses to the other side of the deal. None of
+        //                        it is his any more.
+        //   nobody answered    → the WHOLE deposit to the TREASURY.
+        //
+        // So what this door costs a man who gets no reader is the whole of what
+        // he puts down here, and the door is worth standing at anyway: a junk
+        // appeal that cost nothing would be free to raise without end. There is
+        // no fourth road, and that is a property of the bar rather than of
+        // taste: `_overturnVotesRequired` never returns below
+        // APPEAL_OVERTURN_VOTES, so an OVERTURNED appeal always has answers
+        // behind it and can never also be the silent one.
         uint256 deposit = ArbiterRegistryStorage.appealDepositFor(agreement);
         address usdc = FactoryStorage.store().usdc;
         bool ok = IUSDCFull(usdc).transferFrom(caller, address(this), deposit);
@@ -2375,8 +2436,15 @@ contract ArbiterAppealFacet {
             // error of its own, however well named, matches nothing there.
             bool paid = IUSDCFull(usdc).transferFrom(caller, address(this), fee);
             require(paid, "ArbiterRegistry: vote fee transfer failed");
-            // Into the bank, the one pot in this protocol every forfeit goes
-            // to, and the pot appeal debts are paid out of. It never leaves
+            // Into the bank, and the pot appeal debts are paid out of.
+            // ⚠️ IT STOPPED BEING "THE ONE POT EVERY FORFEIT GOES TO" ON
+            // 12 NOVEMBER 2026, and that sentence stood here until then: a
+            // forfeited SEAT BOND now goes to the treasury instead
+            // (`ArbiterAccountabilityFacet._performRemoval`, the owner's
+            // decision of 20 October 2026). This fee still goes here, and the
+            // distinction is whose money it was — a vote fee is paid for a
+            // service the corps performs, a forfeited seat bond is a penalty.
+            // It never leaves
             // again on this man's account: there is no claim, no refund branch
             // and no road back, which is the whole of the decision that money
             // only has weight when it is lost. `bankAboveDebts` stays true by
@@ -2609,11 +2677,25 @@ contract ArbiterAppealFacet {
     ///
     ///   appeal WON        → the deposit goes HOME TO THE APPELLANT, whole, and
     ///                       the panel is paid by the man whose mistake they
-    ///                       corrected: THREE QUARTERS of the OVERTURNED
-    ///                       JUDGE'S CASE BOND, divided equally among the men
-    ///                       who answered. The quarter that is left is the toll
-    ///                       and it goes TO THE TREASURY. The bond no longer
-    ///                       reaches the appellant at all.
+    ///                       corrected: THREE QUARTERS OF A POCKET OF TWO SUMS
+    ///                       — the OVERTURNED JUDGE'S CASE BOND
+    ///                       (`caseBonds[agreement].amount`) AND THE DISPUTE FEE
+    ///                       HE HAS JUST LOST THE RIGHT TO
+    ///                       (`disputeFeeHeld[agreement]`) — divided equally
+    ///                       among the men who answered. The quarter that is
+    ///                       left is the toll and it goes TO THE TREASURY. The
+    ///                       bond no longer reaches the appellant at all.
+    ///                       ⚠️ THIS ROW NAMED THE BOND ALONE UNTIL
+    ///                       23 NOVEMBER 2026 (item 555), a month after the
+    ///                       second sum joined the pocket (the owner,
+    ///                       20 October 2026) — while the branch below has
+    ///                       argued both sums since that day, so the docstring
+    ///                       and its own body disagreed. Either sum can be
+    ///                       nought on its own: a case that carries no bond, or
+    ///                       a clone born before the dispute door, whose fee
+    ///                       comes out of the pot instead and leaves
+    ///                       `disputeFeeHeld` at nought. The wage is three
+    ///                       quarters of whichever of the two exists.
     ///   appeal LOST, and  → THREE QUARTERS of the deposit are divided equally
     ///   somebody read it    among the men who ANSWERED the summons, and the
     ///                       quarter that is left — with the remainder of the
@@ -2722,6 +2804,29 @@ contract ArbiterAppealFacet {
     /// very call unblocks (the seam is measured in
     /// test/AppealFeeTimingSeam.t.sol). So the judge loses exactly what he lost
     /// yesterday, bond and share together, and only the addressees moved.
+    ///
+    /// ⚠️ AND THAT PARAGRAPH IS TRUE OF A SUM THIS CALL NEVER TOUCHES — NOT OF
+    /// THE DISPUTE FEE THE BRANCH BELOW DIVIDES (item 555, 23 November 2026).
+    /// The two are separate money and the pair is the easiest confusion in this
+    /// file to make, so it is named rather than left to be re-derived:
+    ///   `share`               the judge's slice of a fee taken out of the POT
+    ///                         at the verdict, handed to
+    ///                         `_settleForfeitedShare` by `creditDisputeFee`
+    ///                         and credited to `d.vaultBalance` — the BANK.
+    ///                         Nothing in this tree's `Agreement.sol` calls
+    ///                         `creditDisputeFee` any more; the clones born
+    ///                         before the dispute door of 20 October 2026 still
+    ///                         do, off the implementation each is pinned to for
+    ///                         life.
+    ///   `disputeFeeHeld`      the fee THIS deal prepaid at the door, already
+    ///                         sitting on the diamond, taken into the panel's
+    ///                         pocket by the branch below — the PANEL and the
+    ///                         treasury's toll, never the bank.
+    /// A clone takes one road or the other and the tree's own implementation
+    /// takes only the second, so a deal with a pocket of two sums has no
+    /// `share` to settle and a deal that has one leaves `disputeFeeHeld` at
+    /// nought. A reader who reads this paragraph as a statement about the money
+    /// the branch below divides will correct a right comment into a wrong one.
     ///
     /// ⚠️ THE DEBT MACHINERY IS LEFT STANDING AND IS NO LONGER FED. Nothing
     /// writes `appealLedgers.debt`, `advanceFromBond` or `advanceFromVault` any
@@ -3342,13 +3447,21 @@ contract ArbiterAppealFacet {
             uint256 wage = pocket * APPEAL_WAGE_NUMERATOR / APPEAL_WAGE_DENOMINATOR;
             uint256 each = wage / answered;
             // uint64 cannot truncate. `each <= wage <= pocket`, and `pocket` is
-            // either the deposit (`appealDepositFor`) or a case bond
-            // (`caseBondFor`, which is that same number held down to the pot) —
-            // so either way at most APPEAL_DEPOSIT_CAP (2e8). The multiplication
-            // by three cannot overflow for the same reason. ⚠️ THE BOUND DOES
+            // either the deposit (`appealDepositFor`, at most
+            // APPEAL_DEPOSIT_CAP = 2e8) or a case bond plus the forfeited
+            // dispute fee — each of those two held to
+            // `DISPUTE_FEE_CAP_MIRROR`, so at most 1e9. The multiplication by
+            // three cannot overflow for the same reason. ⚠️ THE BOUND DOES
             // NOT NEED THE TWO TO BE EQUAL, and they stopped being equal below
-            // a 20 USDC pot on 20 October 2026: it needs only that neither can
-            // exceed the cap, and the ceiling only ever lowers one of them.
+            // a 20 USDC pot on 20 October 2026 and above a 333 USDC pot on the
+            // 21st: it needs only that neither can exceed its own cap.
+            //
+            // ⚠️ AND THE OVERTURN SIDE OF THAT BOUND IS NO LONGER A FLAT
+            // TWENTY DOLLARS (18 November 2026): the bond rides the deal's own
+            // reward, so this pocket reaches 1e9 where it used to stop at
+            // 3e7. Still ten orders of magnitude under 2^64, and the thing that
+            // holds it is the ceiling in `ArbiterRegistryStorage.caseBondFor`
+            // rather than anything on this line.
             d.appealLedgers[agreement].voterShare = uint64(each);
             uint256 toll = pocket - each * answered;
             if (overturn) {

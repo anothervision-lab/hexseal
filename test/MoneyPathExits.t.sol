@@ -150,7 +150,16 @@ contract MoneyPathExitsTest is MoneyPathBase {
         // was opened. What moves is the bond, going home.
         assertEq(s.dia + caseBond - b.dia, 0, "money arrived at the diamond at the verdict -- the fee was supposed to be there already");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), toArbiter);
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), toTreasury);
+        // ⚠️ THE SEAT PRICE IS IN THIS POT TOO SINCE 12 NOVEMBER 2026, and it is
+        // named rather than folded in: `toTreasury` is the levy's share (a
+        // nought on this road, the whole fee being the judge's) and the dollar
+        // beside it is what the rig's seat paid at the entrance. Written as a
+        // sum of two named terms so that a levy reaching the pot still reds.
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(),
+            toTreasury + SEAT_PRICE_HELD,
+            "the treasury's pot is not the levy's share plus the seat price"
+        );
         assertEq(toArbiter + toTreasury, fee, "the two shares are the whole fee");
         _assertDiamondBalances("after resolve for client");
 
@@ -184,13 +193,32 @@ contract MoneyPathExitsTest is MoneyPathBase {
         // deleted call is a scene that stops measuring the treasury's door at
         // all: the day a slice reappears on this road, `expectRevert` reds and
         // names it, while an absent call would stay green through it.
-        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
+        // ⚠️ AND THE DOOR OPENS AGAIN SINCE 12 NOVEMBER 2026, NOT BECAUSE OF THE
+        // LEVY. The pot gained a SECOND source — the one non-refundable dollar
+        // this rig's seat paid at the entrance — so there is something to push
+        // and the push is EXACTLY that dollar. The claim the paragraphs above
+        // defend is unchanged and is now carried by the AMOUNT instead of by a
+        // refusal: a levy reaching this pot still reds here by name.
+        uint256 pushedToTreasury = usdc.balanceOf(feeRecipient);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
+        assertEq(
+            usdc.balanceOf(feeRecipient) - pushedToTreasury, SEAT_PRICE_HELD,
+            "the treasury's door pushed out more than the seat price it holds"
+        );
         assertEq(
             usdc.balanceOf(arbiterAddr) - b.arb, toArbiter + caseBond,
             "arbiter paid out, and his bond for this case came back with it"
         );
-        assertEq(usdc.balanceOf(feeRecipient) - b.fee, toTreasury, "the treasury was paid out of an arbitration fee");
+        // ⚠️ THE LEVY'S SHARE AND THE SEAT PRICE, NAMED SEPARATELY. `toTreasury`
+        // is the arbitration levy's share and is a nought on this road; the
+        // dollar beside it is the seat price the push above moved out. Two named
+        // terms rather than one, so a levy reaching the recipient still reds.
+        assertEq(
+            usdc.balanceOf(feeRecipient) - b.fee, toTreasury + SEAT_PRICE_HELD,
+            "the treasury was paid out of an arbitration fee"
+        );
+        // ⚠️ THE SEAT PRICE IS NOT IN THIS SUM: the push a few lines up moved it
+        // off the diamond to the fee recipient. What is left is the bond.
         assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond back to nothing but the entrance bond of the seat");
         _assertDiamondBalances("after both withdrawals");
     }
@@ -435,7 +463,7 @@ contract MoneyPathExitsTest is MoneyPathBase {
 
         assertEq(c0 - usdc.balanceOf(client), FEE_FLOOR, "the client is out exactly the floor");
         assertEq(usdc.balanceOf(feeRecipient) - f0, FEE_FLOOR, "and the floor is what the protocol kept");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond keeps nothing beyond the arbiter's bond");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND + SEAT_PRICE_HELD, "diamond keeps nothing beyond the arbiter's bond and the dollar his seat cost");
         _assertDiamondBalances("after cancelJob");
     }
 
@@ -453,8 +481,8 @@ contract MoneyPathExitsTest is MoneyPathBase {
         assertEq(c0 - usdc.balanceOf(client), FEE_FLOOR, "client out exactly the floor");
         assertEq(usdc.balanceOf(feeRecipient) - f0, FEE_FLOOR, "protocol kept the floor");
         assertEq(
-            usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND,
-            "diamond keeps nothing beyond the arbiter's bond"
+            usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND + SEAT_PRICE_HELD,
+            "diamond keeps nothing beyond the arbiter's bond and the dollar his seat cost"
         );
         _assertDiamondBalances("after rejectRequest");
     }

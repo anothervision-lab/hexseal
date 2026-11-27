@@ -88,6 +88,37 @@ contract UpgradeAgreementHandInSignal is Script {
     }
 
     function run() external {
+        // ── Does this script carry TODAY'S Agreement? FIRST, before anything ──
+        // `new Agreement()` below reads nothing at run time: solc welded
+        // Agreement's whole creation code into this script when it was last
+        // compiled, and `--broadcast` sends that weld. Foundry's build cache
+        // keeps two hashes per source and an edit inside a function body moves
+        // only one of them, so Agreement.sol can be recompiled while this script
+        // keeps the artifact it already had — and then the PREVIOUS
+        // implementation goes on chain while the identity checks below still say
+        // "identical", because both of their sides are that same weld. A clone is
+        // nailed to its implementation for life (EIP-1167). Item 519 of the
+        // working journal. The artifact on disk is the one copy the weld cannot
+        // drag along with it, so that is the comparison.
+        // ⚠️ Zero bytes is a REFUSAL, not "nothing to compare".
+        // ⚠️ The first require below CANNOT FIRE on forge 1.8.1 — measured, not
+        // assumed: an artifact whose `object` is "0x" makes the cheatcode itself
+        // refuse ("vm.getCode: no bytecode for contract; is it abstract or
+        // unlinked?") before this contract gets a word in, and a MISSING artifact
+        // is rebuilt by the build every `forge script` runs first. It stays because
+        // the refusal that does happen carries forge's words and not this script's
+        // name, and because a later forge that returns empty bytes instead of
+        // refusing would otherwise walk into a keccak of nothing.
+        bytes memory agreementOnDisk = vm.getCode("Agreement.sol:Agreement");
+        require(
+            agreementOnDisk.length > 0,
+            "UpgradeAgreementHandInSignal: the Agreement artifact carries no creation code - run forge build before broadcasting"
+        );
+        require(
+            keccak256(type(Agreement).creationCode) == keccak256(agreementOnDisk),
+            "UpgradeAgreementHandInSignal: the welded Agreement copy is stale - run forge build before broadcasting"
+        );
+
         address diamond     = vm.envAddress("DIAMOND_ADDRESS");
         // The signer comes from the command line (--account / --private-key), never
         // from the environment. Foundry fills msg.sender from --sender and derives it

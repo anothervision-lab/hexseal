@@ -203,6 +203,53 @@ contract DeployFull is Script {
     uint256 constant VAULT_TARGET_DISPUTES   = 50;   // vault target, in disputes
 
     function run() external {
+        // ── Does this script carry TODAY'S Agreement? FIRST, before anything ──
+        // `new Agreement()` further down reads nothing at run time. solc welded
+        // Agreement's whole creation code into this script's own bytecode the
+        // last time the script was compiled, and `--broadcast` sends that weld.
+        // Foundry's build cache keeps two hashes per source, and an edit INSIDE A
+        // FUNCTION BODY moves only one of them: Agreement.sol is recompiled while
+        // every dependent keeps the artifact it already had. Three ordinary
+        // commands with no flags — edit a body, `forge build`, `forge script
+        // … --broadcast` — therefore put the PREVIOUS implementation on chain,
+        // and the post-flight identity checks cannot see it, because both of
+        // their sides are that same weld. A clone is nailed to its implementation
+        // for life (EIP-1167), so every deal born after such a run would sit on
+        // the wrong code for ever. Item 519 of the working journal.
+        //
+        // The artifact on disk is the one copy the weld cannot drag along with
+        // it, so that is what this compares against.
+        // script/check-embedded-copies.sh asks the same question from outside,
+        // and it is the better instrument because it sees every pair at once —
+        // but a gate only helps where it is called, and `forge script …
+        // --broadcast` is typed by hand with no preflight in front of it. This
+        // require lives inside the thing that signs, which is the one place that
+        // cannot be skipped by forgetting.
+        //
+        // ⚠️ ZERO BYTES IS A REFUSAL, not "nothing to compare". A missing or
+        // empty artifact means this run cannot know what it is about to send,
+        // and not knowing is the state this check exists to stop.
+        //
+        // ⚠️ AND THE FIRST REQUIRE BELOW CANNOT FIRE ON forge 1.8.1 — measured,
+        // not assumed. An artifact whose `object` is "0x" makes the cheatcode
+        // itself refuse ("vm.getCode: no bytecode for contract; is it abstract
+        // or unlinked?") before this contract gets a word in, and a MISSING
+        // artifact is rebuilt by the build that every `forge script` runs first,
+        // so neither state survives to be seen here. It stays for two reasons:
+        // the refusal that does happen carries forge's words rather than this
+        // script's name, which is worth saying out loud somewhere; and a later
+        // forge that returns empty bytes instead of refusing would otherwise
+        // walk straight into a keccak of nothing.
+        bytes memory agreementOnDisk = vm.getCode("Agreement.sol:Agreement");
+        require(
+            agreementOnDisk.length > 0,
+            "DeployFull: the Agreement artifact carries no creation code - run forge build before broadcasting"
+        );
+        require(
+            keccak256(type(Agreement).creationCode) == keccak256(agreementOnDisk),
+            "DeployFull: the welded Agreement copy is stale - run forge build before broadcasting"
+        );
+
         address usdc             = vm.envOr("USDC_ADDRESS",      address(0x036CbD53842c5426634e7929541eC2318f3dCF7e));
         address feeRecipient     = vm.envOr("FEE_RECIPIENT",     address(0));
         address trustedForwarder = vm.envOr("TRUSTED_FORWARDER", address(0));
@@ -1237,7 +1284,14 @@ contract DeployFull is Script {
         // ⚠️ THE TREE-WIDE TOTAL IS UNMOVED BY THE SECOND STEP — 282 either way.
         // Appended at the end in both steps, because every index below is
         // quoted in notes written against it.
-        sels = new bytes4[](18);
+        //
+        // ⚠️ 18 -> 19 ON 12 NOVEMBER 2026, and this one DOES move the tree-wide
+        // total: 282 -> 283. `getSeatCost()` is a door that did not exist, not
+        // a door that changed address — the seat price needed a figure the chain
+        // could say. Appended at the end for the same reason as before, and the
+        // argument for why it is a new selector rather than a wider return from
+        // `getApplicationRequirements` is at `sels[18]` below.
+        sels = new bytes4[](19);
 
         // The applicant's own door out. Gasless (ERC-2771), like everything on
         // the applicant's side of this facet.
@@ -1346,6 +1400,98 @@ contract DeployFull is Script {
         // nothing can be done about it. Still the owner's alone — this facet's
         // other administrative doors admit the chief, and this one does not.
         sels[17] = ArbiterApplicationsFacet.revokeArbiterInvitation.selector;
+
+        // ── THE PRICE OF THE SEAT, SAID BY THE CHAIN (in this tree since
+        //    12 November 2026, answered by the chain since the 13th) ──────────
+        //
+        // `getSeatCost()` 0x3b7603be. The second half of the owner's decision
+        // of 20 October arrived — ten dollars of refundable bond plus ONE
+        // DOLLAR that does not come back — and a screen cannot build the
+        // approval out of `getApplicationRequirements()` any more: that tuple's
+        // bond field is the refundable half, and a wallet signing for ten is
+        // refused `BondNotApproved(10e6, 11e6)`.
+        //
+        // ⚠️ A NEW SELECTOR AND NOT A FIFTH FIELD ON THAT TUPLE, which is the
+        // whole reason this line exists. A selector comes from the SIGNATURE,
+        // and a return type is not part of one: widening the old answer would
+        // leave 0xfc0b7216 meaning the same four bytes, so every screen built
+        // against the four-field shape would go on calling it and go on reading
+        // the first four words — silently, with nothing going red anywhere. A
+        // name a screen does not know is a name it does not call.
+        //
+        // ⚠️ IT WAS PENDING FOR ONE DAY AND IT IS MOUNTED SINCE 13 NOVEMBER
+        // 2026. While it was pending the tree was the side that had moved: read
+        // off the chain on 12 November 2026 at block 57 882 824, the live diamond
+        // 0x760F07367888C62f7c2Dfb619A5e534132855ce5 carried 15 facets and routed
+        // 282 selectors and `facetAddress(0x3b7603be)` answered the ZERO ADDRESS.
+        // The owner signed script/UpgradeSeatPrice.s.sol the next day and it
+        // landed in block 58 091 040, receipt status 0x1, txIndex 4, tx
+        // 0xdfb3fd04… with `to` = the diamond.
+        //
+        // Read off the chain at block 58 095 000, 3 960 blocks after the cut:
+        // fifteen facets, 283 selectors, and `facetAddress(0x3b7603be)` answers
+        // 0x57707f7CBD5a8F7511c3d3436b07D393a66244D4 — the applications facet
+        // this cut deployed, carrying 19 selectors where the old one carried 18.
+        // The registry moved with it, 0x22A0b090… -> 0xEA092055…, 27 selectors
+        // either side, and the loupe routes NOTHING through either old address.
+        // (A zero is still a reading and not a miss, and it was controlled the
+        // same way both days: at the same block the same call answered
+        // 0x57707f7C… for `getApplicationRequirements()` 0xfc0b7216 and
+        // 0xEA092055… for `submitVerdict(address,bool)` 0xce79bef9.) Both sides
+        // build 283 now, `_pendingCut()` in test/DeployFullMatchesChain.t.sol is
+        // empty again, and the census it reads is
+        // test/fixtures/chain-2026-11-13-post-seat-price-selectors.json.
+        //   ⚠️ CORRECTED LATER THE SAME DAY: a SECOND cut landed on 13 November
+        //   2026, in block 58 133 775, re-pointing the accountability facet's
+        //   thirty-eight doors at 0xc7ff6fed…d4c0 without moving a single count
+        //   (283 -> 283, 15 -> 15). The census above is superseded in place and
+        //   the one both instruments read is now
+        //   test/fixtures/chain-2026-11-13-post-forfeited-bond-selectors.json
+        //   (block 58 141 000). `_pendingCut()` is still empty, and that cut is
+        //   the first for which ALL FIFTEEN live bodies match this tree.
+        //
+        // ⚠️ WHAT THE CUT NEEDED, IN THREE GROUPS, AND THE SIZES WERE NOT
+        // INTERCHANGEABLE. This is the half of this note that stays true for the
+        // NEXT cut to this facet, which is why it is corrected and not deleted;
+        // the sizes below are what the transaction's own calldata decodes to on
+        // chain, not what the script in this tree says:
+        //
+        //   Add      1 selector  — `getSeatCost()` 0x3b7603be, and nothing else;
+        //   Replace 18 selectors — the applications facet's doors that are
+        //                          ALREADY MOUNTED on chain. Eighteen, not
+        //                          nineteen: the nineteenth is the Add above;
+        //   Replace 27 selectors — the registry facet's, all of them mounted.
+        //
+        // ⚠️ THE EIGHTEEN WAS THE CHAIN'S NUMBER AND THE NINETEEN IS THIS
+        // TREE'S, AND PUTTING THE TREE'S FIGURE IN THE REPLACE GROUP WOULD HAVE
+        // KILLED THE WHOLE TRANSACTION. `Add` reverts on a mounted selector and
+        // `Replace` reverts on an unmounted one, and a `diamondCut` is one
+        // transaction: the refusal takes every group with it, not just the wrong
+        // line. So the Replace group is built from what `facets()` says the chain
+        // holds TODAY, never from `arbiterApplicationsFacetSelectors()` in this
+        // file. ⚠️ AND THE TRAP IS STILL LIVE AFTER THIS CUT, with the figures
+        // moved on by one: the chain now holds NINETEEN on this facet, so the
+        // next cut's Replace group is nineteen and its Add group is whatever
+        // this function grows past that. The number to use is never the length
+        // of the list below.
+        //
+        // ⚠️ THE CUT THAT DID IT: script/UpgradeSeatPrice.s.sol, with
+        // test/UpgradeSeatPriceRehearsal.t.sol driving its checks over a rig
+        // built from this tree. It built both Replace groups from
+        // `facetFunctionSelectors` at run time and never from the list in this
+        // function, for the reason the paragraph above gives — and that is why
+        // the eighteen was right without anybody typing it. Its dry run on
+        // 13 November read 282 routed, 18 on the applications facet and 27 on
+        // the registry; the signed run that followed deployed both facets and
+        // sent the cut in ONE block, 58 091 040, txIndex 2, 3 and 4.
+        //
+        // ⚠️ AND THE BROADCAST LABELS OF THAT RUN ARE PERMUTED, so the binding of
+        // hash to body here comes from the chain: both lists in the file hold the
+        // same three hashes, two of three positions hold different ones, and a
+        // reader joining by hash alone reads the diamondCut as the registry
+        // deployment and the registry as `DiamondProxy`.
+        // script/verify-cut-addresses.sh prints both halves.
+        sels[18] = ArbiterApplicationsFacet.getSeatCost.selector;
     }
 
     // TreasuryLinkFacet — count by the `new bytes4[](n)` literal below (9 until

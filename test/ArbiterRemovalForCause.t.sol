@@ -102,6 +102,21 @@ contract ArbiterRemovalForCauseTest is Test {
     uint256 constant SLOT_ARBITER_BOND = 12;
     uint256 constant SLOT_VAULT_BALANCE = 9;
 
+    /// ⚠️ treasurySlice IS SLOT 15, AND IT IS HERE BECAUSE A FORFEITED BOND GOES
+    /// TO THE TREASURY SINCE 12 NOVEMBER 2026 (the owner's decision of
+    /// 20 October). `_performRemoval` credits `treasurySlice` where it credited
+    /// `vaultBalance`, so the scene below has to read BOTH pots.
+    ///
+    /// ⚠️ NOT COUNTED OFF THE STRUCT AND LEFT AT THAT -- a miscount reads as
+    /// thirty-two nought bytes, which looks exactly like an empty pot. The
+    /// offset is held by `test_TheTreasurySliceOffsetIsTheOneTheProductionGetterReads`
+    /// below, which writes a probe into this slot and reads it back through
+    /// `ArbiterVaultFacet.getTreasurySlice()` -- and asserts the fresh facet
+    /// reads NOUGHT first, so a slot that answered nought for the wrong reason
+    /// could not pass. The same device, and the same reason, as the sweep this
+    /// file's header describes for the four offsets above.
+    uint256 constant SLOT_TREASURY_SLICE = 15;
+
     /// uniqueActiveUsers in ReputationStorage is slot 8, obtained by sweeping against
     /// ReputationFacet.getUniqueActiveUsers(). All seven fields before it in struct
     /// Data are mappings (each eats exactly one whole slot, with no packing alongside
@@ -365,7 +380,8 @@ contract ArbiterRemovalForCauseTest is Test {
         _setStreak(arbiter, 2);
 
         assertEq(_getArbiterBond(arbiter), bond, "setup: the bond is set");
-        assertEq(_getVaultBalance(), 0, "setup: the vault is empty");
+        assertEq(_getVaultBalance(), 0, "setup: the arbiter bank is empty");
+        assertEq(_getTreasurySlice(), 0, "setup: the treasury's pot is empty");
 
         _proposeAndWait(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), "");
         vm.expectEmit(true, true, true, true, address(acc));
@@ -376,7 +392,49 @@ contract ArbiterRemovalForCauseTest is Test {
         acc.removeArbiterForCause(arbiter, ArbiterAccountabilityFacet.Cause.OverturnedVerdicts, bytes32(0), address(0), "");
 
         assertEq(_getArbiterBond(arbiter), 0, "the bond was taken off the arbiter");
-        assertEq(_getVaultBalance(), bond, "the bond went into the arbiter vault and was not lost");
+
+        // ⚠️ THE FORFEIT GOES TO THE TREASURY AND NOT TO THE ARBITER BANK SINCE
+        // 12 NOVEMBER 2026. This line asserted the opposite until then, and the
+        // red it gave was TRUE: the owner's decision of 20 October 2026 names
+        // the addressee of a burnt bond, and `_performRemoval` credits
+        // `treasurySlice` where it credited `vaultBalance`. The arbiter bank
+        // lost an income line, which is said out loud here rather than left to
+        // be found.
+        //
+        // ⚠️ BOTH POTS ARE READ, AND THAT IS THE WHOLE POINT OF THE REWRITE.
+        // "The treasury grew by the bond" is ALSO true of a change that credited
+        // both pots -- which would book money the diamond does not hold, out of
+        // nothing. Only the pair says what happened: the bond moved, it did not
+        // multiply.
+        assertEq(_getTreasurySlice(), bond, "the forfeited bond did not go into the treasury");
+        assertEq(_getVaultBalance(), 0, "the forfeited bond still reaches the arbiter bank - it is credited twice, so the diamond owes money it never took");
+    }
+
+    /// ⚠️ THE ARM ON `SLOT_TREASURY_SLICE`, and it is here because the reading
+    /// it guards cannot fail loudly. A miss by one slot reads as thirty-two
+    /// nought bytes, and a nought from the wrong slot looks exactly like an
+    /// empty pot -- so the scene above would have been green on a forfeit that
+    /// went nowhere at all.
+    ///
+    /// The control comes FIRST and it is a nought at a place where nought is the
+    /// truth; then the same slot is made to answer a NON-ZERO through the
+    /// production getter. A reader that answered nought because it was pointed
+    /// at the wrong word could not get past the second assertion.
+    ///
+    /// `ArbiterVaultFacet` is used as the production reader because it shares
+    /// `ArbiterRegistryStorage` with the facet under test and declares
+    /// `getTreasurySlice()`, which `ArbiterAccountabilityFacet` does not.
+    function test_TheTreasurySliceOffsetIsTheOneTheProductionGetterReads() public {
+        ArbiterVaultFacet reader = new ArbiterVaultFacet();
+        assertEq(reader.getTreasurySlice(), 0, "control: a freshly deployed facet's treasury pot is not empty, so a nought below would prove nothing");
+
+        uint256 probe = 7_777_777;
+        vm.store(address(reader), bytes32(uint256(ARB_BASE) + SLOT_TREASURY_SLICE), bytes32(probe));
+        assertEq(reader.getTreasurySlice(), probe, "the slot this file reads as the treasury pot is not the slot the production getter reads");
+
+        // And the neighbours are untouched, so the offset is this field's and
+        // not a hit on something next to it.
+        assertEq(reader.getVaultBalance(), 0, "the probe landed on the arbiter bank instead");
     }
 
     // ---------- CLEARING THE SEAT ----------
@@ -2799,6 +2857,10 @@ contract ArbiterRemovalForCauseTest is Test {
 
     function _getVaultBalance() internal view returns (uint256) {
         return uint256(vm.load(address(acc), bytes32(uint256(ARB_BASE) + SLOT_VAULT_BALANCE)));
+    }
+
+    function _getTreasurySlice() internal view returns (uint256) {
+        return uint256(vm.load(address(acc), bytes32(uint256(ARB_BASE) + SLOT_TREASURY_SLICE)));
     }
 
     function _setUniqueActiveUsers(uint256 n) internal {

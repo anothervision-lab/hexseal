@@ -45,6 +45,7 @@ import {FactoryFacet} from "../src/FactoryFacet.sol";
 import {ArbiterRegistryFacet} from "../src/facets/ArbiterRegistryFacet.sol";
 import {ArbiterAppealFacet} from "../src/facets/ArbiterAppealFacet.sol";
 import {PreSplitArbiterDispatcher} from "./ArbiterSplitRig.sol";
+import {REGISTRY_MIN_ROOM} from "../script/RegistryRoomFloor.sol";
 
 contract AppealFacetSplitCutTest is Test {
     DeployFull internal deploy;
@@ -313,7 +314,39 @@ contract AppealFacetSplitCutTest is Test {
         assertLt(app, 24577, "the appeal facet is over EIP-170");
         // The split exists to buy room. Named as a floor rather than an
         // equality so that ordinary growth does not red this line, and high
-        // enough that losing the room this work bought would.
-        assertGt(24576 - reg, 4096, "the split did not leave the registry at least 4 KiB of room");
+        // enough that losing the room this work bought would. The room itself
+        // is measured off the deployment THIS scene makes and not off an
+        // artifact: 4 074 bytes on 19 November 2026, the facet at 20 502.
+        //
+        // ⚠️ THE FLOOR IS NOT WRITTEN HERE, AND THAT IS THE POINT OF THIS
+        // LINE'S SHAPE. `REGISTRY_MIN_ROOM` lives in exactly one file,
+        // script/RegistryRoomFloor.sol, together with the owner's decision
+        // behind it and the price it cost. Until 19 November 2026 the figure
+        // was a literal here, a literal in test/UpgradeSeatPriceRehearsal.t.sol
+        // and a constant in script/UpgradeSeatPrice.s.sol, and NOTHING compared
+        // the three: a mutation that halved this one to 2 048 and left the
+        // others alone reddened none of the 25 tests that carry the floor. A
+        // floor is only as high as its lowest copy, so there is now one copy.
+        //
+        // ⚠️ AND THE MESSAGE IS BUILT OUT OF THE CONSTANT, not written beside
+        // it. The old text promised "at least 3,5 KiB of room" and went on
+        // promising it with 2 048 in the number -- which is the half of that
+        // defect a person trips on, in a one-digit diff that reads as harmless.
+        // Text assembled from the number cannot drift from it.
+        //
+        // ⚠️ AND IT IS A TRIPWIRE, NOT THE LIMIT. EIP-170 is 24 576 and this
+        // tree is 4 074 under it; past this line the facet still deploys, and
+        // the change after that is the one that cannot. Moving the tripwire is
+        // his answer to give and not an executor's -- which is why the last
+        // move was left RED here until he answered.
+        assertGt(
+            24576 - reg,
+            REGISTRY_MIN_ROOM,
+            string.concat(
+                "the split did not leave the registry the room REGISTRY_MIN_ROOM keeps for it: ",
+                vm.toString(REGISTRY_MIN_ROOM),
+                " bytes"
+            )
+        );
     }
 }

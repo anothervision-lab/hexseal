@@ -75,7 +75,49 @@ import {IAgreementRenderer} from "./AgreementRenderer.sol";
 // live deal sits on the generation boundary — which is the question to ask
 // again, on chain, before the next generation is cut, and not a property of
 // this file.
-address constant AGREEMENT_RENDERER = 0xba92dCAD33f0f25bA8a043F6D5b34c03619c28AC;
+//
+// ⚠️⚠️ AND IT MOVED AGAIN ON 24 NOVEMBER 2026, THIS TIME BECAUSE THE DRAWING
+// REALLY DID CHANGE, AND NONE OF THE FOUR STEPS HAS RUN FOR THIS GENERATION.
+// The renderer learned to draw a second form of sheet — a receipt while the
+// money is funded and unstarted, the agreement once work is under way, both
+// approved as drawings by the owner that day. Executable bytes changed, so
+// `creationCode` changed, so the CREATE2 address changed:
+// ~~0xba92dCAD33f0f25bA8a043F6D5b34c03619c28AC~~ is what the generation
+// standing on Base Sepolia at the time of writing points at, and the literal
+// below is where THIS checkout's renderer lands.
+//
+// ⚠️ SO THIS ADDRESS HAS NO CODE ON CHAIN UNTIL THE FIRST OF THE FOUR STEPS
+// RUNS, AND NOTHING IN THE TREE WILL SAY SO. Both locks over this number
+// compare the constant against what this checkout compiles, and after a
+// matching pair of edits they are green while the chain is untouched — which
+// is the one failure test/AgreementRendererWiring.t.sol names in its own words:
+// refitting the constants without deploying anything makes every future clone
+// point at an address with no code. The four steps, in this order and no
+// other: deploy the renderer (CREATE2, salt `hexseal.agreement.renderer.v2`,
+// lands at the literal below), then the new Agreement implementation, then a
+// new AgreementDeployer (its `implementation` is immutable, so the old one
+// cannot be redirected), then `FactoryFacet.setAgreementDeployer`. The deploy
+// script refuses to run the second step before the first by checking this
+// address has code.
+//
+// ⚠️ AND THE QUESTION THE PARAGRAPH ABOVE SAYS TO ASK AGAIN, ASKED AGAIN: a
+// deal cut from the OLD deployer keeps the OLD renderer for ever and will
+// never show the receipt, so the owner's answer to "are there live deals" is
+// the answer to "who does this change not reach". It is a chain reading and it
+// belongs in the report of the cycle that proposes the deployment, not in this
+// file.
+//
+// ⚠️ AND IT MOVED A SECOND TIME THE SAME DAY, 24 NOVEMBER 2026, WHICH IS
+// THE CHEAPEST MOMENT IT WILL EVER MOVE AGAIN. The renderer learned to say
+// that the escrow still holds the money on a sheet whose status was reached by
+// TIME rather than by a press, and the seam grew one field for it
+// (`Deal.potStillHere`). None of the four steps below had run yet, so this
+// correction costs nothing: the generation that goes to chain carries both
+// changes and the chain sees one deployment, not two. Had the four steps run
+// first, the same correction would have cost four more writes to chain.
+// Previous literal of this undeployed generation, kept so the move is legible:
+// ~~0x3cD5746DB99Bd8CEf6a44A3fb859391c23B56B08~~.
+address constant AGREEMENT_RENDERER = 0x5B4F27864C8aeae35e8eA9267A18424e836F2Cd0;
 
 // ---------- MINIMAL ERC721 (no OZ, no dependencies) ----------
 // Why not OZ: this implementation is cloned per deal (EIP-1167), so its size
@@ -3269,7 +3311,28 @@ contract Agreement is MinimalERC721, ReentrancyGuard, ERC2771Context {
             extrasCount:  acceptedExtrasCount,
             deadlineDays: _deadlineDays,
             status:       uint8(status()),
-            terms:        terms
+            terms:        terms,
+            // ⚠️ THE STATUS ALONE CANNOT TELL THE RENDERER WHETHER THE MONEY
+            // IS STILL IN HERE, and this one bit is why the seam grew a field
+            // on 24 November 2026. `status()` above answers COMPLETED once
+            // AUTO_APPROVE_WINDOW has run out and REFUNDED once the deadline
+            // plus DEADLINE_GRACE has, both BY TIME and both long before
+            // anybody calls `triggerAutoApprove` or `triggerDeadlineTimeout` —
+            // and in that gap the pot is sitting right here, untouched, with
+            // the certificate the only document a person is holding. The
+            // renderer received the same enum value for that state as for a
+            // deal paid out months ago, so it withheld every sentence about
+            // money. `pot` could not rescue it either: that is
+            // `amount + extrasTotal`, what the deal is worth, not what the
+            // balance is.
+            //
+            // `!_finalized` is the whole answer. `_finalized` is set in one
+            // place in this file, inside `_complete`, immediately before the
+            // payout; every door that pays goes through it. The angle it gets
+            // wrong — a soft payout that failed leaves the flag up and the
+            // money in — is named at `Deal.potStillHere` in
+            // src/AgreementRenderer.sol, and it errs towards saying nothing.
+            potStillHere: !_finalized
         })) returns (string memory uri) {
             return uri;
         } catch {

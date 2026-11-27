@@ -69,12 +69,55 @@ interface IAgreementRenderer {
         /// drawing emits nothing for them at all -- not a line reading zero,
         /// nothing -- so such a sheet is byte for byte the sheet drawn before
         /// this field existed. test/AgreementCertificateSnapshot.t.sol holds
-        /// that with hashes blessed from a build older than this file.
+        /// that, and its header is where the measurement behind it is written
+        /// down; see the longer note at `_extrasLine` below before moving
+        /// anything it pins.
         uint256 extrasTotal;
         uint256 extrasCount;
         uint256 deadlineDays;
         uint8   status;        // Agreement.Status, same order
         string  terms;         // raw, as the human typed it — escaped here
+        /// IS THE POT PRINTED ABOVE STILL INSIDE THE CLONE? One bit, and it is
+        /// deliberately the DRAWING'S question rather than the clone's
+        /// mechanism. The sheet needs to know whether it may say "this money is
+        /// here"; a field called `finalized` would have been the clone's
+        /// bookkeeping leaking into a contract that has no business knowing
+        /// what finalization is, and six months from now nobody would remember
+        /// that `finalized` meant "the money has gone".
+        ///
+        /// ⚠️ IT EXISTS BECAUSE `status` CANNOT ANSWER IT. `COMPLETED` and
+        /// `REFUNDED` are both DERIVED FROM TIME in `Agreement.status()` — the
+        /// auto-approve window running out, or the deadline plus its grace —
+        /// and the clone answers the same enum value whether or not anybody has
+        /// yet called `triggerAutoApprove` or `triggerDeadlineTimeout`. Before
+        /// that press the pot is still sitting in the clone, and the drawing
+        /// used to say nothing at all about it. `pot` cannot answer it either:
+        /// it is `amount + extrasTotal`, a recorded figure and not a balance —
+        /// see `Agreement._pot()`.
+        ///
+        /// WHO OWNS THE ANSWER: the clone, as `!_finalized`, and `_finalized`
+        /// is written in exactly ONE place in src/Agreement.sol — inside
+        /// `_complete`, immediately before the payout.
+        ///
+        /// ⚠️ THE ONE ANGLE IT GETS WRONG, NAMED HERE RATHER THAN PATCHED.
+        /// The payouts are soft: `_complete` sets the flag, and `_payExecutor`
+        /// or `_payClient` may then fail and book the sum as a debt, which
+        /// leaves money inside a clone that reports `false` here. Such a sheet
+        /// says nothing about money that is in fact present. That is the safe
+        /// direction and it is chosen on purpose — withholding a true
+        /// sentence costs a reader nothing, printing a false one on a document
+        /// about money is what this bit exists to prevent — and the stranded
+        /// sums are readable through `undeliveredPayout` and
+        /// `undeliveredRefund`, which is where that state belongs.
+        ///
+        /// ⚠️ AND THIS STRUCT MAY NOT GROW AGAIN FOR FREE. A clone already
+        /// born keeps calling the shape it was compiled against, so changing it
+        /// would take `tokenURI` down on every live deal at once. It is changed
+        /// here only because the renderer, the `Agreement` implementation and
+        /// the deployer of this generation go to chain together: no live clone
+        /// ever meets this shape against the old draughtsman, and no clone cut
+        /// from the old deployer ever meets the new one.
+        bool potStillHere;
     }
 
     function renderDeal(Deal calldata d) external pure returns (string memory);
@@ -133,22 +176,75 @@ contract AgreementRenderer is IAgreementRenderer {
         ));
     }
 
+    /// ⚠️ TWO SHEETS OUT OF ONE DRAUGHTSMAN, APPROVED AS DRAWINGS BY THE OWNER
+    /// ON 24 NOVEMBER 2026. A deal that is funded and not yet started is a
+    /// RECEIPT for money taken; a deal being worked is an AGREEMENT. Which of
+    /// the two is drawn is decided here and nowhere else.
+    ///
+    /// ⚠️ THE OPENING TAG AND THE STYLESHEET ARE EMITTED BY `_svgOpen` FOR BOTH
+    /// FORMS, UNCONDITIONALLY, AND THAT IS THE WHOLE SHAPE OF THIS FILE'S
+    /// CHANGE. One selector added to that `<style>` for the receipt's sake
+    /// would move the bytes of EVERY sheet there is, the six that must not
+    /// move included — see the long note at `_extrasLine` and the header of
+    /// test/AgreementCertificateSnapshot.t.sol. So the receipt's own looks are
+    /// written on its elements instead, and the stylesheet below is the same
+    /// string it was before either form existed.
     function _buildSVG(Deal calldata d, Status s) private pure returns (string memory) {
         string memory col = _statusColor(s);
-        string memory st  = _statusStr(s);
+        if (s == Status.FUNDED) {
+            return string(abi.encodePacked(_svgOpen(), _buildReceipt(d, col)));
+        }
+        // ⚠️ READ OFF THE CLONE, NOT GUESSED FROM THE STATUS, SINCE
+        // 24 NOVEMBER 2026. This line was `_theMoneyIsStillHere(s)`, a
+        // function in this file that answered true for `ACTIVE` and `DISPUTED`
+        // and nothing else. It was right about those two and silent about the
+        // state that most needs a sentence: work handed in and nobody
+        // answering, or a deadline long past, where `status()` already reads
+        // COMPLETED or REFUNDED and not one cent has left the clone. No
+        // function HERE could tell that apart from a settled deal — the clone
+        // answers the same enum either way, and `pot` is a recorded figure
+        // rather than a balance — so the clone states it outright instead.
+        // See `Deal.potStillHere`.
+        bool held = d.potStillHere;
         return string(abi.encodePacked(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="520" viewBox="0 0 400 520">',
-            '<style>text{font-family:monospace}.lb{font-size:9px;fill:#555;letter-spacing:1}.v{font-size:12px;fill:#ccc}.vl{font-size:13px;fill:#fff}.hd{font-size:11px}.c{text-anchor:middle}line{stroke:#1e1e1e;stroke-width:1}</style>',
+            _svgOpen(),
             '<rect width="400" height="520" fill="#0d0d0d"/>',
             '<rect x="0" y="0" width="400" height="3" fill="', col, '"/>',
             '<text x="32" y="44" class="hd" fill="#555">DEAL AGREEMENT</text>',
             '<text x="368" y="44" class="hd" fill="#333" text-anchor="end">HSEAL</text>',
             '<text x="32" y="66" class="hd" fill="#444">', _shortAddr(d.deal), '</text>',
-            _buildSVGStatus(col, st),
-            _buildSVGData(d),
-            _buildSVGFooter()
+            _buildSVGStatus(col, _statusStr(s)),
+            _buildSVGData(d, held),
+            _escrowLines(held, s),
+            _buildSVGFooter(held)
         ));
     }
+
+    /// The canvas and the stylesheet, shared by both forms. 400x520 and
+    /// #0d0d0d are the approved canvas; the stylesheet is BYTE-FROZEN, for the
+    /// reason given above `_buildSVG`.
+    function _svgOpen() private pure returns (string memory) {
+        return
+            '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="520" viewBox="0 0 400 520">'
+            '<style>text{font-family:monospace}.lb{font-size:9px;fill:#555;letter-spacing:1}.v{font-size:12px;fill:#ccc}.vl{font-size:13px;fill:#fff}.hd{font-size:11px}.c{text-anchor:middle}line{stroke:#1e1e1e;stroke-width:1}</style>';
+    }
+
+    /// ⚠️ THE FUNCTION `_theMoneyIsStillHere(Status)` STOOD HERE UNTIL
+    /// 24 NOVEMBER 2026, and what replaced it is `Deal.potStillHere` — one
+    /// bit the clone fills in. It is written down because the function was not
+    /// wrong, it was INCOMPLETE, and the incompleteness is the kind that reads
+    /// as care: it answered true for `ACTIVE` and `DISPUTED` alone, on the
+    /// argument that `COMPLETED` and `REFUNDED` mean the deal is over and the
+    /// sentences would be addressed to nobody. But those two statuses are
+    /// DERIVED FROM TIME, so both of them are also read on a deal whose pot
+    /// nobody has collected yet, and on exactly those sheets the sentences are
+    /// not merely true — they are the only place a person can learn that the
+    /// money is still there and who has to press what to move it. No status
+    /// this contract receives can tell the two apart.
+    ///
+    /// Three things on the card still hang off that one bit: the label over the
+    /// big number (`AMOUNT HELD` against a bare `AMOUNT`), the sentences at the
+    /// foot, and where the foot sits.
 
     function _buildSVGStatus(string memory col, string memory st) private pure returns (string memory) {
         return string(abi.encodePacked(
@@ -160,12 +256,41 @@ contract AgreementRenderer is IAgreementRenderer {
         ));
     }
 
-    function _buildSVGData(Deal calldata d) private pure returns (string memory) {
+    /// @param held what the clone answered in `Deal.potStillHere`.
+    ///
+    /// ⚠️ THE LABEL IS THE SHORTEST OF THE THREE CLAIMS THAT HANG OFF `held`,
+    /// and it is the easiest to mistake for decoration. `AMOUNT HELD` says the
+    /// escrow is holding this money right now; on a sheet whose pot was paid
+    /// out months ago the same words would be a lie about money. So the word is
+    /// added exactly where the sentences at the foot are added, and a sheet
+    /// with nothing behind it keeps the bare `AMOUNT` — which is also what
+    /// keeps a settled sheet byte-frozen.
+    ///
+    /// ⚠️ "A `COMPLETED` SHEET" STOOD IN THIS PARAGRAPH AS THE EXAMPLE OF
+    /// MONEY LONG GONE, AND THAT WAS THE WHOLE MISTAKE OF 24 NOVEMBER 2026:
+    /// `COMPLETED` is reached BY TIME as well as by a press, and in the first
+    /// case the pot has not moved. The example is taken out rather than
+    /// corrected, because the answer is no longer a status at all.
+    ///
+    /// Two string variables rather than a ternary: solc refuses a conditional
+    /// whose branches are string literals of different lengths — the same
+    /// obstacle, and the same way round it, as in `_extrasLine`.
+    function _buildSVGData(Deal calldata d, bool held) private pure returns (string memory) {
+        string memory amountLabel = "AMOUNT";
+        if (held) amountLabel = "AMOUNT HELD";
+        // ⚠️ "1 DAYS" WAS ON BOTH SHEETS UNTIL 24 NOVEMBER 2026, and it is
+        // corrected in the same cycle as the sentences above because a drawing
+        // reaches chain as executable bytes: a second pass over the wording
+        // would cost another renderer, another implementation, another deployer
+        // and another cut. The same two literals stand in `_buildReceiptProse`
+        // in this file, in that sheet's own case and with its full stop.
+        string memory unit = " days";
+        if (d.deadlineDays == 1) unit = " day";
         return string(abi.encodePacked(
-            '<text x="32"  y="164" class="lb">AMOUNT</text>',
+            '<text x="32"  y="164" class="lb">', amountLabel, '</text>',
             '<text x="200" y="164" class="lb">DEADLINE</text>',
             '<text x="32"  y="183" class="vl">', _formatUSDC(d.pot), '</text>',
-            '<text x="200" y="183" class="vl">', _uint2str(d.deadlineDays), ' days</text>',
+            '<text x="200" y="183" class="vl">', _uint2str(d.deadlineDays), unit, '</text>',
             _extrasLine(d),
             '<line x1="32" y1="200" x2="368" y2="200"/>',
             '<text x="32" y="222" class="lb">CLIENT</text>',
@@ -185,10 +310,31 @@ contract AgreementRenderer is IAgreementRenderer {
     /// the empty string is what makes the sheet of a deal with no top-up byte
     /// for byte the sheet drawn before it existed — `abi.encodePacked` of ""
     /// adds no bytes. That is the main lock over this whole change, and it is
-    /// measured rather than argued: the seven hashes in
-    /// test/AgreementCertificateSnapshot.t.sol were blessed at b9d26547, a
-    /// build in which neither this function nor the pot existed, and they are
-    /// unchanged.
+    /// measured rather than argued: test/AgreementCertificateSnapshot.t.sol
+    /// pins fifteen scenes of the drawing, and its header carries both the
+    /// measurement and the rules for ever moving one of those pins.
+    ///
+    /// ⚠️ THE SENTENCE HERE WAS CORRECTED ON 24 NOVEMBER 2026, AND THE OLD ONE
+    /// IS NAMED BECAUSE IT IS WHAT A READER WOULD HAVE TRUSTED. It said "the
+    /// seven hashes in test/AgreementCertificateSnapshot.t.sol were blessed at
+    /// b9d26547 ... and they are unchanged". Both halves had gone stale: the
+    /// pins are fourteen literals over fifteen scenes, not seven, and they were
+    /// re-blessed at 2441af52. What moved there was not the drawing. The hash
+    /// was taken off the raw document and put onto a canonical form of it — the
+    /// two addresses a run's own deployment order decides, the clone's and the
+    /// diamond's, replaced by fixed stubs — so that the pin answers to the
+    /// picture instead of to a test flag. Everything else stayed under the
+    /// hash, byte for byte, every byte of the image included, and the two
+    /// addresses are now asserted by name and by place instead.
+    ///
+    /// ⚠️ AND THE CLAIM THIS PARAGRAPH EXISTS TO MAKE SURVIVED THE MOVE, which
+    /// was measured before a single literal was touched: the RAW document of
+    /// all fifteen scenes still hashed to the value blessed at b9d26547 — a
+    /// build in which neither this function nor the pot existed — 15 of 15,
+    /// with a wrong pairing checked and refused. So the descent of this
+    /// guarantee from b9d26547 is unbroken; it simply lives in that
+    /// measurement and in that file's header now, rather than in the literal
+    /// itself. Read the header before touching this function.
     ///
     /// ⚠️ WHY IT IS A POINTER AND NOT A LIST. The top-ups themselves are
     /// already written down for ever in the clone's own storage — amount,
@@ -216,11 +362,223 @@ contract AgreementRenderer is IAgreementRenderer {
         ));
     }
 
-    function _buildSVGFooter() private pure returns (string memory) {
+    /// The two sentences at the foot of the AGREEMENT, and the divider above
+    /// them. Approved wording, 24 November 2026, transferred verbatim.
+    ///
+    /// ⚠️ NOTHING, NOT A HEDGED VERSION, WHEN THE MONEY HAS GONE — the same
+    /// shape as `_extrasLine`, and for a stronger reason: `abi.encodePacked` of
+    /// "" adds no bytes, so a sheet whose money has already been paid out stays
+    /// byte for byte what it was. Which sheets those are is `Deal.potStillHere`
+    /// and nothing else since 24 November 2026: the two scenes that go through
+    /// arbitration, and the timed-out ones once somebody has actually pressed
+    /// the door.
+    ///
+    /// ⚠️ AND THE SECOND SENTENCE IS NOT THE SAME SENTENCE ON A REFUND,
+    /// 24 NOVEMBER 2026. "THE EXECUTOR HAS NOT BEEN PAID YET" is literally
+    /// TRUE of a timed-out refund — nobody has been paid anything — and it
+    /// is true about the WRONG PARTY. On that sheet the deadline and its grace
+    /// ran out with nothing delivered, so the pot is waiting to go home to the
+    /// CLIENT (`triggerDeadlineTimeout` hands it over entire), and a reader
+    /// told that the executor has not been paid reads "the money is waiting for
+    /// the executor". A sentence that is factually true and points at the wrong
+    /// person is the same defect as a false one on a document about money, so
+    /// the refund names where the money is going instead of who has not had it.
+    ///
+    /// The REFUNDED sheet that follows a dispute nobody judged never reaches
+    /// this branch: that road is `triggerArbiterTimeout`, which finalizes, so
+    /// `potStillHere` is false and no sentence is drawn at all. Which is
+    /// correct — it splits the pot, and "back to the client" would be a
+    /// second wrong addressee.
+    ///
+    /// ⚠️ NO NEW CSS CLASS, for the reason given above `_buildSVG`: the prose
+    /// carries `font-size="9" fill="#555"` on each element, which is what the
+    /// approved drawing's `.say` rule says, written where it costs the other
+    /// sheets nothing.
+    function _escrowLines(bool held, Status s) private pure returns (string memory) {
+        if (!held) return "";
+        // Two string variables rather than a ternary: solc refuses a
+        // conditional whose branches are string literals of different lengths
+        // — the same obstacle, and the same way round it, as in
+        // `_extrasLine`. The first sentence and the three coordinates are
+        // stated ONCE, so a sheet that is not a refund is byte for byte the
+        // sheet drawn before this branch existed.
+        string memory second = "THE EXECUTOR HAS NOT BEEN PAID YET.";
+        if (s == Status.REFUNDED) second = "IT WILL GO BACK TO THE CLIENT.";
         return string(abi.encodePacked(
-            '<line x1="32" y1="396" x2="368" y2="396"/>',
-            '<text x="200" y="428" class="lb c" fill="#333">SOULBOUND</text>',
-            '<text x="200" y="448" class="lb c" fill="#333">hexseal.net</text>',
+            '<line x1="32" y1="366" x2="368" y2="366"/>'
+            '<text x="32" y="388" font-size="9" fill="#555">THE MONEY ABOVE IS STILL HERE, IN THIS CONTRACT.</text>'
+            '<text x="32" y="403" font-size="9" fill="#555">',
+            second,
+            '</text>'
+        ));
+    }
+
+    /// ⚠️ TWO FOOTERS, AND THE COORDINATES ARE THE REASON. The approved
+    /// agreement puts the two sentences where the old footer stood, so on a
+    /// sheet that carries them everything below the terms moves down by 24
+    /// pixels: the divider 396 -> 424, SOULBOUND 428 -> 452, the domain
+    /// 448 -> 472. A sheet without the sentences keeps the old three lines
+    /// exactly, which is the other half of what freezes the six.
+    function _buildSVGFooter(bool held) private pure returns (string memory) {
+        if (held) {
+            return
+                '<line x1="32" y1="424" x2="368" y2="424"/>'
+                '<text x="200" y="452" class="lb c" fill="#333">SOULBOUND</text>'
+                '<text x="200" y="472" class="lb c" fill="#333">hexseal.net</text>'
+                '</svg>';
+        }
+        return
+            '<line x1="32" y1="396" x2="368" y2="396"/>'
+            '<text x="200" y="428" class="lb c" fill="#333">SOULBOUND</text>'
+            '<text x="200" y="448" class="lb c" fill="#333">hexseal.net</text>'
+            '</svg>';
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // THE RECEIPT, DRAWN ON `FUNDED` AND ON NOTHING ELSE.
+    //
+    // Approved as a drawing by the owner on 24 November 2026 and transferred
+    // coordinate for coordinate: the same 400x520 canvas, the same #0d0d0d,
+    // the status colour on the top rule and on the title.
+    //
+    // WHAT THE SHEET IS FOR. Between the money arriving and the executor
+    // confirming the start, nothing has been agreed yet and there is no work
+    // in progress to describe -- what has happened is that a sum was taken and
+    // is being held. A receipt says that and says who is holding it; an
+    // agreement form in that moment describes a thing that has not begun.
+    //
+    // ⚠️ NOT ONE NEW SELECTOR IN `<style>`, and every look below is written on
+    // the element for that reason (see above `_buildSVG`). Three of the four
+    // are ordinary presentation attributes; the fourth is not, and the
+    // difference is a trap worth naming:
+    //
+    //   the prose       -- `font-size="9" fill="#555"`, no class. Nothing in
+    //                      the stylesheet sets either property on a bare
+    //                      `text`, so the attributes stand.
+    //   the step digits -- the same, plus `font-weight="bold"`.
+    //   the values      -- `font-size="11" fill="#ccc"`. Eleven and not the
+    //                      stylesheet's twelve: the approved receipt's values
+    //                      are a pixel smaller than the agreement's, which is
+    //                      also why they do not borrow `.v`.
+    //   the perforation -- `style="stroke:#2a2a2a"`, an INLINE DECLARATION and
+    //                      deliberately not a `stroke="#2a2a2a"` attribute. A
+    //                      presentation attribute is the weakest thing in the
+    //                      cascade -- weaker than any rule in a stylesheet --
+    //                      so the `line{stroke:#1e1e1e}` rule would win and
+    //                      every perforation would come out the colour of a
+    //                      solid divider. The dash pattern stays an attribute,
+    //                      because no rule sets `stroke-dasharray` at all, and
+    //                      `stroke-width:1` is still inherited from that same
+    //                      rule, which is what the approved drawing wants.
+    // ══════════════════════════════════════════════════════════════════════
+
+    function _buildReceipt(Deal calldata d, string memory col) private pure returns (string memory) {
+        return string(abi.encodePacked(
+            '<rect width="400" height="520" fill="#0d0d0d"/>'
+            '<rect x="0" y="0" width="400" height="3" fill="',
+            col,
+            '"/>'
+            '<text x="32" y="44" class="hd" fill="',
+            col,
+            '">PAYMENT RECEIPT</text>'
+            '<text x="368" y="44" class="hd" fill="#333" text-anchor="end">HSEAL</text>'
+            '<text x="32" y="66" class="hd" fill="#444">',
+            _shortAddr(d.deal),
+            '</text>'
+            '<line x1="32" y1="82" x2="368" y2="82" style="stroke:#2a2a2a" stroke-dasharray="3 5"/>'
+            // The pot, and the big number carries no unit because the line
+            // under it is the unit -- two answers to one question is the
+            // defect `_buildAttrs` and `_extrasLine` are both written against.
+            '<text x="200" y="124" class="c" font-size="30" fill="#fff" font-weight="bold">',
+            _formatAmount(d.pot),
+            '</text>'
+            '<text x="200" y="146" class="c" font-size="12" fill="',
+            col,
+            '" letter-spacing="2">USDC HELD IN ESCROW</text>'
+            '<line x1="32" y1="168" x2="368" y2="168" style="stroke:#2a2a2a" stroke-dasharray="3 5"/>'
+            // WHO IS HOLDING IT, WHO PAID IT, WHO IT IS FOR, AND WHAT FOR.
+            // `HELD BY` is the one line on either sheet whose value is a
+            // constant rather than a field, and it is the sentence the whole
+            // form exists to make: the money is in this contract, not with a
+            // company.
+            '<text x="32" y="192" class="lb">HELD BY</text>'
+            '<text x="134" y="192" font-size="11" fill="#ccc">this contract</text>'
+            '<text x="32" y="212" class="lb">PAID BY</text>'
+            '<text x="134" y="212" font-size="11" fill="#ccc">',
+            _shortAddr(d.client),
+            '</text>'
+            '<text x="32" y="232" class="lb">FOR</text>'
+            '<text x="134" y="232" font-size="11" fill="#ccc">',
+            _shortAddr(d.executor),
+            '</text>'
+            '<text x="32" y="252" class="lb">WORK</text>'
+            '<text x="134" y="252" font-size="11" fill="#ccc">',
+            // ⚠️ 32 BYTES HERE AND 48 ON THE AGREEMENT, AND THE DIFFERENCE IS
+            // GEOMETRY RATHER THAN TASTE. This value starts at x=134 and the
+            // card's content ends at 368, which is 234 pixels; at the
+            // receipt's 11px monospace that is about 35 characters, three of
+            // which the cut's own ellipsis needs. The agreement's line starts
+            // at x=32 at 10px and has room for 48. Both budgets are counted in
+            // BYTES and walked back off a half-letter by `_truncateStr` -- see
+            // the note there about what a byte-counted cut did to a Cyrillic
+            // term on chain.
+            _escapeXml(_truncateStr(d.terms, 32)),
+            '</text>'
+            '<line x1="32" y1="272" x2="368" y2="272" style="stroke:#2a2a2a" stroke-dasharray="3 5"/>',
+            _buildReceiptProse(d)
+        ));
+    }
+
+    /// THE THREE SENTENCES, THE TWO NUMBERED STEPS AND THE RECEIPT'S FOOTER.
+    ///
+    /// ⚠️ TWO NUMBERS ABOUT THE WORLD OUTSIDE LIVE IN THIS PROSE, AND THEY HAVE
+    /// DIFFERENT OWNERS. Both are spelled in words because the approved drawing
+    /// spells them in words, and the difference between them is the whole of
+    /// what can go wrong here:
+    ///
+    ///   THE DEADLINE     -- owned by `d.deadlineDays`, printed through
+    ///                       `_uint2str`, never as a literal. A deal may be
+    ///                       signed for any term, and a hard-coded "14" would
+    ///                       be a straight lie on a document about money.
+    ///   THE START WINDOW -- owned by `Agreement.ACTIVATION_WINDOW`, and it
+    ///                       does NOT arrive here. There is no such field in
+    ///                       `Deal` and this interface must not grow one: the
+    ///                       clone and this contract are deployed separately
+    ///                       and a clone already born keeps calling the shape
+    ///                       it was compiled against, so a changed struct
+    ///                       would take `tokenURI` down on every live deal at
+    ///                       once. So the number is a hand-written COPY of a
+    ///                       fact about the chain, "2 DAYS" below against
+    ///                       `2 days` in src/Agreement.sol.
+    ///
+    /// ⚠️ WHO NOTICES IF THAT COPY GOES STALE, named because "nobody" is a
+    /// finding and not an answer:
+    /// `test_TheReceiptSaysTheRealActivationWindow` in
+    /// test/AgreementCertificateSnapshot.t.sol builds the sentence out of the
+    /// clone's own `ACTIVATION_WINDOW()` and demands it be on the drawn
+    /// picture, so moving the constant without moving this line reddens by
+    /// name. Measured that way round on 24 November 2026: the constant was put
+    /// to 3 days, that test went red, and the fifteen pinned sheets stayed
+    /// GREEN -- because the drawing had not changed, which is exactly the hole
+    /// it covers and exactly why the pins cannot cover it.
+    function _buildReceiptProse(Deal calldata d) private pure returns (string memory) {
+        // The receipt's half of the singular; see the note in `_buildSVGData`.
+        string memory unit = " DAYS.";
+        if (d.deadlineDays == 1) unit = " DAY.";
+        return string(abi.encodePacked(
+            '<text x="32" y="294" font-size="9" fill="#555">THIS MONEY IS NOT HELD BY HEXSEAL. IT SITS IN</text>'
+            '<text x="32" y="309" font-size="9" fill="#555">THIS CONTRACT AND NOBODY CAN MOVE IT ELSEWHERE.</text>'
+            '<text x="32" y="336" font-size="9" fill="#555" font-weight="bold">1</text>'
+            '<text x="48" y="336" font-size="9" fill="#555">THE EXECUTOR HAS 2 DAYS TO START. IF NOBODY</text>'
+            '<text x="48" y="351" font-size="9" fill="#555">STARTS, ANYONE CAN SEND IT BACK TO THE CLIENT.</text>'
+            '<text x="32" y="376" font-size="9" fill="#555" font-weight="bold">2</text>'
+            '<text x="48" y="376" font-size="9" fill="#555">ONCE STARTED, THE WORK HAS ',
+            _uint2str(d.deadlineDays),
+            unit,
+            '</text>'
+            '<line x1="32" y1="400" x2="368" y2="400" style="stroke:#2a2a2a" stroke-dasharray="3 5"/>'
+            '<text x="200" y="428" class="lb c" fill="#333">SOULBOUND</text>'
+            '<text x="200" y="448" class="lb c" fill="#333">hexseal.net</text>'
             '</svg>'
         ));
     }
@@ -245,13 +603,24 @@ contract AgreementRenderer is IAgreementRenderer {
         return string(r);
     }
 
-    function _formatUSDC(uint256 raw) private pure returns (string memory) {
+    /// Six decimals cut to two, WITHOUT a unit: "100.00".
+    ///
+    /// Split out of `_formatUSDC` on 24 November 2026 and not copied: the
+    /// receipt's big number carries no unit because the line beneath it is the
+    /// unit, and a second statement of this arithmetic is a second place for
+    /// the rounding to drift. `_formatUSDC` is this plus four characters, so
+    /// every sheet that ever printed "100.00 USDC" still prints the same bytes.
+    function _formatAmount(uint256 raw) private pure returns (string memory) {
         uint256 whole = raw / 1_000_000;
         uint256 frac  = (raw % 1_000_000) / 10_000;
         string memory f = frac == 0 ? "00"
             : frac < 10 ? string(abi.encodePacked("0", _uint2str(frac)))
             : _uint2str(frac);
-        return string(abi.encodePacked(_uint2str(whole), ".", f, " USDC"));
+        return string(abi.encodePacked(_uint2str(whole), ".", f));
+    }
+
+    function _formatUSDC(uint256 raw) private pure returns (string memory) {
+        return string(abi.encodePacked(_formatAmount(raw), " USDC"));
     }
 
     // ══════════════════════════════════════════════════════════════════════

@@ -177,6 +177,16 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     /// `ArbiterRegistryStorage.ENTRY_BOND`: a scene whose expected side comes
     /// out of the declaration under test is green at any price.
     uint256 constant ENTRY_BOND = 10_000_000;
+
+    /// ⚠️ AND WHAT A SEAT COSTS ALTOGETHER SINCE 12 NOVEMBER 2026: eleven. The
+    /// second half of the owner's decision of 20 October arrived — ten dollars
+    /// of refundable bond plus ONE NON-REFUNDABLE dollar of seat price, credited
+    /// to the treasury at the door. A literal fixed by a person and TYPED, never
+    /// `ENTRY_BOND + SEAT_PRICE`: a sum computed here would move with either
+    /// part and could never contradict the contract, which derives it that way.
+    /// The dollar's own behaviour is measured in test/ArbiterSeatPrice.t.sol.
+    uint256 constant SEAT_PRICE = 1_000_000;
+    uint256 constant SEAT_TOTAL = 11_000_000;
     // erc7201:hexseal.reputation.storage — `xp` is field 0 of the struct, so the
     // per-address slot is keccak256(abi.encode(who, REP_BASE)).
     bytes32 constant REP_BASE = 0xa32193c5e38bd2de27c8550f156d709eafdc63aaa4290e5e27473f2ffc097400;
@@ -1507,8 +1517,13 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         _growXP(candidate, true, 3000, 45500);
 
         fundEntryBond(address(diamond), candidate);
-        uint256 balanceBefore = usdc.balanceOf(candidate);
-        uint256 diamondBefore = usdc.balanceOf(address(diamond));
+        uint256 balanceBefore  = usdc.balanceOf(candidate);
+        uint256 diamondBefore  = usdc.balanceOf(address(diamond));
+        // ⚠️ A BASELINE AND NOT A NOUGHT, for the reason the wallet one above
+        // carries: this rig has already seated an arbiter, so the treasury
+        // already holds that seat's dollar. An absolute read here measured the
+        // rig instead of the door and said "2000000 != 1000000".
+        uint256 treasuryBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
         // ⚠️ SIXTEEN DAYS, BECAUSE THE ENTRANCE NOW ASKS FOR THEM (12 October
         // 2026). This suite EARNS its streak with real released deals, which
         // is why it needs a warp and not a seeded field: the run is genuine and
@@ -1521,14 +1536,22 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(candidate);
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
+        // ⚠️ THE BOND RECORD IS TEN AND THE WALLET MOVES BY ELEVEN SINCE
+        // 12 NOVEMBER 2026, and the two being different numbers is the whole of
+        // the change: the door pulls the bond AND the non-refundable seat price
+        // in one `transferFrom`, and only the bond is written against him.
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), ENTRY_BOND);
         assertEq(
-            balanceBefore - usdc.balanceOf(candidate), ENTRY_BOND,
-            "the entrance did not take the bond out of HIS wallet"
+            balanceBefore - usdc.balanceOf(candidate), SEAT_TOTAL,
+            "the entrance did not take the whole cost out of HIS wallet"
         );
         assertEq(
-            usdc.balanceOf(address(diamond)) - diamondBefore, ENTRY_BOND,
-            "the diamond is not holding the bond it charged"
+            usdc.balanceOf(address(diamond)) - diamondBefore, SEAT_TOTAL,
+            "the diamond is not holding the cost it charged"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice() - treasuryBefore, SEAT_PRICE,
+            "the seat price did not reach the treasury"
         );
     }
 
@@ -1559,7 +1582,7 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         // test/CleanStreakCostsSixDollars.t.sol.
         vm.warp(block.timestamp + 17 days);
 
-        usdc.mint(candidate, ENTRY_BOND);
+        usdc.mint(candidate, SEAT_TOTAL);
         assertEq(
             usdc.allowance(candidate, address(diamond)), 0,
             "setup: he has already approved the diamond, so this measures nothing"
@@ -1579,8 +1602,12 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         uint256 walletBefore = usdc.balanceOf(candidate);
 
         vm.prank(candidate);
+        // ⚠️ THE FIGURE IN THE REFUSAL IS THE WHOLE COST SINCE 12 NOVEMBER 2026
+        // — eleven, not ten — because what the door needs approved is the bond
+        // plus the seat price. A screen that kept the old ten reads BOTH numbers
+        // out of this refusal, which is why it carries them.
         vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.BondNotApproved.selector, 0, ENTRY_BOND
+            ArbiterApplicationsFacet.BondNotApproved.selector, 0, SEAT_TOTAL
         ));
         ArbiterRegistryFacet(address(diamond)).applyAsArbiter();
 
@@ -1609,6 +1636,16 @@ contract DiamondTest is Test, HandoverReadinessSeed {
     /// ACCUSATION touches no money — a man under a live proposal is still an
     /// arbiter and the ten dollars are still his — and the REMOVAL is what
     /// takes them.
+    /// ⚠️ INTO THE TREASURY SINCE 12 NOVEMBER 2026, AND THE NAME IS LEFT
+    /// STANDING ON PURPOSE. The owner's decision of 20 October 2026 names the
+    /// addressee of a burnt bond — the treasury — and this line was the half of
+    /// it nobody had moved. The name says "IntoTheBank" because that is where it
+    /// went for the four days the bond existed before the addressee arrived;
+    /// renaming it would make every reference to this scene by name — in the
+    /// working record and in commit messages — a dead pointer, and what it
+    /// measures today is said by the assertions and by this paragraph. The
+    /// property is also held on the OTHER caller of the same body in
+    /// test/ArbiterRemovalForCauseIntegration.t.sol::test_AnyoneMayPressAfterThePause.
     function testDemotionForfeitsTheEntryBondIntoTheBank() public {
         // ⚠️ THE PANEL IS SEATED BEFORE THE HANDOVER, AND IT HAS TO BE (9 October
         // 2026). The mistake run below reaches its overturns through the appeal
@@ -1650,7 +1687,8 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         //
         // Taken here, the comparison spans exactly the removal and nothing else,
         // which is what it was always meant to measure.
-        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore    = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 treasuryBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
         // ⚠️ THE BOND BURNS ON REMOVAL, NOT ON ACCUSATION. Until the pause is over
         // the person is still an arbiter and the money is still theirs — an
@@ -1669,9 +1707,17 @@ contract DiamondTest is Test, HandoverReadinessSeed {
             ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(candidate), 0,
             "the removal left the bond standing against a man who is no longer an arbiter"
         );
+        // ⚠️ BOTH POTS, NOT ONLY THE NEW ONE. "The treasury grew by ten" is also
+        // true of a change that credited BOTH, which would book ten dollars the
+        // diamond does not hold; "the bank did not move" is the half that
+        // catches it.
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance() - vaultBefore, ENTRY_BOND,
-            "the bank did not take the forfeited entrance bond"
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice() - treasuryBefore, ENTRY_BOND,
+            "the treasury did not take the forfeited entrance bond"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            "the forfeited entrance bond still feeds the arbiter bank"
         );
     }
 
@@ -3045,7 +3091,11 @@ contract DiamondTest is Test, HandoverReadinessSeed {
         vm.prank(client); usdc.approve(agreementAddr, AMOUNT);
         vm.prank(client); Agreement(agreementAddr).fund();
 
-        // ACTIVATION_WINDOW = 3 days, 2 days passed — too early
+        // ⚠️ ACTIVATION_WINDOW is 2 days, not the 3 this comment claimed until
+        // 24 November 2026. The warp below therefore lands EXACTLY on the end
+        // of the window, and it is still too early for one reason only: the
+        // guard reads `block.timestamp <= _fundedAt + ACTIVATION_WINDOW`, so
+        // the last second of the window belongs to the executor.
         vm.warp(block.timestamp + 2 days);
 
         vm.prank(client);

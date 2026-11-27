@@ -155,6 +155,12 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
     /// agree with itself at fifty dollars, at one cent and at nought.
     uint256 constant ENTRY_BOND = 10_000_000;
 
+    /// The WHOLE cost of a seat since 12 November 2026 — the bond plus the one
+    /// non-refundable dollar of the owner's decision of 20 October. A literal
+    /// fixed by a person, TYPED and not summed from its parts, for the same
+    /// reason the ten above is not read off the facet.
+    uint256 constant SEAT_TOTAL = 11_000_000;
+
     /// States as the facet numbers them. Literals, for the same reason.
     uint8 constant ST_NONE      = 0;
     uint8 constant ST_PENDING   = 1;
@@ -281,7 +287,7 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         assertEq(bond, ENTRY_BOND, "this facet advertises a price the door does not charge");
 
         _approveSpend(applicant, type(uint256).max);
-        usdc.mint(applicant, ENTRY_BOND);
+        usdc.mint(applicant, SEAT_TOTAL);
         uint256 walletBefore   = usdc.balanceOf(applicant);
         uint256 diamondBefore  = usdc.balanceOf(address(diamond));
 
@@ -289,12 +295,17 @@ contract ArbiterApplicationsTest is Test, HandoverReadinessSeed {
         reg.applyAsArbiter();
 
         assertTrue(regVault.isRegisteredArbiter(applicant), "the door did not seat him");
+        // ⚠️ THE WALLET AND THE DIAMOND MOVE BY ELEVEN SINCE 12 NOVEMBER 2026,
+        // and the bond record three lines down still reads ten. The mirror this
+        // scene is named for is about the ADVERTISED bond, which is still the
+        // refundable half; the whole cost has a door of its own,
+        // `getSeatCost()`, measured in test/ArbiterSeatPrice.t.sol.
         assertEq(
-            walletBefore - usdc.balanceOf(applicant), ENTRY_BOND,
-            "the entrance did not take the bond out of HIS wallet"
+            walletBefore - usdc.balanceOf(applicant), SEAT_TOTAL,
+            "the entrance did not take the whole cost out of HIS wallet"
         );
         assertEq(
-            usdc.balanceOf(address(diamond)) - diamondBefore, ENTRY_BOND,
+            usdc.balanceOf(address(diamond)) - diamondBefore, SEAT_TOTAL,
             "the diamond is not holding the bond it charged"
         );
         assertEq(acc.getArbiterBond(applicant), ENTRY_BOND, "the seat carries no record of the money");

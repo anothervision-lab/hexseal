@@ -128,24 +128,37 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     //   + the two moved in from the registry
     //     (8 Nov, evening): applyAsArbiterWithPermit
     //     and revokeArbiterInvitation                      2
-    //   ------------------------------------------------- 21
-    //     the compiled facet today                       18
+    //   + getSeatCost() (12 Nov), a door that did NOT
+    //     exist before -- unlike the two above, which
+    //     only changed address                             1
+    //   ------------------------------------------------- 22
+    //     the compiled facet today                       19
     //   + the three doors removed since (22 September)     3
-    //   ------------------------------------------------- 21
+    //   ------------------------------------------------- 22
     //
-    // ⚠️ EIGHTEEN WRITTEN BY HAND, NEVER DERIVED FROM THE SCRIPT'S OWN
+    // ⚠️ RE-MEASURED AND RE-DATED ON 12 NOVEMBER 2026: 18 -> 19. What landed is
+    // the second half of the owner's decision of 20 October 2026 -- the
+    // entrance charges a NON-REFUNDABLE dollar of seat price on top of the
+    // refundable bond -- and `getSeatCost()` is the door that lets the chain
+    // say so. A NEW selector rather than a fifth field on
+    // `getApplicationRequirements()`, because a selector comes from the
+    // signature and a return type does not: widening the old answer would
+    // leave 0xfc0b7216 meaning the same four bytes and an old screen decoding
+    // four words out of five in silence.
+    //
+    // ⚠️ NINETEEN WRITTEN BY HAND, NEVER DERIVED FROM THE SCRIPT'S OWN
     // NUMBERS. `UpgradeArbiterApplications.assertAddListCoversTheWholeFacet`
-    // holds a five-door `sinceAdded` and a three-door `sinceRemoved`, so
-    // `ADDED_SELECTORS + 5 - 3` also reads eighteen -- and would agree with
+    // holds a six-door `sinceAdded` and a three-door `sinceRemoved`, so
+    // `ADDED_SELECTORS + 6 - 3` also reads nineteen -- and would agree with
     // itself through any drift in the very thing being checked. That is the
     // fourth way to be fooled by a measurement, which this file's header
     // already records costing a whole cut once.
     //
     // Measured on this checkout: `out/ArbiterApplicationsFacet.sol/
-    // ArbiterApplicationsFacet.json` has eighteen `methodIdentifiers`, and
-    // `DeployFull.arbiterApplicationsFacetSelectors()` fills eighteen.
+    // ArbiterApplicationsFacet.json` has nineteen `methodIdentifiers`, and
+    // `DeployFull.arbiterApplicationsFacetSelectors()` fills nineteen.
     uint256 constant ADDED_SELECTORS = 16;
-    uint256 constant COMPILED_SELECTORS = 18;
+    uint256 constant COMPILED_SELECTORS = 19;
 
     /// The one selector DealMetadataFacet ever answered, written out here
     /// rather than borrowed from DeployFull.
@@ -374,11 +387,13 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     /// bytes, sixteen and a half kilobytes from here.
     ///
     /// ⚠️ THIS SCENE AND NOT A SECOND FLOOR IN test/AppealFacetSplitCut.t.sol,
-    /// where the registry's `> 4 096` floor lives. That file rehearses ONE cut
+    /// which holds the REGISTRY's floor -- `> REGISTRY_MIN_ROOM`, the figure
+    /// itself living in script/RegistryRoomFloor.sol since 19 November 2026,
+    /// when three copies of it became one. That file rehearses ONE cut
     /// -- the 15 October split of ArbiterRegistryFacet into registry plus
     /// ArbiterAppealFacet -- and measures `.code.length` off the two addresses
-    /// it actually cut to, which is why the floor is phrased as "the split did
-    /// not leave the registry at least 4 KiB of room". The applications facet
+    /// it actually cut to, which is why its floor speaks of the room the split
+    /// bought. The applications facet
     /// is not in that split, is never deployed by that stand, and has no room
     /// that the split bought. A pin for it there would be a number about a
     /// facet the file does not touch. It belongs here, in the stand for the cut
@@ -387,7 +402,7 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     /// ⚠️ AN EQUALITY AND NOT A FLOOR, and the reason is named rather than
     /// defaulted to. What this scene must catch is THE NEXT THING TO LAND ON
     /// THIS FACET -- one byte of it, on the run after it lands, by the name of
-    /// this test. A floor would not: the facet has 16 995 bytes of room, so any
+    /// this test. A floor would not: the facet has 16 824 bytes of room, so any
     /// floor worth setting under it is years of growth away and would be green
     /// through every edit anybody will actually make. The cost of the equality
     /// is stated too, because it is real: this
@@ -409,14 +424,33 @@ contract ArbiterApplicationsUpgradeTest is Test, ArbiterSplitRig {
     ///     assumed symmetric: the eligibility rule and the seating moved into
     ///     `ArbiterRegistryStorage` and `applyAsArbiter` still inlines both, so
     ///     the registry kept some of the code it handed over.
+    ///
+    /// ⚠️ RE-MEASURED AND RE-DATED ON 12 NOVEMBER 2026: 16 995 -> 16 824, that
+    /// is 7 581 -> 7 752 bytes of deployed code, PLUS 171. WHAT LANDED ON THIS
+    /// FACET, said out loud as this line asks: the second half of the owner's
+    /// decision of 20 October 2026. `getSeatCost()` is the new door -- the
+    /// chain has to be able to say what a seat costs, because
+    /// `getApplicationRequirements()` states the REFUNDABLE half alone and a
+    /// wallet that approves ten is refused `BondNotApproved(10e6, 11e6)`. The
+    /// facet's two charging doors pull `SEAT_TOTAL` in ONE `transferFrom` and
+    /// credit `SEAT_PRICE` to `treasurySlice` now, which is the rest of the
+    /// 171 bytes.
+    ///   · 7 752 bytes deployed, 16 824 free under 24 576. Read off
+    ///     out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json on
+    ///     this checkout, 12 November 2026.
+    ///   · And the registry, which carries the same decision's other half,
+    ///     went 20 244 -> 20 381 bytes, 4 332 -> 4 195 free, in the same pass.
+    ///     That facet has 99 bytes left above the 4 096 floor in
+    ///     test/AppealFacetSplitCut.t.sol and this one has 16 824, which is why
+    ///     the next door with a choice of host belongs here.
     function test_ThisFacetsHeadroomUnderEip170IsStated() public view {
         uint256 size = vm.getDeployedCode(
             "out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json"
         ).length;
         assertLe(size, 24576, "the applications facet is over the EIP-170 ceiling and cannot be deployed at all");
         assertEq(
-            24576 - size, 16995,
-            "the applications facet's headroom is not the 16995 bytes measured on the evening of 8 November 2026 - re-measure, re-date and say in the commit what landed on this facet, rather than loosening this line"
+            24576 - size, 16824,
+            "the applications facet's headroom is not the 16824 bytes measured on 12 November 2026 - re-measure, re-date and say in the commit what landed on this facet, rather than loosening this line"
         );
     }
 

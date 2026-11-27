@@ -68,6 +68,20 @@ contract CriticalInvariantTest is Test {
     uint256 constant CLIENT2_USDC  =   500_000_000;
     uint256 constant INITIAL_TOTAL = CLIENT_USDC + EXECUTOR_USDC + CLIENT2_USDC;
 
+    /// WHAT THE ONE SEAT IN `setUp` PUTS ON THE DIAMOND, and therefore what has
+    /// to be sent away again for this file's conservation sum to mean anything.
+    /// TWO NAMES AND NOT ONE ELEVEN: the bond goes home when the man lets the
+    /// seat go, the seat price never does -- it is credited to the treasury the
+    /// moment it is paid (the owner's decision of 20 October 2026, arriving
+    /// 12 November). The two leave the diamond by different doors, so a single
+    /// literal would stay green while one of them moved into the other's pot.
+    ///
+    /// ⚠️ LITERALS FIXED BY A PERSON, not read back off the registry: a rig that
+    /// asked the contract what its own entrance costs would drain the right
+    /// amount at eleven dollars, at a hundred and at nought.
+    uint256 constant SEAT_BOND_DRAINED  = 10_000_000;
+    uint256 constant SEAT_PRICE_DRAINED =  1_000_000;
+
     uint8   constant REGION     = 0;
     // ServiceBoard mintService now charges the flat anti-spam floor (fs.feeFloor) —
     // no deal amount exists yet at posting time, so there's nothing to take a % of.
@@ -319,8 +333,25 @@ contract CriticalInvariantTest is Test {
         // gives — nothing in this file refunds or forfeits a bond — and it is
         // the same caveat, not a new one. A scene added later that resigns,
         // removes or revokes this seat must stop using this shortcut.
+        //
+        // ⚠️ ELEVEN DOLLARS AND NOT TEN SINCE 12 NOVEMBER 2026, written as TWO
+        // ADDENDS because it is two sorts of money. The second half of the
+        // owner's decision of 20 October arrived: the entrance takes ten of
+        // refundable bond AND ONE DOLLAR OF SEAT PRICE THAT NEVER COMES BACK,
+        // credited to `treasurySlice` at the door. Both land on the diamond in
+        // the same transaction, so both have to leave. A single `11_000_000`
+        // would stay green while the two traded a dollar between them, which is
+        // the one thing these numbers exist to tell apart.
+        //
+        // ⚠️ AND THE SECOND THING LEFT BEHIND, SAID OUT LOUD TOO:
+        // `getTreasurySlice()` reads one dollar the diamond no longer holds,
+        // exactly as `getArbiterBond` reads ten it no longer holds. The caveat
+        // above grows one clause and no more: nothing in this file refunds a
+        // bond, forfeits a bond, OR pushes the treasury slice. A scene added
+        // later that calls `withdrawTreasurySlice` must stop using this
+        // shortcut.
         vm.prank(address(diamond));
-        usdc.transfer(address(0xB1A), 10_000_000);
+        usdc.transfer(address(0xB1A), SEAT_BOND_DRAINED + SEAT_PRICE_DRAINED);
         assertEq(
             usdc.balanceOf(address(diamond)), 0,
             "rig: the diamond is not empty at the start, so the invariant below measures something else"
@@ -501,7 +532,10 @@ contract CriticalInvariantTest is Test {
         address agr = _acceptJob(jobId);
         assertEq(_systemBalance(agr), INITIAL_TOTAL, "after accept");
 
-        // Past ACTIVATION_WINDOW (3 days)
+        // Past ACTIVATION_WINDOW, which is 2 days and not the 3 this comment
+        // claimed until 24 November 2026. The warp is left at 3 days + 1: it
+        // clears the real window with a day to spare, and shortening it would
+        // be a change to a scene about the balance sheet, not about the clock.
         vm.warp(block.timestamp + 3 days + 1);
 
         vm.prank(client);

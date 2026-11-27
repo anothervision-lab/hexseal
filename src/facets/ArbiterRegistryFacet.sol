@@ -309,6 +309,84 @@ library ArbiterRegistryStorage {
     // owner's judgement at the invitation door.
     uint256 internal constant ENTRY_BOND = 10_000_000; // 10 USDC, 6 decimals
 
+    // ── THE PRICE OF THE SEAT, THE OWNER'S DECISION OF 20 OCTOBER 2026,
+    //    ARRIVING 12 NOVEMBER 2026 ─────────────────────────────────────────────
+    //
+    // One dollar that DOES NOT COME BACK, charged on top of the bond above and
+    // at the same four doors.
+    //
+    // ⚠️ IT IS THE OTHER HALF OF A DECISION ALREADY TAKEN, not a new price. The
+    // decision of 20 October 2026 was TWO NUMBERS AND A DESTINATION: ten dollars
+    // of refundable bond for a seat, one dollar of non-refundable seat price on
+    // top of it, and a forfeited bond going to the treasury. The cut of
+    // 10 November 2026 carried the first number
+    // only, so between that cut and this change the entrance cost a farm
+    // NOTHING BUT GAS — ten dollars in, a seat, `resignAsArbiter`, ten dollars
+    // out. By this protocol's own rule a price that returns to the buyer is not
+    // a price, so the lever built against address farms was standing open the
+    // whole time with every gate in the repository green.
+    //
+    // ⚠️ WHY THE TWO NUMBERS ARE TWO NUMBERS AND NOT ELEVEN DOLLARS OF BOND.
+    // They answer different questions and they go to different places. The bond
+    // is HIS money, held while he sits and handed back when he lets the seat go;
+    // the price is the PROTOCOL'S money from the moment it is paid, and it is
+    // credited to `treasurySlice`. Put the dollar into `arbiterBond` and the
+    // exit door would hand it straight back, which is the one mistake that makes
+    // this whole change pointless — so the dollar never touches that field. The
+    // field's non-zero writers are pinned off the syntax tree by
+    // `script/check_arbiter_bond_writers.py`, which is what stops a fifth writer
+    // arriving quietly; nothing there pins the ABSENCE of the price, so the
+    // absence is held by a test instead, by name:
+    // test/ArbiterSeatPrice.t.sol::test_TheSeatPriceIsNotInTheRefundableBond.
+    //
+    // PRICED, as every lever here must be, and the owner's own number: a farm of
+    // a thousand addresses pays A THOUSAND DOLLARS, and that is the point of it
+    // rather than a side effect. What it is NOT sold as is a ceiling — one
+    // address still costs one dollar, and the thing that keeps one man from
+    // filling the court is still `requireSelfEnrolmentEarned`'s sixteen days of
+    // calendar, which nothing in this protocol sells.
+    //
+    // ⚠️ WHAT THIS NUMBER ASSUMES ABOUT THE WORLD OUTSIDE, AND WHO WOULD NOTICE
+    // IF THE WORLD MOVED. It assumes one USDC is about one dollar and that a
+    // dollar is friction worth feeling. Both are facts about a world no gate in
+    // this repository reads: if USDC moved, or if a dollar stopped being
+    // friction, every test here would stay green and the lever would quietly
+    // become an ornament. NOBODY NOTICES — said plainly because "nobody" is a
+    // finding and not an answer, and it is carried as one rather than dressed up
+    // as a safeguard.
+    uint256 internal constant SEAT_PRICE = 1_000_000; // 1 USDC, 6 decimals
+
+    /// What a candidate's allowance — or his signed paper — has to cover.
+    ///
+    /// ⚠️ THE SEAM THAT WOULD HAVE BROKEN IN SILENCE. The sum is OURS and never
+    /// the caller's, so a screen that keeps a copy of it is signing or approving
+    /// for a number WE moved; ten stopped being enough the moment the price
+    /// existed. ⚠️ AND THE TWO ROADS REFUSE IT DIFFERENTLY, which is worth
+    /// knowing before a screen is built on either:
+    ///
+    ///   * ALLOWANCE (`applyAsArbiter`, `acceptArbiterInvitation`) — ours and
+    ///     NAMED: `takeEntryBond` answers `BondNotApproved(10e6, 11e6)`, both
+    ///     figures in the refusal, so a screen can say "you approved ten, a seat
+    ///     costs eleven". Held by
+    ///     test/ArbiterSeatPrice.t.sol::test_APaperForTheOldTenDollarsIsRefusedByName.
+    ///   * SIGNATURE (the two permit doors) — THE TOKEN'S, and unnameable by us.
+    ///     The amount is part of what was signed, so a paper for ten recovers a
+    ///     different address and USDC rejects it before a line of ours runs:
+    ///     a bare `"EIP2612: invalid signature"`. Nothing written here can
+    ///     improve that sentence, and the only cure is signing for the right
+    ///     number. Held by
+    ///     test/ArbiterSeatPrice.t.sol::test_APermitPaperForTheOldTenDollarsIsRefusedByTheTokenAndNotByUs,
+    ///     which exists because the first draft of this comment claimed
+    ///     `BondNotApproved` on all four doors — true on two of them.
+    ///
+    /// ⚠️ IT IS DERIVED AND NOT TYPED. Eleven million written out here would be
+    /// a third number free to disagree with the two it is made of — the exact
+    /// defect `ARBITER_BOND_MIRROR` was deleted for on 8 November 2026. One
+    /// owner for one sum: change either part above and the paper, the pull and
+    /// the published figure all move together, because there is nothing else to
+    /// move.
+    uint256 internal constant SEAT_TOTAL = ENTRY_BOND + SEAT_PRICE;
+
     // ⚠️ THE SIX NAMED REFUSALS OF THIS BOND ARE NOT DECLARED HERE, AND THAT IS
     // THE POINT RATHER THAN A SHORTCUT. They are
     // `ArbiterApplicationsFacet.BondTokenNotSet`, `BondNotApproved`,
@@ -355,6 +433,43 @@ library ArbiterRegistryStorage {
         }
     }
 
+    /// THE WHOLE OF WHAT A SEAT COSTS, taken in one pull. Shared by all four
+    /// charging doors, and called LAST at every one of them, after the seat is
+    /// already written — the order is the subject of
+    /// `ArbiterRegistryFacet.applyAsArbiter`'s docstring and nothing here
+    /// changes it.
+    ///
+    /// ⚠️ ONE `transferFrom` AND NOT TWO, and that is the seam rather than a
+    /// saving. Two pulls would be two amounts a candidate's allowance has to
+    /// satisfy and two numbers a signed paper has to carry; the man at the
+    /// permit doors signs ONE paper, so there is one sum (`SEAT_TOTAL`) and it
+    /// has one owner. A second pull would also mean a second refusal shape to
+    /// decode on a screen for the same press.
+    ///
+    /// ⚠️ THE DOLLAR IS CREDITED BEFORE THE TOKEN IS TOUCHED, which is the
+    /// shape `revokeUnprovenSeat` already applies to the outbound half:
+    /// `transferFrom` hands control to a token the owner configures, so the
+    /// STORAGE credit is not left waiting behind an external call. The amount
+    /// credited is a constant — it does not depend on anything the token says —
+    /// and if the pull then fails the whole transaction unwinds and the credit
+    /// with it. The LOG comes after the pull, where the four doors already put
+    /// `ArbiterEntryBondPosted`: a log is not state anybody can re-enter.
+    ///
+    /// ⚠️ IT TOUCHES `treasurySlice` AND NEVER `arbiterBond`. The bond is
+    /// assigned at each door by name and stays exactly `ENTRY_BOND`; the price
+    /// has no per-address field at all, because an address does not own it the
+    /// moment after it is paid. A CREDIT and not a transfer, for the reason the
+    /// field carries at its declaration: the money is already on the diamond
+    /// after the pull, and `ArbiterVaultFacet.withdrawTreasurySlice()` is the
+    /// one door that moves it out, to `FactoryStorage.feeRecipient`. A transfer
+    /// straight to that address would put a blocked recipient in the way of a
+    /// candidate's seat.
+    function takeSeatMoney(Data storage d, address from) internal {
+        d.treasurySlice += SEAT_PRICE;
+        takeEntryBond(from, SEAT_TOTAL);
+        emit ArbiterRegistryFacet.ArbiterSeatPricePaid(from, SEAT_PRICE);
+    }
+
     /// The allowance, carried in on a signature instead of a transaction.
     ///
     /// ⚠️ WHY THE OTHER DOOR IS NOT ENOUGH, AND WHY NO AMOUNT OF WORK ON OUR
@@ -364,7 +479,7 @@ library ArbiterRegistryStorage {
     /// us at all, for anybody, ever. It needs ETH — and the man at this door is
     /// a candidate who has earned nothing IN the protocol, so the protocol is
     /// not where the ETH comes from either. EIP-2612 moves that step off chain:
-    /// he SIGNS a paper granting this diamond exactly `ENTRY_BOND`, the relayer
+    /// he SIGNS a paper granting this diamond exactly `SEAT_TOTAL`, the relayer
     /// brings it here with the call, and the allowance and the transfer both
     /// happen inside this one transaction.
     ///
@@ -379,14 +494,22 @@ library ArbiterRegistryStorage {
     /// rests on a check written here, which is why neither can be edited away
     /// here.
     ///
-    /// ⚠️ THE AMOUNT IS OURS, NOT THE CALLER'S — `ENTRY_BOND`, not an argument
+    /// ⚠️ THE AMOUNT IS OURS, NOT THE CALLER'S — `SEAT_TOTAL`, not an argument
     /// — so a paper signed for any other number simply does not verify. There
     /// is no argument by which a caller could ask this to pull more.
     ///
-    /// ⚠️ NOTHING IS LEFT STANDING AFTERWARDS. The paper grants exactly the
-    /// bond and `takeEntryBond` spends exactly the bond, so the allowance is
-    /// back at zero when the door returns — the diamond is not left holding a
-    /// standing claim on a candidate's wallet.
+    /// ⚠️ IT WAS `ENTRY_BOND` UNTIL 12 NOVEMBER 2026, when the seat price
+    /// arrived and the sum became the bond plus the price. The constant is
+    /// DERIVED from the two rather than typed, for the reason written at its
+    /// declaration. What a caller feels on THIS road is not one of our named
+    /// refusals: the amount is part of what he signed, so a paper for the old
+    /// ten recovers a different address and the TOKEN rejects it inside
+    /// `permit` — see the two roads spelled out at `SEAT_TOTAL`.
+    ///
+    /// ⚠️ NOTHING IS LEFT STANDING AFTERWARDS. The paper grants exactly the sum
+    /// and `takeSeatMoney` spends exactly the sum in one pull, so the allowance
+    /// is back at zero when the door returns — the diamond is not left holding
+    /// a standing claim on a candidate's wallet.
     ///
     /// ⚠️ A REFUSAL COSTS THE CANDIDATE NOTHING. The whole transaction unwinds,
     /// the allowance with it, and — the part that matters — USDC's nonce with
@@ -954,9 +1077,19 @@ library ArbiterRegistryStorage {
     ///     `refundableBounty` only as real money arrives.
     ///
     /// Four uint64 fill one slot. The bound is structural rather than hoped
-    /// for: every amount here is at most one appeal deposit, and a deposit is
-    /// capped at APPEAL_DEPOSIT_CAP (200 USDC = 2e8 base units), eleven orders
-    /// of magnitude under 2^64.
+    /// for: every amount here is at most one appeal pocket, and a pocket is
+    /// either the appeal deposit — capped at APPEAL_DEPOSIT_CAP (200 USDC =
+    /// 2e8 base units) — or the judge's bond plus his forfeited fee, each
+    /// capped at DISPUTE_FEE_CAP_MIRROR, so 1e9 at the very most; ten orders of
+    /// magnitude under 2^64.
+    ///
+    /// ⚠️ THE SECOND HALF OF THAT BOUND IS NEW ON 18 NOVEMBER 2026, when the
+    /// stake started riding the reward and the bond stopped being a flat twenty
+    /// dollars. The margin shrank from eleven orders of magnitude to ten and
+    /// nothing else about it changed; what WOULD change it is removing the
+    /// ceiling the bond's read is held to (`caseBondFor`), and then the field
+    /// to watch is `voterShare`, written with `uint64(each)` in
+    /// `ArbiterAppealFacet.resolveAppeal`.
     ///
     /// `appellant` is the second slot and is written ONLY when a debt is
     /// created. The verdict record also names him, but that record can be
@@ -977,7 +1110,22 @@ library ArbiterRegistryStorage {
     /// here because Solidity does not allow a struct inside a struct.
     ///
     /// One slot. `uint96` cannot truncate: the amount is `caseBondFor(deal)`,
-    /// which is at most APPEAL_DEPOSIT_CAP (2e8).
+    /// which is at most DISPUTE_FEE_CAP_MIRROR (5e8), twenty orders of
+    /// magnitude under 2^96.
+    ///
+    /// ⚠️ THE PREMISE OF THAT SENTENCE CHANGED ON 18 NOVEMBER 2026 AND THE
+    /// SENTENCE IS STILL TRUE, which is worth saying because the two are not
+    /// the same claim. It used to read "at most APPEAL_DEPOSIT_CAP (2e8)", and
+    /// what held it was that the bond was a flat 20 USDC held DOWN by the pot —
+    /// a number that could only fall. The bond now rides the deal's own dispute
+    /// fee, and that fee is read off a clone anybody can manufacture, so the
+    /// bound is no longer a property of the arithmetic here but of the CEILING
+    /// the read is held to: `caseBondFor` cuts the answer to
+    /// `DISPUTE_FEE_CAP_MIRROR` before the pot is even looked at. Truncation
+    /// here would be silent — `uint96(x)` neither reverts nor logs — so if that
+    /// ceiling is ever removed, this field is where the money goes missing.
+    /// Guarded by `test/CaseBondRidesTheReward.t.sol`, which claims a case on a
+    /// manufactured deal answering `type(uint256).max` and reads the record back.
     ///
     /// ⚠️ AND IT MAY BE NOUGHT SINCE 18 OCTOBER 2026, where the floor of 20
     /// USDC made that impossible before. A pot of nought buys a bond of nought,
@@ -1050,6 +1198,22 @@ library ArbiterRegistryStorage {
     /// are named in one place and in one comment. Raise this to 40 and the
     /// panel is better off leaving a verdict standing; drop it to 20 and the
     /// panel is better off overturning.
+    ///
+    /// ⚠️ AND THE EQUALITY HAS A BAND RATHER THAN BEING EVERYWHERE, which the
+    /// sum above does not show on its own: it holds while the fee sits on its
+    /// 10 USDC floor, that is on pots from 20 USDC (below which the pot binds
+    /// the bond) to 333 USDC (above which 3% overtakes the floor). Outside both
+    /// edges the two pockets differ, with the direction and the size of each gap
+    /// asserted — as recorded prices, not as defects — in
+    /// test/AppealWageIsOutcomeBlind.t.sol.
+    ///
+    /// ⚠️ ON 18 NOVEMBER 2026 THE BOND STOPPED BEING THE FLAT 20 IN THAT SUM
+    /// above a pot of 667 USDC: it rides the deal's own dispute fee from there
+    /// up, by the owner's rule that a judge stakes what he earns. Inside the
+    /// band nothing moved — the fee is its floor there, so the larger of the
+    /// two is still this 20 — and above it the overturn pocket, already the
+    /// larger of the two since 21 October, grew. See
+    /// `CASE_BOND_BASE` and `caseBondFor`.
     uint256 internal constant APPEAL_DEPOSIT_FLOOR = 30_000_000;
     /// The most an appeal costs: 200 USDC.
     uint256 internal constant APPEAL_DEPOSIT_CAP = 200_000_000;
@@ -1065,7 +1229,54 @@ library ArbiterRegistryStorage {
     /// overturn pocket to 40, and the equality the three prices were chosen for
     /// would have been broken by the very edit that set them. A derived number
     /// cannot be held flat while its source moves.
+    ///
+    /// ⚠️ AND SINCE 18 NOVEMBER 2026 IT IS A FLOOR UNDER THE STAKE RATHER THAN
+    /// THE WHOLE OF IT. The owner's rule, said twice (22 October and
+    /// 18 November): a judge puts down something commensurate with what he will
+    /// earn. `caseBondFor` now takes whichever is larger, this base or the
+    /// reward the case pays, and the pot ceiling still holds that down. The base
+    /// is untouched because decision 201 of 22 October holds it untouched — "the
+    /// case bond stays 20 USDC and does not come down" — and a floor cannot
+    /// lower anything it is a floor under.
     uint256 internal constant CASE_BOND_BASE = 20_000_000;
+
+    /// `Agreement.DISPUTE_FEE_CAP` (500 USDC), mirrored into this library for
+    /// the same reason `PROPOSAL_TTL_MIRROR` and `REMOVAL_DELAY_MIRROR` are
+    /// mirrored into the facet below: the number is declared in ANOTHER
+    /// contract and a function here needs it to bound an answer that contract
+    /// gives. Added 18 November 2026 with the stake that rides the reward.
+    ///
+    /// ⚠️ IT IS A CEILING ON WHAT A CLONE IS BELIEVED AND NOT A SECOND FEE
+    /// RULE. `caseBondFor` reads the reward off the deal itself, and a deal is
+    /// a clone anybody can manufacture — a made-up one may answer
+    /// `type(uint256).max` to `disputeFee()`. The fee's own cap is the dearest
+    /// answer an HONEST clone can give, so an answer above it is held to it,
+    /// and then nothing else in that function has to reason about how large the
+    /// number might be. What it buys in one line: THE BOND IS IN
+    /// [20 USDC, 500 USDC] ON EVERY INPUT, which is what keeps `uint96` in
+    /// `CaseBond` safe now that the amount is no longer a flat twenty.
+    ///
+    /// ⚠️ WHY NOT `APPEAL_DEPOSIT_CAP`, WHICH IS ALREADY DECLARED HERE. Two
+    /// reasons, and the second would decide it alone:
+    ///
+    ///   * 200 USDC stops the stake growing at a pot of 6 667 USDC — a line no
+    ///     decision names — while the reward goes on rising to 500. Decision
+    ///     201 of 22 October names the corridor's two edges as a pot of 333
+    ///     USDC (where the percentage overtakes the fee's floor) and 16 700
+    ///     USDC (where the reward meets its cap). This cap keeps the upper
+    ///     edge where that decision put it; the appeal cap would invent a third.
+    ///   * it would make the bond DERIVED FROM THE APPEAL PRICE again, which is
+    ///     the derivation decisions 199 and 201 deliberately cut. A later raise
+    ///     of the price's cap would then move the judge's stake with it in
+    ///     silence — the failure mode written out at `CASE_BOND_BASE` above.
+    ///
+    /// ⚠️ A COPY WITHOUT A GUARD DRIFTS IN SILENCE, so this one is guarded
+    /// BEHAVIOURALLY rather than by an identity assertion between two equally
+    /// wrong numbers: the lock puts a pot above 16 700 USDC on a REAL clone,
+    /// asks THE CLONE what its fee is, and compares that with what this library
+    /// charges the judge. Change the cap in Agreement.sol and the two part
+    /// company. test/CaseBondRidesTheReward.t.sol.
+    uint256 internal constant DISPUTE_FEE_CAP_MIRROR = 500_000_000;
 
     /// HOW MUCH DOES IT COST TO RAISE AN APPEAL ON `agreement`? One function,
     /// two uses, and both of them are the PRICE: the quote on a screen
@@ -1102,8 +1313,11 @@ library ArbiterRegistryStorage {
     /// of 20 USDC the two pockets differ, so on a 5 USDC pot a panel of three
     /// divides 20 USDC for leaving the verdict standing and 5 USDC for
     /// overturning it, and a panel below that pot is better off leaving the
-    /// verdict alone. At and above 20 USDC the pockets are equal and nothing
-    /// depends on the outcome. What the floor buys back for that price is the
+    /// verdict alone. Between 20 and 333 USDC the pockets are equal and nothing
+    /// depends on the outcome; above 333 they part again the other way, because
+    /// 3% overtakes the fee's floor — and since 18 November 2026 they part
+    /// FASTER above 667 USDC, where the judge's bond starts riding that same
+    /// fee (`caseBondFor`). What the floor buys back for that price is the
     /// only brake this protocol has on appealing — a junk appeal on a dust deal
     /// costs its author 20 USDC again instead of the dust — and four sentences
     /// on screen promising "no less than $20" that were untrue for a day. The
@@ -1142,7 +1356,34 @@ library ArbiterRegistryStorage {
     /// else. It is NOT the appeal price, and since 20 October 2026 it does not
     /// read the appeal price either:
     ///
-    ///     min( CASE_BOND_BASE, pot )
+    ///     min( max( CASE_BOND_BASE, this deal's dispute fee ), pot )
+    ///
+    /// ⚠️ THE MIDDLE TERM IS NEW ON 18 NOVEMBER 2026 AND IT IS THE OWNER'S
+    /// RULE, SAID TWICE (22 October and 18 November): a judge puts down
+    /// something commensurate with what he will earn. What he earns for reading
+    /// a case IS the deal's dispute fee — `ARBITER_SHARE_BPS` is 10 000, the
+    /// whole of it — and that fee rides the pot, `min( max(10, 3% of pot), 500
+    /// )`, while the stake was flat on every pot. The gap that closed: on a
+    /// 10 000 USDC pot the judge staked 20 USDC against a 300 USDC reward, and
+    /// at 16 700 USDC and above, 20 against 500.
+    ///
+    /// ⚠️ IT RAISES AND IT CANNOT LOWER, which is the whole of how decision 201
+    /// of 22 October survives this edit: "the case bond stays 20 USDC and does
+    /// not come down". Below a pot of 333 USDC the fee is its own 10 USDC floor,
+    /// `max` keeps the base, and NOTHING CHANGES — not the figure, not the
+    /// pocket, not the band the appeal wage is blind in. The fee only overtakes
+    /// the base at a pot of 667 USDC (3% of it is 20), so every pot the live
+    /// registry has ever carried is below the first pot this edit touches.
+    ///
+    /// ⚠️ AND WHAT IT COSTS IS THE SIZE OF AN INEQUALITY THAT ALREADY EXISTED
+    /// ABOVE THE BAND, not the equality inside it. The panel's two pockets are
+    /// the judge's bond plus his forfeited fee (an overturn) against the appeal
+    /// price (a verdict that stands); above a pot of 333 USDC the second is
+    /// already the smaller, which `test/AppealWageIsOutcomeBlind.t.sol` asserts
+    /// as a recorded price rather than a defect. A stake that rides the reward
+    /// widens that gap — on a 10 000 USDC pot from 320-against-200 to
+    /// 600-against-200. Measured row by row, before and after, in
+    /// `test/CaseBondRidesTheReward.t.sol`.
     ///
     /// ⚠️ IT READ `appealDepositFor` UNTIL 20 OCTOBER 2026, and the change is a
     /// DECOUPLING rather than a new figure — the base is the same 20 USDC the
@@ -1193,6 +1434,48 @@ library ArbiterRegistryStorage {
     /// rule's column -- what the same campaign paid before the pot measured
     /// the bond -- and section 4 asserts it as hand arithmetic.
     ///
+    /// ── HOW IT READS THE REWARD ──
+    ///
+    /// By asking the deal, with the same four lines `appealDepositFor` above
+    /// uses and for the same reasons. The percentage is READ and not
+    /// recomputed, because a second copy of "3% of the pot with a floor and a
+    /// cap" here would drift from the clone's on the first edit and the clone's
+    /// is the one the money is actually taken by.
+    ///
+    /// ⚠️ THE READ IS WRITTEN OUT TWICE IN THIS LIBRARY RATHER THAN SHARED, AND
+    /// THAT WAS A MEASUREMENT AND NOT A PREFERENCE (18 November 2026). One
+    /// `private` reader for both questions is the better shape — the length
+    /// check in front of the decode is a hardening that two copies can drift
+    /// apart on — and it was written that way first. It made the binding facet
+    /// BIGGER: ArbiterRegistryFacet does not call `appealDepositFor` at all (the
+    /// vault and the appeal facet do), so there is nothing here to deduplicate,
+    /// and the shared reader only added a call that solc did not inline.
+    /// Measured on the deployed code, test/AppealFacetSplitCut.t.sol:
+    /// 20 381 bytes at HEAD, 20 502 with the read written out twice, 20 517 with
+    /// one reader. The smaller of the two was kept, and the hardening is held
+    /// together instead by `test/CaseBondRidesTheReward.t.sol`, which asserts
+    /// the short-reply branch of BOTH copies.
+    ///
+    /// ⚠️ A CLONE THAT CANNOT ANSWER PAYS THE FLAT BASE — the full twenty, the
+    /// figure this door charged on every pot until today. A refusal to answer
+    /// and a reply too short to decode are the two inputs an attacker can
+    /// manufacture at will, and neither may close the door: `claimDispute` must
+    /// not be made unreachable by what the deal says about itself, because the
+    /// deal is the thing under dispute. The length is checked before decoding
+    /// for the same reason as in `_softTransfer`: a short reply must not become
+    /// a panic.
+    ///
+    /// ⚠️ AN ANSWER THAT FITS BUT IS ABSURD IS HELD TO OUR OWN CEILING AND NOT
+    /// BELIEVED. A manufactured clone may answer `type(uint256).max`; it is cut
+    /// to `DISPUTE_FEE_CAP_MIRROR`, the dearest the fee can honestly be, and the
+    /// whole argument for that constant — including why the bond's ceiling is
+    /// not the appeal price's — is at its declaration above. Two things ride on
+    /// it: `uint96` in `CaseBond` cannot truncate (the amount is at most 5e8,
+    /// twenty orders of magnitude under 2^96), and the pot guard below keeps
+    /// working, because it compares the pot's two terms against this ceiling and
+    /// a ceiling of `type(uint256).max` would let `amount_ + extras_` overflow
+    /// and take the door down with it.
+    ///
     /// ── HOW IT READS THE POT ──
     ///
     /// `Agreement._pot()` is `amount + extrasTotal` and both are PUBLIC fields,
@@ -1218,7 +1501,16 @@ library ArbiterRegistryStorage {
     /// functions do not occupy slots, so `Data`, `CaseBond` and
     /// `PendingVerdict` are byte-identical across both.
     function caseBondFor(address agreement) internal view returns (uint256) {
+        // THE STAKE RIDES THE REWARD, FROM THE FLAT BASE UPWARDS. A deal that
+        // will not say what it pays, or says it in fewer than 32 bytes, is
+        // charged the base; a deal that names an absurd figure is held to the
+        // dearest the fee can honestly be.
         uint256 ceiling = CASE_BOND_BASE;
+        (bool fOk, bytes memory fRet) = agreement.staticcall(abi.encodeWithSignature("disputeFee()"));
+        if (fOk && fRet.length >= 32) {
+            uint256 fee = abi.decode(fRet, (uint256));
+            if (fee > ceiling) ceiling = fee > DISPUTE_FEE_CAP_MIRROR ? DISPUTE_FEE_CAP_MIRROR : fee;
+        }
 
         (bool aOk, bytes memory aRet) = agreement.staticcall(abi.encodeWithSignature("amount()"));
         if (!aOk || aRet.length < 32) return ceiling;
@@ -1241,7 +1533,9 @@ library ArbiterRegistryStorage {
         if (amount_ >= ceiling || extras_ >= ceiling) return ceiling;
 
         // Both terms are below the ceiling, and the ceiling is at most
-        // APPEAL_DEPOSIT_CAP (2e8), so this sum cannot overflow.
+        // DISPUTE_FEE_CAP_MIRROR (5e8) — APPEAL_DEPOSIT_CAP (2e8) until
+        // 18 November 2026, when the stake started riding the reward — so this
+        // sum cannot overflow.
         uint256 pot = amount_ + extras_;
         return pot < ceiling ? pot : ceiling;
     }
@@ -1336,9 +1630,33 @@ library ArbiterRegistryStorage {
         mapping(address => uint256)        openClaimCount;        // arbiter → disputes claimed right now and not closed
         // ── Appeal voting ──
         mapping(address => mapping(address => bool)) hasVotedAppeal; // agreement → arbiter → has already voted
-        // ── Dispute settlement fee (3% of the disputed amount, computed by Agreement) ──
-        // The treasury's share of disputes (20% of the fee). Credited, not transferred
-        // at settlement time: a blocked feeRecipient would otherwise break every dispute.
+        // ── The treasury's pot ──
+        // Credited, never transferred at the moment it is earned: a blocked
+        // feeRecipient would otherwise break whatever transaction earned it.
+        // `ArbiterVaultFacet.withdrawTreasurySlice()` is the one door out, open
+        // to anybody, paying `FactoryStorage.feeRecipient`.
+        //
+        // ⚠️ THIS FIELD HAS THREE SOURCES AND THE COMMENT NAMED ONE UNTIL
+        // 12 NOVEMBER 2026 ("the treasury's share of disputes, 20% of the fee").
+        // Saying so matters because a reader who takes this for a levy pot will
+        // read an entrance fee as arbitration income:
+        //
+        //   1. the treasury's share of a dispute settlement fee — the original,
+        //      and the smallest today: the owner's decision of 20 October 2026
+        //      gives the WHOLE dispute fee to the judge, so a fresh dispute
+        //      credits nothing here;
+        //   2. THE SEAT PRICE (12 November 2026, the owner's decision of
+        //      20 October): one non-refundable dollar from every seat taken at
+        //      any of the four entrances — `ArbiterRegistryStorage.SEAT_PRICE`;
+        //   3. A FORFEITED ENTRY BOND (the same day, the same decision): the ten
+        //      dollars a removal for cause takes off a seat. It was credited to
+        //      `vaultBalance` until then.
+        //
+        // The second and third are the entrance, not arbitration, and the
+        // arithmetic that keeps the distinction readable is in
+        // test/MoneyPathDispute.t.sol: the slice after a settled dispute is
+        // exactly the seat price of the seats the rig holds, so a levy reaching
+        // it would show up as a surplus.
         uint256                            treasurySlice;
         // ── Paid arbiter call ──
         // A top-up to a workable threshold: on a small pot 80% of a 3% fee does
@@ -2232,8 +2550,11 @@ library ArbiterRegistryStorage {
         ///
         /// Keyed by the deal and NOT by the arbiter, because that is what the
         /// money is about: one case, one bond, sized to that case's own stake.
-        /// The size is `caseBondFor(deal)` — the appeal price on the same deal
-        /// held down to the pot, called and not copied.
+        /// The size is `caseBondFor(deal)` — the larger of the flat base and
+        /// what the case pays its judge, held down to the pot, called and not
+        /// copied. (It was "the appeal price ... held down to the pot" here
+        /// until 18 November 2026; see that function for which day each half of
+        /// the old sentence stopped being true.)
         ///
         /// ⚠️ IT IS NOT THE DEPOSIT BELOW A POT OF 20 USDC, and for one day
         /// (19-20 October 2026) it was: the ceiling moved onto the price sizer,
@@ -2251,8 +2572,10 @@ library ArbiterRegistryStorage {
         /// that returns the bond, and `clearStuckVerdict` deletes the second —
         /// so reading the owner of the money off either would make the refund
         /// depend on the order of somebody else's cleanup. One slot holds both:
-        /// a deposit is capped at APPEAL_DEPOSIT_CAP (2e8), twenty orders of
-        /// magnitude under 2^96. The struct itself is declared beside
+        /// the bond is capped at DISPUTE_FEE_CAP_MIRROR (5e8) — the ceiling the
+        /// deal's own answer is held to since 18 November 2026, when the stake
+        /// started riding the reward; it was APPEAL_DEPOSIT_CAP (2e8) before —
+        /// twenty orders of magnitude under 2^96. The struct itself is declared beside
         /// `AppealLedger` above — Solidity has no struct inside a struct.
         mapping(address => CaseBond) caseBonds;
 
@@ -5540,6 +5863,23 @@ contract ArbiterRegistryFacet {
     /// answers about NOW, and a feed reconstructing who paid what needs the
     /// moment.
     event ArbiterEntryBondPosted(address indexed arbiter, uint256 amount);
+
+    /// The dollar that does not come back. One event for all four charging
+    /// doors, raised from `ArbiterRegistryStorage.takeSeatMoney` — the same
+    /// qualified shape the library already uses for `ArbiterSeated`.
+    ///
+    /// ⚠️ IT IS A SECOND EVENT AND NOT A WIDER `ArbiterEntryBondPosted`, and
+    /// the reason is the live feed rather than tidiness. That name is indexed
+    /// off chain and it is about REFUNDABLE money: a reader who saw eleven
+    /// dollars under it would record eleven dollars as owed back, and the whole
+    /// of this change is that one of them is not. Two names, two sentences, and
+    /// a feed that wants the pair can take both.
+    ///
+    /// ⚠️ THE AMOUNT TRAVELS EVEN THOUGH IT IS A CONSTANT TODAY. `getSeatCost()`
+    /// answers about NOW; a feed reconstructing what a particular seat paid
+    /// needs the figure that stood at the moment it paid, exactly the argument
+    /// `ArbiterEntryBondPosted` carries above.
+    event ArbiterSeatPricePaid(address indexed arbiter, uint256 amount);
     // ArbiterRemoved was deleted together with removeArbiter (15 August 2026):
     // its only emit site disappeared with the function. The replacement is
     // ArbiterAccountabilityFacet.ArbiterRemovedForCause.
@@ -6728,6 +7068,16 @@ contract ArbiterRegistryFacet {
     /// go. What it is NOT is the 50 USDC seat bond of before 22 September: the
     /// argument for that distinction is at `ArbiterRegistryStorage.ENTRY_BOND`.
     ///
+    /// ⚠️ ELEVEN SINCE 12 NOVEMBER 2026, AND ONLY ONE OF THEM GOES HOME. The
+    /// owner's decision of 20 October 2026 was two numbers, and the cut of
+    /// 10 November carried one of them: ten dollars of bond plus ONE DOLLAR OF
+    /// SEAT PRICE that is never refunded, credited to the treasury the moment it
+    /// is paid. Until this change the entrance cost a farm nothing but gas —
+    /// in, seated, out, ten dollars back — so the lever was open while every
+    /// gate was green. The price is at `ArbiterRegistryStorage.SEAT_PRICE`, the
+    /// sum a candidate must approve is `SEAT_TOTAL`, and the chain publishes
+    /// both through `ArbiterApplicationsFacet.getSeatCost()`.
+    ///
     /// ── THE ORDER OF THE MONEY AND THE SEAT, AND WHY IT IS THE OTHER WAY
     ///    ROUND FROM THE OBVIOUS ONE ─────────────────────────────────────────
     ///
@@ -6790,9 +7140,15 @@ contract ArbiterRegistryFacet {
         // docstring's subject; `arbiterBond` is assigned HERE, by name, and not
         // inside a shared writer — see the warning at
         // `ArbiterRegistryStorage.takeEntryBond`.
+        //
+        // ⚠️ THE FIELD HOLDS THE BOND AND ONLY THE BOND. `takeSeatMoney` pulls
+        // eleven dollars and credits one of them to the treasury; what is
+        // written here is the TEN the exit door gives back, so the dollar is out
+        // of `resignAsArbiter`'s reach by construction rather than by a check
+        // somebody could edit away.
         d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
         ArbiterRegistryStorage.seatSelfEnrolled(d, caller);
-        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+        ArbiterRegistryStorage.takeSeatMoney(d, caller);
         emit ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
     }
 
@@ -7003,8 +7359,12 @@ contract ArbiterRegistryFacet {
     /// ⚠️ AND SINCE 8 NOVEMBER 2026 A REMOVAL FOR CAUSE FORFEITS TEN DOLLARS,
     /// which is a consequence of the entry bond rather than a decision about
     /// punishment, and is written down here so that it is not discovered in a
-    /// log. `_performRemoval` reads `arbiterBond` and moves it into
-    /// `vaultBalance` — unchanged code, newly non-zero input. Ten dollars is
+    /// log. `_performRemoval` reads `arbiterBond` and credits it to
+    /// `treasurySlice` — ⚠️ `vaultBalance` until 12 November 2026, when the
+    /// addressee named by the decision of 20 October finally arrived; the line
+    /// that moved is in
+    /// `ArbiterAccountabilityFacet._performRemoval` and the argument is
+    /// there. Ten dollars is
     /// not a deterrent and is not sold as one: the sanction is still the record
     /// and the seat. What matters is the direction, and it is the right one — a
     /// man removed for cause does not get his entrance money back, while a man
@@ -7024,9 +7384,16 @@ contract ArbiterRegistryFacet {
 
     /// Takes the bond this case asks for and books it against the deal.
     ///
-    /// The size is `caseBondFor(agreement)` — the appeal price on this same
-    /// deal, HELD DOWN TO THE POT. Called, never copied: two copies of one
-    /// formula agree only until the first edit.
+    /// The size is `caseBondFor(agreement)` — the larger of the flat base and
+    /// what this case PAYS its judge, HELD DOWN TO THE POT. Called, never
+    /// copied: two copies of one formula agree only until the first edit.
+    ///
+    /// ⚠️ IT READ "THE APPEAL PRICE ON THIS SAME DEAL, HELD DOWN TO THE POT"
+    /// UNTIL 18 NOVEMBER 2026, and that sentence had been false since
+    /// 20 October: the bond stopped being derived from the price that day and
+    /// was a flat 20 USDC under the pot ceiling until the reward took over the
+    /// floor's place. Dated rather than wiped, because a reader who remembers
+    /// the old sentence needs to know which day it stopped being true.
     ///
     /// ⚠️ `caseBondFor` IS CALLED FROM HERE AND FROM NOWHERE ELSE, by design,
     /// and the appeal PRICE itself is not held down to the pot. The paragraph
@@ -7079,7 +7446,10 @@ contract ArbiterRegistryFacet {
         if (!IUSDCFull(usdc).transferFrom(arbiterAddr, address(this), amount)) {
             revert CaseBondTransferFailed();
         }
-        // uint96 cannot truncate: amount <= APPEAL_DEPOSIT_CAP.
+        // uint96 cannot truncate: amount <= DISPUTE_FEE_CAP_MIRROR (5e8), the
+        // ceiling `caseBondFor` holds the deal's own answer to. It read
+        // "<= APPEAL_DEPOSIT_CAP" until 18 November 2026, when the stake started
+        // riding the reward; the whole argument is at `CaseBond`.
         d.caseBonds[agreement] = ArbiterRegistryStorage.CaseBond(uint96(amount), arbiterAddr);
         emit CaseBondPosted(agreement, arbiterAddr, amount);
     }

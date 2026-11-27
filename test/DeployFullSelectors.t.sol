@@ -961,7 +961,24 @@ contract DeployFullSelectorsTest is Test {
         // labels — which for this run attach ALL THREE of its transaction
         // hashes to the wrong transaction bodies, so a reader joining them by
         // hash reads the diamondCut as a facet deployment.
-        assertEq(totalRouted, 282, "diamond should route exactly 282 selectors total");
+        // ⚠️ 282 -> 283 ON 12 NOVEMBER 2026, AND ONLY THE TREE SIDE MOVED
+        // AGAIN. One door: `getSeatCost()` 0x3b7603be on
+        // ArbiterApplicationsFacet (18 -> 19), the read a screen needs now that
+        // the entrance charges a NON-REFUNDABLE dollar of seat price on top of
+        // the bond — the second half of the owner's decision of 20 October 2026,
+        // the first half of which landed on 10 November.
+        //
+        // ⚠️ THE LIVE CHAIN STILL ROUTES 282 and this figure is again NOT a
+        // measurement of it. The door is named one by one in
+        // DeployFullMatchesChain.t.sol `_pendingCut()`, whose arithmetic is
+        // `282 + pending - removals`, so the two stands disagree by exactly the
+        // one selector and say so on purpose. The cut that lands it needs ONE
+        // `Add` group for these four bytes plus a `Replace` for each facet whose
+        // code changed — the applications facet's other eighteen and the
+        // registry's twenty-seven, because the seat price is taken at four doors
+        // living in two files. This note must be corrected — not deleted — in
+        // the same commit as that cut.
+        assertEq(totalRouted, 283, "diamond should route exactly 283 selectors total");
 
         // Reverse direction: facetAddresses() must report exactly the same set
         // of addresses facets() reported them under.

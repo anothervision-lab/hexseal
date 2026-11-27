@@ -2908,7 +2908,8 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
 
         _postRealBond(seat);
 
-        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore    = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 treasuryBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
         // ⚠️ THE BOND BURNS ON THE REMOVAL AND NOT ON THE ACCUSATION. Under a
         // live proposal he is still an arbiter and the money is still his; an
@@ -2933,9 +2934,21 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             "three times took the disputes of one counterparty and three times ruled in their favour"
         );
 
+        // ⚠️ THE TREASURY AND NOT THE ARBITER VAULT SINCE 12 NOVEMBER 2026. This
+        // read was `getVaultBalance() - vaultBefore == ENTRY_BOND` until the
+        // second half of the owner's decision of 20 October 2026 arrived, which
+        // named the treasury as the addressee of a forfeited bond. BOTH pots are
+        // asserted, not just the
+        // new one: "the treasury grew by ten" is also true of a change that
+        // credited both, which would conjure ten dollars the diamond does not
+        // hold.
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance() - vaultBefore, ENTRY_BOND,
-            "the forfeit did not reach the arbiter vault"
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice() - treasuryBefore, ENTRY_BOND,
+            "the forfeit did not reach the treasury"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            "the forfeit still reaches the arbiter vault"
         );
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(seat), 0,
@@ -3048,7 +3061,8 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
         address judged = arbiter;
         _giveBond(judged, ARBITER_BOND);
         _threeOverturnsOnDistinctDisputes(judged);
-        uint256 vaultBefore = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 vaultBefore    = ArbiterVaultFacet(address(diamond)).getVaultBalance();
+        uint256 treasuryBefore = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
 
         vm.warp(vm.getBlockTimestamp() + ArbiterAccountabilityFacet(address(diamond)).getRemovalDelay());
 
@@ -3063,9 +3077,21 @@ contract ArbiterRemovalForCauseIntegrationTest is Test, HandoverReadinessSeed {
             ArbiterAccountabilityFacet(address(diamond)).getArbiterBond(judged), 0,
             "the bond burns ON THE REMOVAL and not on the accusation"
         );
+        // ⚠️ IT GOES TO THE TREASURY SINCE 12 NOVEMBER 2026, AND IT WENT TO THE
+        // ARBITER BANK UNTIL THEN. This assertion read
+        // `getVaultBalance() == vaultBefore + ARBITER_BOND` and is the SECOND
+        // CALLER of `_performRemoval` — the chain's own door, where nobody
+        // decided anything. The owner's decision of 20 October 2026 names the
+        // addressee of a burnt bond and does not distinguish the two doors, so
+        // both get the same fate, which is exactly what this pair of readings
+        // says: the treasury gains it and the bank does not move.
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore + ARBITER_BOND,
-            "and it goes into the arbiter vault, as at the manual door"
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), treasuryBefore + ARBITER_BOND,
+            "the chain's own removal did not send the forfeited bond to the treasury"
+        );
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getVaultBalance(), vaultBefore,
+            "the chain's own removal still feeds the arbiter bank"
         );
         assertEq(
             ArbiterAccountabilityFacet(address(diamond)).getArbiterMistakeStreak(judged), 0,

@@ -337,6 +337,24 @@ contract DisputeSettlementTest is Test {
     /// separately at each site.)
     uint256 constant TREASURY_TAKES_NOTHING = 0;
 
+    /// ⚠️ WHAT THE TREASURY'S POT HOLDS ON THIS RIG BEFORE ANY ARBITRATION, since
+    /// 12 November 2026: the one non-refundable dollar of seat price the rig's
+    /// seated arbiter paid at the entrance (the owner's decision of 20 October
+    /// 2026). The pot stopped having a single source that day, so every ABSOLUTE
+    /// reading of it in this file is "the arbitration's share PLUS this", and the
+    /// claim the readings defend — that the treasury takes nothing out of
+    /// arbitration — is now carried by the arithmetic instead of by a bare
+    /// nought. A literal fixed by a person; deltas elsewhere in the file are
+    /// unaffected and were left alone.
+    uint256 constant SEAT_PRICE_ON_THIS_RIG = 1_000_000;
+
+    /// The two together: what an ABSOLUTE read of the pot must answer on this
+    /// rig. Summed from the two above rather than typed, because the claim is
+    /// that the arbitration's share is the nought and the rest is the
+    /// entrance's — a typed eleven-hundred-thousandth would hide which half
+    /// moved.
+    uint256 constant TREASURY_POT_ON_THIS_RIG = TREASURY_TAKES_NOTHING + SEAT_PRICE_ON_THIS_RIG;
+
     /// ⚠️ MINT AND APPROVE EXACTLY THE DOOR CHARGE, IMMEDIATELY BEFORE THE
     /// PRESS (20 October 2026). `raiseDispute` pulls `disputeFee()` from the
     /// opener through the diamond, and the parties in this fixture hold NOTHING
@@ -617,7 +635,7 @@ contract DisputeSettlementTest is Test {
         // two noughts above have become one nought and one ten dollars, and
         // they are asserted apart because they are no longer the same fact.
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000, "the floor is the judge's whole and the smallest pot pays it like any other");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_POT_ON_THIS_RIG, "the treasury takes nothing out of arbitration");
     }
 
     // ============================================================
@@ -653,7 +671,7 @@ contract DisputeSettlementTest is Test {
         // nought now, so the subtraction is 10_000_000 - 10_000_000 = 0: the
         // judge's figure above and this one are the SAME fee split two ways,
         // and together they are the whole of it.
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_POT_ON_THIS_RIG, "the treasury takes nothing out of arbitration");
     }
 
     /// The same happy path, but the executor wins — the payout goes to them rather
@@ -685,7 +703,7 @@ contract DisputeSettlementTest is Test {
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 10_000_000, "arbiter takes the whole ten dollar fee");
         // The treasury's tenth, 6_000_000 / 10 = 600_000, is nought now for the
         // reason given at length on the sister scene above.
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_POT_ON_THIS_RIG, "the treasury takes nothing out of arbitration");
     }
 
     /// End to end: the counters mean nothing unless real USDC stand behind them on
@@ -721,11 +739,19 @@ contract DisputeSettlementTest is Test {
         // cannot tell "the decision holds" from "the credit silently failed and
         // the money is sitting somewhere else". The balance of the fee
         // recipient after the refused push is what rules the second out.
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "the treasury takes nothing out of arbitration");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_POT_ON_THIS_RIG, "the treasury takes nothing out of arbitration");
+        // ⚠️ THE PUSH SUCCEEDS SINCE 12 NOVEMBER 2026 AND THE CLAIM IS UNCHANGED.
+        // It was `vm.expectRevert(NothingToPush)` while the pot had one source;
+        // the pot now also holds the entrance's non-refundable dollar, so the
+        // door has something to move. What the scene is named for is that not a
+        // base unit of the FEE may reach the fee recipient, and that is now said
+        // by the amount: exactly the seat price and no more.
         uint256 recipientBefore = usdc.balanceOf(feeRecipient);
-        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-        assertEq(usdc.balanceOf(feeRecipient), recipientBefore, "not a base unit of a dispute fee may reach the fee recipient");
+        assertEq(
+            usdc.balanceOf(feeRecipient) - recipientBefore, SEAT_PRICE_ON_THIS_RIG,
+            "not a base unit of a dispute fee may reach the fee recipient"
+        );
     }
 
     // ============================================================
@@ -785,7 +811,7 @@ contract DisputeSettlementTest is Test {
         assertEq(usdc.balanceOf(client) - clientBefore, 200_000_000, "the fee was never in the pot, so the winner gets the whole of it");
         assertEq(usdc.balanceOf(address(diamond)) + caseBondBack - diamondBefore, 0, "the failed settlement must move nothing in either direction");
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arbiterAddr), 0, "nothing credited");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_TAKES_NOTHING, "nothing credited");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), TREASURY_POT_ON_THIS_RIG, "nothing credited");
 
         // ⚠️ AND THE RECORD HAS TO SURVIVE, which is the whole of what makes
         // this ending recoverable instead of a loss. Ten dollars with no name
@@ -1415,7 +1441,7 @@ contract DisputeSettlementTest is Test {
         vm.prank(client);
         a.triggerArbiterTimeout();
 
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "no treasury slice");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), SEAT_PRICE_ON_THIS_RIG, "no treasury slice beyond the seat price the rig's arbiter paid");
         assertEq(usdc.balanceOf(address(a)), 0, "the agreement must be emptied");
     }
 

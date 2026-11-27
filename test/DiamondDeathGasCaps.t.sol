@@ -292,27 +292,53 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
     // must never be what makes this suite pass.
     uint256 constant SHIPPED_RELEASE_GAS            = 660_000; // relay.ts release, pre-2026-08-23
     uint256 constant SHIPPED_AUTO_APPROVE_GAS       = 660_000; // relay.ts triggerAutoApprove, pre-2026-08-23
-    uint256 constant SHIPPED_RAISE_DISPUTE_GAS      = 160_000; // relay.ts raiseDispute, unchanged
+    uint256 constant SHIPPED_RAISE_DISPUTE_GAS      = 260_000; // relay.ts raiseDispute, raised 2026-11-24
     /// What the door actually consumes, as a hand-written ceiling.
     ///
-    /// ⚠️ MEASURED 20 OCTOBER 2026 AT 130 916 (mock USDC), AND A CLAIM THAT IT
-    /// NO LONGER FITS 160 000 WAS WRONG AND IS WITHDRAWN HERE. The dispute fee
-    /// taken at the door adds a diamond call, a cold `transferFrom` and two
-    /// cold stores, and the first reading of this file's red said the door had
-    /// outgrown the shipped ceiling. It had not: the red was
-    /// `holdDisputeFee` NOT MOUNTED on the rig, so the call reverted and
-    /// "must fit its shipped ceiling" failed for a reason that had nothing to
-    /// do with gas. Mounting it left 130 916 against a ceiling of 160 000.
+    /// ⚠️ RE-MEASURED 24 NOVEMBER 2026 AT 160 814 (mock USDC), AND THE 130 916
+    /// THIS LINE CARRIED IS WITHDRAWN -- not because the door grew, but because
+    /// the old figure was read WARM. The door is the same door; the ruler
+    /// changed. The margin question the old comment left open ("the door FITS
+    /// as measured here") is closed the other way: it does not fit.
     ///
-    /// ⚠️ WHAT IS LEFT IS A MARGIN QUESTION AND NOT A BREAK, and it is
-    /// arithmetic on relay.ts's own convention rather than a measurement: that
-    /// file sizes a budget as measured x 1.19 (real USDC is dearer than this
-    /// mock) x 1.2 (margin), and 130 916 x 1.428 is about 186 900 -- over the
-    /// 160 000 it ships. So the door FITS as measured here and the margin the
-    /// web client gives itself is thinner than its own rule asks for. That is a
-    /// number for whoever owns relay.ts, carried as a comment and an arithmetic
-    /// assertion below, not as a red.
-    uint256 constant RAISE_DISPUTE_MEASURED_CEILING = 140_000;
+    /// ⚠️ WHERE THE 42% HID, because this is the whole of why relay.ts
+    /// shipped a ceiling under the honest cost through a month of green runs.
+    /// `foundry.toml` sets `isolate = false`, so this entire scene is ONE
+    /// transaction: by the time the door is pushed, `fund()` has already warmed
+    /// the token's slots inside that same transaction, and the door reads
+    /// 113 305 and fits 160 000 with room to spare. Run the identical scene
+    /// isolated -- `--isolate`, which is also what `--gas-report` switches on
+    /// in forge 1.8.1 -- and every slot is cold, the way it is in the fresh
+    /// transaction a relayer actually sends, and the door reads 160 814 and
+    /// does NOT fit 160 000. The cold figure is the honest one; the warm one is
+    /// the artefact of running the whole scene as a single transaction.
+    ///   measured cost, cold (--isolate):              160 814
+    ///   smallest budget that still works, cold:       166 644
+    ///   measured cost, warm (this file's default):    113 305
+    ///
+    /// ⚠️ AND THE RULER ITSELF READS HIGH WHEN ISOLATED, WHICH IS WHY THIS
+    /// CEILING IS 190 000 AND NOT 170 000. `before - gasleft()` around a
+    /// `{gas: ...}` call reads 181 080 where the `--gas-report` row for the very
+    /// same call says 160 814 -- measured the same day, both figures off one
+    /// run. So the honest cost comes off the report row, and this literal is a
+    /// bound on the INFLATED reading, chosen so the arm does not change colour
+    /// with a flag. In the default warm mode it reads 113 816, i.e. this arm is
+    /// a coarse watch rather than a tight one -- a known loss, named here
+    /// rather than hidden.
+    ///
+    /// ⚠️ THE SIZE OF THAT INFLATION IS 29 083, NOT THE 21 000 THIS COMMENT
+    /// FIRST CLAIMED, and the correction is not cosmetic: 21 000 is the
+    /// transaction intrinsic alone, and the remaining ~8 000 is the jump through
+    /// the proxy, which the report row does not contain either. Taken on the
+    /// strongest control available: `getFeeBps` is min = avg = median = max =
+    /// 2 378 over 224 calls in the owner's full run, i.e. its price is constant
+    /// across every stand, and this file's own reading of it is 31 461. Second
+    /// control, `notifyWorkHandedIn`: 37 510 here against 8 656 on the row, a
+    /// difference of 28 854 -- the same number within a percent. Worth
+    /// subtracting before ANY `gasleft()` reading in this file is read as a
+    /// cost: on the four headroom arms of section 14 it is the difference
+    /// between "the margin is gone" and "three of the four are fine".
+    uint256 constant RAISE_DISPUTE_MEASURED_CEILING = 190_000;
     uint256 constant SHIPPED_ACTIVATION_TIMEOUT_GAS = 210_000; // relay.ts triggerActivationTimeout, unchanged
     uint256 constant SHIPPED_DEADLINE_TIMEOUT_GAS   = 220_000; // relay.ts triggerDeadlineTimeout, unchanged
     uint256 constant SHIPPED_ARBITER_TIMEOUT_GAS    = 500_000; // relay.ts triggerArbiterTimeout, unchanged
@@ -465,14 +491,17 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
     /// `_complete` that moves no money" and it shipped the tightest ceiling of
     /// the lot at 160 000; both halves of that are gone.
     ///
-    /// ⚠️ THE SCENE MEASURES TWO THINGS NOW, AND THE SECOND IS THE ONE THAT
-    /// MATTERS DOWNSTREAM. The first is the old claim -- the door fits the
-    /// budget a relayer sends and the registry still ends up true. The second
-    /// is WHAT IT ACTUALLY COSTS, read off `gasleft()` and held to a
-    /// hand-written ceiling, because `frontend/src/lib/relay.ts:900` has to be
-    /// raised in the cut that ships this implementation and the figure it needs
-    /// should come from a measurement. The number this scene prints when it
-    /// reddens IS that figure.
+    /// ⚠️ THE SCENE MEASURES TWO THINGS, AND "THE NUMBER THIS SCENE PRINTS
+    /// WHEN IT REDDENS IS THE FIGURE relay.ts NEEDS" WAS WRONG AND IS
+    /// WITHDRAWN HERE (24 November 2026). It reddened on the FIRST assertion,
+    /// where the call runs out of gas and `used` is never reached, so it
+    /// printed nothing at all -- and `gasleft()` around a `{gas: ...}` call is
+    /// no ruler at all under `--isolate`, measured the same day: 180 569
+    /// "used" against a budget of 180 000, and 5 628 against 170 000. The
+    /// figure relay.ts needs comes off the `--gas-report` row for
+    /// `Agreement.raiseDispute` with this scene handed a budget it cannot
+    /// exhaust. What `used` is still good for is the default warm mode, and
+    /// the number is emitted below so it is read rather than inferred.
     function testRaiseDisputeAtShippedBudgetKeepsRegistryTrue() public {
         Agreement a = _activated();
         _armTheDoorCharge(client, a);
@@ -493,20 +522,23 @@ contract DiamondDeathGasCapsTest is DiamondDeathEscrowBase {
         //    what relay.ts must be told, and raising this line without raising
         //    relay.ts is how a gasless door breaks in production while the
         //    suite stays green. ──
+        emit log_named_uint("raiseDispute used, in whatever mode this run is", used);
         assertLt(
             used, RAISE_DISPUTE_MEASURED_CEILING,
-            "opening a dispute costs more than the ceiling this tree was measured at -- read the number and carry it to relay.ts:900"
+            "opening a dispute costs more than the ceiling this tree was measured at -- read the number and carry it to relay.ts GAS_DEFAULTS.raiseDispute"
         );
-        // ── AND THE MARGIN ARITHMETIC, ON relay.ts's OWN CONVENTION. It sizes
-        //    a budget as measured x 1.19 x 1.2; on this measurement that is
-        //    about 186 900 against the 160 000 it ships. Written as an
-        //    assertion so the question cannot be lost, and as a comparison of
-        //    LITERALS so it cannot redden for anything happening in src/. ──
-        assertGt(
-            RAISE_DISPUTE_MEASURED_CEILING * 119 * 12 / 1000,
-            SHIPPED_RAISE_DISPUTE_GAS,
-            "arithmetic: the door's own margin rule no longer puts it over the shipped ceiling -- relay.ts has caught up and this arm can go"
-        );
+        // ── THE MARGIN ARITHMETIC THAT STOOD HERE IS GONE, BECAUSE IT CAME
+        //    DUE. It asserted that relay.ts's own rule (measured x 1.19 x 1.2)
+        //    still put the door over the ceiling that file ships, and it said
+        //    in its own message that when relay.ts caught up the arm could go.
+        //    On 24 November 2026 it caught up: the honest cold cost is
+        //    160 814, 160 814 x 1.428 is 229 642, and `GAS_DEFAULTS.raiseDispute`
+        //    went from 160 000n to 260 000n in the same commit as this line.
+        //    The arm is retired on its own instruction and not to make anything
+        //    green -- it was PASSING when it was removed, and what replaced it
+        //    is the raise it asked for. Its premise is also gone: it read
+        //    RAISE_DISPUTE_MEASURED_CEILING as the door's measured cost, and
+        //    that literal is now a bound on an inflated ruler instead. ──
     }
 
     // ============================================================

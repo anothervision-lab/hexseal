@@ -484,7 +484,9 @@ contract ArbiterVaultFacet {
         vaultBack   += levyToVault;
 
         if (toAppellant + vaultBack + bondBack != 0) {
-            // uint64 cannot truncate: each is a remainder of one deposit.
+            // uint64 cannot truncate: each is a remainder of one appeal pocket,
+            // and a pocket is at most 1e9 (`ArbiterRegistryStorage.AppealLedger`
+            // carries the bound and what changed it on 18 November 2026).
             l.debt             = uint64(debt - toAppellant);
             l.advanceFromVault = uint64(vaultOwed - vaultBack);
             l.advanceFromBond  = uint64(bondOwed - bondBack);
@@ -511,7 +513,10 @@ contract ArbiterVaultFacet {
             // right place for money with no owner.
             ArbiterRegistryStorage.CaseBond storage cb = d.caseBonds[agreement];
             if (cb.arbiter != address(0)) {
-                // uint96 cannot truncate: the sum is at most one deposit.
+                // uint96 cannot truncate: this only puts back what was advanced
+                // out of this same bond, so the sum is at most the bond itself
+                // — capped at DISPUTE_FEE_CAP_MIRROR (5e8) since 18 November
+                // 2026, and a flat 20 USDC before it.
                 cb.amount += uint96(bondBack);
                 toBond = bondBack;
             } else {
@@ -1056,11 +1061,14 @@ contract ArbiterVaultFacet {
     ///
     ///   · IT IS NOT THE PRICE OF AN APPEAL. That is `quoteAppealDeposit`
     ///     above, and the two parted company on 20 October 2026: the price
-    ///     keeps a 20 USDC floor whatever the pot is, the bond is that price
-    ///     held down to THE POT. They are equal at and above a pot of
-    ///     20 USDC and different below it — on a 5 USDC pot the price is 20
-    ///     and the bond is 5. A screen that reads the price where it promises
-    ///     the bond says $20 over a $5 deal, which is why this door was cut.
+    ///     keeps a 30 USDC floor whatever the pot is, while the bond is a flat
+    ///     20 USDC base held down to THE POT — and since 18 November 2026 that
+    ///     base is a FLOOR under a stake that rides what the case pays its
+    ///     judge, so above a pot of 667 USDC the bond is the larger of the two.
+    ///     On a 5 USDC pot the price is 30 and the bond is 5; on a 10 000 USDC
+    ///     pot the price is 200 and the bond is 300. A screen that reads the
+    ///     price where it promises the bond is wrong in both directions, which
+    ///     is why this door was cut.
     ///
     ///   · IT IS NOT WHAT WILL COME BACK TO HIM. The refund is paid out of
     ///     the RECORD this charge wrote (`Data.caseBonds`, read by
@@ -1080,8 +1088,10 @@ contract ArbiterVaultFacet {
     /// and is argued there: a contract the registry never recorded is answered
     /// anyway (no reader here can tell a deal from a manufactured imitation,
     /// and `claimDispute` cannot either), a clone that cannot answer its pot
-    /// getters is quoted the full uncapped price, a pot that cannot be added up
-    /// without overflowing is quoted the price rather than reverting, and a pot
+    /// getters is quoted the full uncapped stake, a clone that cannot say what
+    /// it pays its judge is quoted the flat base, a manufactured answer above
+    /// the fee's own cap is quoted that cap rather than believed, a pot that
+    /// cannot be added up without overflowing is quoted the stake rather than reverting, and a pot
     /// of nought is quoted NOUGHT — which means "no bond on this case", the
     /// same thing a nought in `getCaseBond` means.
     function quoteCaseBond(address agreement) external view returns (uint256) {

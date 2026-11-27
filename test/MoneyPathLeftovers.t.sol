@@ -48,11 +48,11 @@ contract MoneyPathLeftoversTest is MoneyPathBase {
         vm.prank(stranger);
         usdc.transfer(address(diamond), 3_000_000);
         assertEq(
-            usdc.balanceOf(address(diamond)), 3_000_000 + seatBondHeld + ENTRY_BOND,
-            "the donation sits on the diamond beside the entrance bond of the seat"
+            usdc.balanceOf(address(diamond)), 3_000_000 + seatBondHeld + ENTRY_BOND + SEAT_PRICE_HELD,
+            "the donation sits on the diamond beside the entrance bond of the seat and the dollar it cost"
         );
         assertEq(
-            _diamondLedger(), seatBondHeld + ENTRY_BOND,
+            _diamondLedger(), seatBondHeld + ENTRY_BOND + SEAT_PRICE_HELD,
             "the books hold the arbiter's bond and nothing else"
         );
     }
@@ -138,7 +138,7 @@ contract MoneyPathLeftoversTest is MoneyPathBase {
             (AMOUNT + AMOUNT_FEE - FEE_FLOOR) * 4,
             "four refunded, each less its floor"
         );
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond keeps nothing beyond the arbiter's bond");
+        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND + SEAT_PRICE_HELD, "diamond keeps nothing beyond the arbiter's bond and the dollar his seat cost");
         _assertDiamondBalances("after a five-wide supersede");
     }
 }

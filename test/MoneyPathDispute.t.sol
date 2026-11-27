@@ -176,8 +176,15 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         uint256 doorCharge = FEE_ON_HUNDRED;
         assertEq(doorCharge, 10_000_000, "arithmetic: the door charge on a $100 pot is not max( the $10 floor, 3% = $3 )");
         assertEq(topUp + doorCharge, RAISED_FLOOR, "arithmetic: the door charge and the top-up do not add to the raised floor");
+        // ⚠️ AND A FOURTH TERM SINCE 12 NOVEMBER 2026: the seat the fixture
+        // holds also paid ONE NON-REFUNDABLE DOLLAR of seat price, which the
+        // diamond still has — booked by `getTreasurySlice` rather than by
+        // `getArbiterBond`, because it is not his any more. Named separately
+        // from the ten for the reason every term here is named separately: the
+        // two leave by different doors.
         assertEq(
-            usdc.balanceOf(address(diamond)), doorCharge + topUp + seatBondHeld + ENTRY_BOND,
+            usdc.balanceOf(address(diamond)),
+            doorCharge + topUp + seatBondHeld + ENTRY_BOND + SEAT_PRICE_HELD,
             "the door charge and the top-up do not both sit on the diamond"
         );
         _assertDiamondBalances("after fundDispute");
@@ -196,7 +203,15 @@ contract MoneyPathDisputeTest is MoneyPathBase {
             "the arbiter is owed exactly the floor"
         );
         assertEq(arbiterShare + topUp, RAISED_FLOOR, "which is the raised $20 on the nose");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), treasuryShare);
+        // the treasury's pot is the levy's nought PLUS the seat price. The
+        // dollar the seat paid at the entrance has been in this pot since
+        // 12 November 2026, so the arithmetic rather than a bare nought is what
+        // now says the levy did not touch it.
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(),
+            treasuryShare + SEAT_PRICE_HELD,
+            "the treasury's pot is not exactly the levy's nought plus the seat price"
+        );
         _assertDiamondBalances("after the verdict was executed");
 
         // ⚠️ THE WINNER'S OWN ARITHMETIC, AND THE FEE IS NO LONGER INSIDE THE
@@ -214,20 +229,32 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         // The one owed half really comes out.
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
-        // ⚠️ AND THE TREASURY'S DOOR REFUSES, 21 OCTOBER 2026, where a bare
-        // call stood: `withdrawTreasurySlice` is written `if (slice == 0) revert
-        // NothingToPush()`, and `treasuryShare` three blocks above is a named
-        // nought because the whole fee is the judge's. The retired share was a
-        // tenth of a 3_000_000 fee, 300_000, which is why the bare call passed
-        // for as long as it did. Asserted rather than deleted, so a slice
-        // reappearing on this road reds here by name.
-        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
+        // ⚠️ THE TREASURY'S DOOR OPENS AGAIN SINCE 12 NOVEMBER 2026, AND NOT
+        // BECAUSE OF THE LEVY. From 21 October this was
+        // `vm.expectRevert(NothingToPush)`: the door is written
+        // `if (slice == 0) revert NothingToPush()` and `treasuryShare` above is
+        // a named nought, because the whole dispute fee is the judge's. That is
+        // still true. What changed is that the pot has a SECOND source — the one
+        // non-refundable dollar this rig's seat paid at the entrance — so the
+        // door has something to push and pushes EXACTLY that dollar. Asserted as
+        // an amount rather than as a refusal, so a levy reappearing on this road
+        // still reds here by name.
+        uint256 recipientBefore = usdc.balanceOf(feeRecipient);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
+        assertEq(
+            usdc.balanceOf(feeRecipient) - recipientBefore, SEAT_PRICE_HELD,
+            "the treasury's door pushed out more than the seat price it holds"
+        );
         // His purse is in this number since 22 September 2026: the rig funds him
         // so he can post the bond each CASE asks for, and this deal's bond came
         // home at finalization.
         assertEq(usdc.balanceOf(arbiterAddr) - CASE_BOND_PURSE, RAISED_FLOOR, "arbiter paid the raised floor");
-        assertEq(usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND, "diamond empty but for the arbiter's bond");
+        // ⚠️ THE SEAT PRICE IS NOT IN THIS SUM: the push a few lines up moved it
+        // off the diamond to the fee recipient. What is left is the bond.
+        assertEq(
+            usdc.balanceOf(address(diamond)), seatBondHeld + ENTRY_BOND,
+            "diamond empty but for the arbiter's bond"
+        );
         _assertDiamondBalances("after withdrawals");
     }
 
@@ -507,10 +534,30 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         usdc.setBlacklisted(feeRecipient, false);
         FactoryFacet(address(diamond)).withdrawUndeliveredFees();
         _assertDiamondBalances("board debt paid");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0, "the treasury took a cut of an arbitration levy");
-        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
+        // ⚠️ THE SLICE IS NO LONGER A NAMED NOUGHT, AND WHAT IT HOLDS IS NOT AN
+        // ARBITRATION LEVY. Since 12 November 2026 `treasurySlice` has a SECOND
+        // source: the one non-refundable dollar every seat pays at the entrance
+        // (the owner's decision of 20 October 2026). The claim this line was
+        // written to defend — the treasury takes nothing out of arbitration,
+        // because the whole dispute fee is the judge's — is unchanged, and it is
+        // now said by the arithmetic rather than by a bare nought: the slice
+        // is EXACTLY the seat price of the one seat this rig holds, so not one
+        // cent of the levy reached it.
+        assertEq(
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), SEAT_PRICE_HELD,
+            "the treasury took a cut of an arbitration levy - the slice is more than the seat price it is entitled to"
+        );
+        // ⚠️ THE DOOR PUSHES THE SEAT PRICE AND NOT A LEVY, since 12 November
+        // 2026. It was `vm.expectRevert(NothingToPush)` while the pot had one
+        // source; the claim being defended is the same one and is now carried by
+        // the AMOUNT.
+        uint256 beforePush = usdc.balanceOf(feeRecipient);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
-        _assertDiamondBalances("the levy's slice is a nought and its door refuses");
+        assertEq(
+            usdc.balanceOf(feeRecipient) - beforePush, SEAT_PRICE_HELD,
+            "the treasury's door pushed out more than the seat price it holds"
+        );
+        _assertDiamondBalances("the levy's slice is a nought and the seat price is pushed out");
         vm.prank(arbiterAddr);
         ArbiterVaultFacet(address(diamond)).withdrawArbiterReward();
         _assertDiamondBalances("arbiter paid");
@@ -526,6 +573,8 @@ contract MoneyPathDisputeTest is MoneyPathBase {
         // RAISED $20 (20 October 2026). The bank's discount is `getDisputeDiscount`
         // and that number did not move; what moved is that there has to BE a
         // top-up for it to come off, which is why the floor is raised above.
+        // ⚠️ THE SEAT PRICE IS NOT IN THIS SUM: the push above moved it off the
+        // diamond. What is left is the vault and the arbiter's bond.
         assertEq(
             usdc.balanceOf(address(diamond)),
             47_000_000 + seatBondHeld + ENTRY_BOND,

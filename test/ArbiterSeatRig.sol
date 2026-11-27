@@ -76,6 +76,26 @@ bytes32 constant SEAT_FACTORY_BASE =
 // `BondNotApproved` and says both figures out loud.
 uint256 constant SEAT_ENTRY_BOND = 10_000_000;
 
+// ⚠️ ONE DOLLAR OF SEAT PRICE AND ELEVEN IN TOTAL, BOTH AS LITERALS FIXED BY A
+// PERSON (the owner's decision of 20 October 2026, arriving 12 November). The
+// entrance stopped being a pure deposit on that day: ten dollars go home when
+// the man lets the seat go and ONE DOLLAR NEVER DOES — it is credited to the
+// treasury the moment it is paid.
+//
+// ⚠️ THE TOTAL IS TYPED OUT AND NOT COMPUTED FROM THE TWO ABOVE. That is the
+// opposite of the rule in src/, where `SEAT_TOTAL` is DERIVED precisely so it
+// cannot disagree with its parts — and the opposite for the same reason: a rig
+// that computed the sum the way the contract computes it would be a second
+// reader of one arrangement rather than an independent statement of what a seat
+// costs. Three literals that happen to add up is a claim a person can be wrong
+// about; `10 + 1` is not.
+//
+// If these numbers and the contract's disagree, the seating reverts
+// `BondNotApproved` and says both figures out loud — which is how this rig is
+// meant to fail.
+uint256 constant SEAT_PRICE_PAID = 1_000_000;
+uint256 constant SEAT_COST       = 11_000_000;
+
 /// The three things any of the mocks under these rigs can do. Deliberately
 /// narrow: `mint` because a rig may print money, `approve`/`allowance` because
 /// the entry bond is pulled rather than pushed.
@@ -91,19 +111,27 @@ function entryBondToken(address diamond) view returns (address token) {
     require(token != address(0), "seat rig: no bond token under FactoryStorage.usdc on this rig");
 }
 
-/// One entry bond, and an allowance just big enough to spend it.
+/// WHAT A SEAT COSTS, and an allowance just big enough to spend it.
+///
+/// ⚠️ IT WAS ONE ENTRY BOND UNTIL 12 NOVEMBER 2026 and it is `SEAT_COST` now —
+/// the bond PLUS the dollar that does not come back. The name is deliberately
+/// left alone: twenty-four files call it, every one of them means "put the man
+/// in a state where he can take a seat", and renaming it would have been
+/// twenty-four diffs saying nothing. What changed is the amount, and a rig that
+/// still funded ten would fail `BondNotApproved(10e6, 11e6)` at the door rather
+/// than silently seating nobody.
 ///
 /// ⚠️ THE ALLOWANCE IS RAISED AND NEVER SET. A rig that had already approved
 /// the diamond for `type(uint256).max` — most of them have, for the per-case
 /// bond — is left exactly as it was, which also keeps the sum off the overflow
-/// that `allowed + bond` would reach there.
+/// that `allowed + cost` would reach there.
 function fundEntryBond(address diamond, address who) {
     address token = entryBondToken(diamond);
-    ISeatBondToken(token).mint(who, SEAT_ENTRY_BOND);
+    ISeatBondToken(token).mint(who, SEAT_COST);
     uint256 allowed = ISeatBondToken(token).allowance(who, diamond);
-    if (allowed < SEAT_ENTRY_BOND) {
+    if (allowed < SEAT_COST) {
         SEAT_VM.prank(who);
-        ISeatBondToken(token).approve(diamond, allowed + SEAT_ENTRY_BOND);
+        ISeatBondToken(token).approve(diamond, allowed + SEAT_COST);
     }
 }
 

@@ -622,6 +622,22 @@ abstract contract MoneyPathBase is Test {
     /// number, and two literals for one fact is how the first one goes stale.
     uint256 internal constant ENTRY_BOND = 10_000_000;
 
+    /// ⚠️ AND ONE DOLLAR MORE SINCE 12 NOVEMBER 2026, WHICH IS A DIFFERENT SORT
+    /// OF MONEY AND THEREFORE A DIFFERENT TERM. The second half of the owner's
+    /// decision of 20 October arrived: the entrance takes ELEVEN, of which ten
+    /// go home when the man lets the seat go and ONE NEVER DOES. The dollar is
+    /// credited to `treasurySlice` at the door, so on these rigs it is booked by
+    /// `getTreasurySlice` and NOT by `getArbiterBond`.
+    ///
+    /// ⚠️ NEVER FOLDED INTO `ENTRY_BOND` AS AN ELEVEN, and that is the whole
+    /// reason it is here as its own name: the two sums leave the diamond by
+    /// different doors and at different times — the bond through
+    /// `resignAsArbiter` or a forfeit, the dollar only through
+    /// `withdrawTreasurySlice`. A single eleven would stay green while one of
+    /// them moved into the other's pot, which is exactly the mistake the price
+    /// exists to prevent. A literal fixed by a person, like the ten above.
+    uint256 internal constant SEAT_PRICE_HELD = 1_000_000;
+
     /// ⚠️ THE ENTRANCE COSTS TEN DOLLARS AGAIN SINCE 8 NOVEMBER 2026, AND THIS
     /// IS STILL NOT WHERE IT IS PAID. The entry bond is taken by the seating
     /// door, in the same transaction as the seat, out of the man's own wallet.

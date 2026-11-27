@@ -67,6 +67,21 @@ contract ExtrasTest is Test {
     uint256 constant EXECUTOR_USDC =   200_000_000;
     uint256 constant INITIAL_TOTAL = CLIENT_USDC + EXECUTOR_USDC;
 
+    /// WHAT THE ONE SEAT IN `setUp` PUTS ON THE DIAMOND, and therefore what has
+    /// to be sent away again for this file's conservation sum to mean anything.
+    /// TWO NAMES AND NOT ONE ELEVEN: the bond goes home when the man lets the
+    /// seat go, the seat price never does -- it is the treasury's from the
+    /// moment it is paid (the owner's decision of 20 October 2026, arriving
+    /// 12 November). The two leave the diamond by different doors, so a single
+    /// literal would stay green while one of them moved into the other's pot.
+    ///
+    /// ⚠️ LITERALS FIXED BY A PERSON, not read back off the registry: a rig that
+    /// asked the contract what its own entrance costs would drain the right
+    /// amount at eleven dollars, at a hundred and at nought, and the seating
+    /// below would stay green through all three.
+    uint256 constant SEAT_BOND_DRAINED  = 10_000_000;
+    uint256 constant SEAT_PRICE_DRAINED =  1_000_000;
+
     uint8   constant REGION     = 0;
     uint256 constant JOB_AMOUNT = 100_000_000;
     // FactoryFacet direct path (deployAgreement) prices by quote():
@@ -268,8 +283,26 @@ contract ExtrasTest is Test {
         // safe HERE for one reason and one only: nothing in this file refunds or
         // forfeits a bond. A scene added later that resigns,
         // removes or revokes this seat must stop using this shortcut.
+        //
+        // ⚠️ ELEVEN DOLLARS AND NOT TEN SINCE 12 NOVEMBER 2026, and the eleven
+        // is written as TWO ADDENDS because it is two sorts of money. The second
+        // half of the owner's decision of 20 October arrived: the entrance takes
+        // ten of refundable bond AND ONE DOLLAR OF SEAT PRICE THAT NEVER COMES
+        // BACK, credited to `treasurySlice` at the door. Both land on the
+        // diamond in the same transaction, so both have to leave for the
+        // conservation sum to hold. A single `11_000_000` would stay green while
+        // the two traded a dollar between them, which is the one thing these
+        // numbers exist to tell apart.
+        //
+        // ⚠️ AND THE SECOND THING LEFT BEHIND, SAID OUT LOUD TOO:
+        // `getTreasurySlice()` now reads one dollar the diamond no longer holds,
+        // exactly as `getArbiterBond` reads ten it no longer holds. Safe HERE on
+        // the same single condition, which has simply grown a clause: nothing in
+        // this file refunds a bond, forfeits a bond, OR pushes the treasury
+        // slice. A scene added later that calls `withdrawTreasurySlice` must stop
+        // using this shortcut.
         vm.prank(address(diamond));
-        usdc.transfer(address(0xB1A), 10_000_000);
+        usdc.transfer(address(0xB1A), SEAT_BOND_DRAINED + SEAT_PRICE_DRAINED);
         assertEq(
             usdc.balanceOf(address(diamond)), 0,
             "rig: the diamond is not empty at the start, so the invariant below measures something else"

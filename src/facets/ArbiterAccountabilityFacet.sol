@@ -1249,13 +1249,46 @@ contract ArbiterAccountabilityFacet {
         private
         returns (uint256 forfeited)
     {
-        // A removal is not a voluntary exit: the bond is forfeited into the
-        // arbiter vault rather than returned (the opposite of resignAsArbiter,
-        // and deliberately so — this is a penalty, not a parting).
+        // A removal is not a voluntary exit: the bond is forfeited rather than
+        // returned (the opposite of resignAsArbiter, and deliberately so — this
+        // is a penalty, not a parting).
+        //
+        // ⚠️ IT GOES TO THE TREASURY SINCE 12 NOVEMBER 2026, AND IT WENT TO THE
+        // ARBITER BANK UNTIL THAT DAY. The owner's decision of 20 October 2026
+        // names the addressee of a forfeited bond out loud — the treasury — and
+        // this line was the half of that decision nobody had moved; the cut of
+        // 10 November carried the bond itself and left its fate where
+        // 18 September had put it. So this is not a new rule, it is the rule's
+        // other end arriving, and it belongs to the same day as
+        // `ArbiterRegistryStorage.SEAT_PRICE`.
+        //
+        // ⚠️ WHAT IS GIVEN UP, SAID OUT LOUD RATHER THAN LEFT TO BE FOUND: the
+        // arbiter bank loses an income line it has had since the bond existed.
+        // That is the same direction the forfeited CASE fee went on the same day
+        // — off the arbiter fund and onto the panel that did the work — and it
+        // has one argument behind it that is worth keeping next to the code: a
+        // fund fed by punishments is a fund with an interest in punishments. The
+        // bank is funded by `fundVault` and by the dispute fee, neither of which
+        // needs anybody removed.
+        //
+        // ⚠️ A CREDIT AND NOT A TRANSFER, for the reason the field carries at
+        // its declaration: the USDC is already on the diamond, and
+        // `ArbiterVaultFacet.withdrawTreasurySlice()` is the one door that moves
+        // it out. A transfer to `FactoryStorage.feeRecipient` from HERE would
+        // put a blocked recipient in the way of a removal, which is the one
+        // thing a removal must never wait for.
+        //
+        // ⚠️ BOTH DOORS GET THIS, because the body is shared: the accusation
+        // door (`removeArbiterForCause`) and the chain's own
+        // (`executeChainRemoval`). That is intended and not a side effect — the
+        // decision says where a forfeited bond goes, not where it goes when a
+        // person pressed the button. Neither caller moves money of its own, so
+        // neither has acquired a money road it did not have; what each still
+        // keeps for itself is its record of the cause and its event.
         forfeited = d.arbiterBond[arbiter];
         if (forfeited > 0) {
             d.arbiterBond[arbiter] = 0;
-            d.vaultBalance += forfeited;
+            d.treasurySlice += forfeited;
         }
 
         d.isArbiter[arbiter] = false;
@@ -1440,7 +1473,12 @@ contract ArbiterAccountabilityFacet {
         // The forfeited bond is not carried into any log on this path, exactly
         // as it was not before: ArbiterDemoted has no amount field, and
         // widening it would change a signature the live subgraph matches by its
-        // canonical form. The vault balance moves, and getVaultBalance shows it.
+        // canonical form. ⚠️ WHAT MOVES IS THE TREASURY SLICE SINCE 12 NOVEMBER
+        // 2026, NOT THE VAULT BALANCE, and `getTreasurySlice()` shows it — the
+        // addressee the owner named on 20 October 2026. The reader to go to is
+        // `_performRemoval`'s own docstring; this line is the one a reader of
+        // THIS door lands on, which is why it says the number out loud instead
+        // of pointing.
         _performRemoval(d, arbiter);
 
         // The permanent half of the record, and the reason

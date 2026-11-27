@@ -498,28 +498,34 @@ contract TreasuryLinkFacet {
     ///
     /// ⚠️ AND THE TARGET DOES NOT HOLD THE BANK DOWN, which is why this door is
     /// not decoration. The target throttles ONE inflow, the treasury's own
-    /// stream, through `vaultRoom()` on the treasury side. Six places write
+    /// stream, through `vaultRoom()` on the treasury side. Several places write
     /// `vaultBalance` and not one of them asks the target:
     /// `ArbiterVaultFacet._settleForfeitedShare` and `.fundVault`,
-    /// `ArbiterAccountabilityFacet._performRemoval` (a removed arbiter's seat
-    /// bond), `ArbiterRegistryFacet` twice where the bank's dispute subsidy comes
-    /// back, and the remainder of dividing an appeal deposit among its panel. The
-    /// bank can therefore stand above its target, and before this door nothing
-    /// could bring it back down.
+    /// `ArbiterRegistryFacet` twice where the bank's dispute subsidy comes
+    /// back, the appeal vote fee, and the remainder of dividing an appeal
+    /// deposit among its panel. The bank can therefore stand above its target,
+    /// and before this door nothing could bring it back down.
+    ///
+    /// ⚠️ ONE INFLOW LEFT THIS LIST ON 12 NOVEMBER 2026 and the sentence above
+    /// said "six places" until then: `ArbiterAccountabilityFacet._performRemoval`
+    /// credited a removed arbiter's seat bond here, and it credits
+    /// `treasurySlice` now — the addressee the owner named on 20 October 2026.
+    /// The count is deliberately NOT replaced by a new number: it was counted by
+    /// hand, it had already drifted once, and a figure nothing measures is worth
+    /// less than the names.
     ///
     /// ⚠️⚠️ PART OF THIS MONEY IS PENALTY MONEY, AND SENDING IT TO THE
-    /// FOUNDATION IS A DECISION RATHER THAN PLUMBING. Two of those six inflows
-    /// are fines: the 80% of a dispute fee forfeited by an arbiter whose verdict
-    /// was overturned, and the seat bond of an arbiter removed for cause (that
-    /// second door is retired at the entrance — `postArbiterBond` reverts
-    /// `SeatBondRetired` — so it can only be non-zero on a diamond that held such
-    /// a bond before, but the code path is live). A third, the remainder of an
-    /// appeal deposit's division, is somebody's own money left over by integer
-    /// division. So the route this door opens is "fines and leftovers -> the
-    /// foundation", and it is written here in as many words because it is the
-    /// sort of thing that gets built as a detail and discovered as a policy. The
-    /// owner decided it on 24 September 2026, and no public page says it until
-    /// he says so.
+    /// FOUNDATION IS A DECISION RATHER THAN PLUMBING. ONE of those inflows is a
+    /// fine: the 80% of a dispute fee forfeited by an arbiter whose verdict was
+    /// overturned. ⚠️ THERE WERE TWO UNTIL 12 NOVEMBER 2026 — the other was the
+    /// seat bond of an arbiter removed for cause, and it goes to the treasury
+    /// directly now, so this door is no longer the road it travels. Another, the
+    /// remainder of an appeal deposit's division, is somebody's own money left
+    /// over by integer division. So the route this door opens is "a fine,
+    /// leftovers and top-ups -> the foundation", and it is written here in as
+    /// many words because it is the sort of thing that gets built as a detail and
+    /// discovered as a policy. The owner decided it on 24 September 2026, and no
+    /// public page says it until he says so.
     ///
     /// ── WHY THE FOUNDATION AND NOT A NEW ADDRESS ──────────────────────────
     /// It is the one place money already leaves this protocol lawfully: the

@@ -948,10 +948,13 @@ contract ArbiterApplicationsFacet {
     /// deleted and the man seated, so the inner call refuses and takes the
     /// whole transaction down.
     ///
-    /// ⚠️ THE SAME TEN DOLLARS AS THE SELF-SERVICE DOOR, read from
-    /// `ArbiterRegistryStorage.ENTRY_BOND`. The owner's rule is that the two
-    /// entrances ask exactly the same thing, and the only way to keep that true
-    /// is for there to be one declaration — not two agreeing numbers.
+    /// ⚠️ THE SAME ELEVEN DOLLARS AS THE SELF-SERVICE DOOR — ten of
+    /// `ArbiterRegistryStorage.ENTRY_BOND`, which goes home, and one of
+    /// `SEAT_PRICE`, which does not. The owner's rule is that the two entrances
+    /// ask exactly the same thing, and the only way to keep that true is for
+    /// there to be one declaration of each — not two agreeing numbers. The
+    /// dollar arrived on 12 November 2026, the second half of his decision of
+    /// 20 October; the argument for it is at `ArbiterRegistryStorage.SEAT_PRICE`.
     ///
     /// Gasless by the sender and not by the allowance: `_msgSender()` means the
     /// call relays through the `MinimalForwarder`, but an `approve` is a
@@ -970,7 +973,7 @@ contract ArbiterApplicationsFacet {
         // `script/check_arbiter_bond_writers.py`.
         d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
         ArbiterRegistryStorage.seatOnInvitation(d, caller);
-        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+        ArbiterRegistryStorage.takeSeatMoney(d, caller);
 
         emit ArbiterRegistryFacet.ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
     }
@@ -989,11 +992,22 @@ contract ArbiterApplicationsFacet {
     /// ⚠️ THE ARGUMENT SHAPE IS THE RETIRED DOOR'S — `(uint256 deadline,
     /// uint8 v, bytes32 r, bytes32 s)` — kept deliberately, so that a screen
     /// which once drove `postArbiterBondWithPermit` needs no new argument
-    /// order. The AMOUNT is not an argument and never was: it is `ENTRY_BOND`,
+    /// order. The AMOUNT is not an argument and never was: it is `SEAT_TOTAL`,
     /// so a paper signed for any other number does not verify, and the SIGNER
     /// is `_msgSender()`, so a paper signed by anybody else is refused by the
     /// token. Neither refusal rests on a check written here, which is why
     /// neither can be edited away here.
+    ///
+    /// ⚠️ THAT SUM WENT 10 -> 11 ON 12 NOVEMBER 2026, AND A PAPER FOR TEN STOPS
+    /// WORKING. It is the one seam of this change that breaks in silence if it
+    /// is missed: the number lives on OUR side, and a screen that keeps a copy
+    /// of it signs for ten. ⚠️ ON THIS ROAD THE REFUSAL IS THE TOKEN'S AND HAS
+    /// NO NAME — the amount is part of the signed digest, so USDC rejects the
+    /// recovered address before any line of ours runs. The allowance doors
+    /// refuse the same mistake with both figures in it
+    /// (`BondNotApproved(10e6, 11e6)`); this one cannot, and the whole of what
+    /// can be done about it is to publish the number the door pulls, which
+    /// `getSeatCost()` does.
     ///
     /// ⚠️ THE PAPER IS PRESENTED BEFORE THE DOOR DECIDES. A refusal costs him
     /// nothing — the transaction unwinds, the allowance with it, and USDC's
@@ -1011,14 +1025,14 @@ contract ArbiterApplicationsFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
 
         ArbiterRegistryStorage.presentEntryBondPermit(
-            caller, ArbiterRegistryStorage.ENTRY_BOND, deadline, v, r, s
+            caller, ArbiterRegistryStorage.SEAT_TOTAL, deadline, v, r, s
         );
 
         _requireLiveInvitation(d, caller);
 
         d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
         ArbiterRegistryStorage.seatOnInvitation(d, caller);
-        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+        ArbiterRegistryStorage.takeSeatMoney(d, caller);
 
         emit ArbiterRegistryFacet.ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
     }
@@ -1082,7 +1096,8 @@ contract ArbiterApplicationsFacet {
     /// live removal cooldown.
     ///
     /// ⚠️ THE ARGUMENTS ARE THE PAPER AND NOTHING ELSE: a deadline and a
-    /// signature. The amount is `ENTRY_BOND`, read from the library, so a paper
+    /// signature. The amount is `SEAT_TOTAL` — the bond plus the seat price,
+    /// eleven dollars since 12 November 2026 — read from the library, so a paper
     /// signed for any other number does not verify; the payer is
     /// `_msgSender()`, so a paper signed by somebody else is refused by USDC.
     /// Neither refusal rests on a check written here, which is why neither can
@@ -1108,7 +1123,7 @@ contract ArbiterApplicationsFacet {
         ArbiterRegistryStorage.Data storage d = ArbiterRegistryStorage.data();
 
         ArbiterRegistryStorage.presentEntryBondPermit(
-            caller, ArbiterRegistryStorage.ENTRY_BOND, deadline, v, r, s
+            caller, ArbiterRegistryStorage.SEAT_TOTAL, deadline, v, r, s
         );
 
         ArbiterRegistryStorage.requireSelfEnrolmentEarned(d, caller);
@@ -1119,7 +1134,7 @@ contract ArbiterApplicationsFacet {
         // `script/check_arbiter_bond_writers.py`.
         d.arbiterBond[caller] = ArbiterRegistryStorage.ENTRY_BOND;
         ArbiterRegistryStorage.seatSelfEnrolled(d, caller);
-        ArbiterRegistryStorage.takeEntryBond(caller, ArbiterRegistryStorage.ENTRY_BOND);
+        ArbiterRegistryStorage.takeSeatMoney(d, caller);
 
         emit ArbiterRegistryFacet.ArbiterEntryBondPosted(caller, ArbiterRegistryStorage.ENTRY_BOND);
     }
@@ -1469,9 +1484,9 @@ contract ArbiterApplicationsFacet {
     ///
     /// The refund needs nothing new. `resignAsArbiter` returns
     /// `arbiterBond[caller]` whatever wrote it, and `_performRemoval` forfeits
-    /// the same field into the vault — so a bond posted here comes back on a
-    /// voluntary exit and burns on a removal for cause, with no second code
-    /// path for either.
+    /// the same field to the TREASURY (`vaultBalance` until 12 November 2026)
+    /// — so a bond posted here comes back on a voluntary exit and burns on a
+    /// removal for cause, with no second code path for either.
     function postArbiterBond() external pure {
         revert SeatBondRetired();
     }
@@ -1655,11 +1670,62 @@ contract ArbiterApplicationsFacet {
         // The two were the same question while the only way to hold a bond was
         // to pay this exact amount, and they part company for the four seats on
         // Base Sepolia that hold zero under an older rule.
+        //
+        // ⚠️ AND SINCE 12 NOVEMBER 2026 IT IS NO LONGER WHAT A SEAT COSTS. It
+        // is the REFUNDABLE half: a seat costs `SEAT_TOTAL`, eleven dollars, of
+        // which this field is the ten that come home. A screen that builds an
+        // approval out of this number alone signs for ten and the door refuses
+        // it by name. The whole cost is `getSeatCost()` below, in a door of its
+        // own — the argument for why this tuple was NOT widened to five is
+        // written there, and it is about selectors rather than about shape.
         return (
             MIN_XP_MIRROR,
             MIN_CLEAN_STREAK_MIRROR,
             ArbiterRegistryStorage.ENTRY_BOND,
             APPLICATION_TTL
+        );
+    }
+
+    /// @notice What a seat costs, split into the half that comes back and the
+    /// half that does not.
+    ///
+    /// Added 12 November 2026 with the seat price, and a DOOR OF ITS OWN rather
+    /// than a fifth field on `getApplicationRequirements()` above. ⚠️ THAT IS
+    /// THE WHOLE REASON IT EXISTS AND IT IS NOT A MATTER OF TASTE: a selector is
+    /// derived from the SIGNATURE, and a return type is not part of a signature.
+    /// Widen that tuple to five and `0xfc0b7216` goes on meaning the same four
+    /// bytes, so a screen built against the four-field shape keeps calling it,
+    /// keeps decoding the first four words, and reads a number that is no longer
+    /// the one in that position — silently, with nothing anywhere going red. A
+    /// NEW selector cannot do that: a screen that does not know the name does
+    /// not call it, and one that does gets the whole answer.
+    ///
+    /// ⚠️ THREE NUMBERS AND THE THIRD IS DERIVED, not a sum computed here. A
+    /// screen needs all three for three different sentences — "ten dollars come
+    /// back when you leave", "one dollar does not", and "approve eleven before
+    /// you press" — and the third is the one a wallet transaction is built from,
+    /// so it has to be the SAME number the door pulls. It is
+    /// `ArbiterRegistryStorage.SEAT_TOTAL`, read from the declaration the four
+    /// doors read; nothing here adds the first two up, because a sum computed at
+    /// the reader is a second answer free to disagree with the pull.
+    ///
+    /// ⚠️ IT IS THE NORM AND NOT WHAT ANY ONE MAN OWES, the same distinction
+    /// `getApplicationRequirements()` carries: what a particular address has
+    /// standing is `getBondState(addr)`, and the seat price is not in that
+    /// answer at all because nobody is owed it back.
+    ///
+    /// `pure` and not `view`: all three are declarations, so there is no state
+    /// to read. The day a price starts living in storage this becomes `view` and
+    /// the selector does not move — the mutability is not part of it either.
+    function getSeatCost()
+        external
+        pure
+        returns (uint256 refundableBond, uint256 seatPrice, uint256 total)
+    {
+        return (
+            ArbiterRegistryStorage.ENTRY_BOND,
+            ArbiterRegistryStorage.SEAT_PRICE,
+            ArbiterRegistryStorage.SEAT_TOTAL
         );
     }
 

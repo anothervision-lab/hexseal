@@ -55,6 +55,17 @@ contract MockUSDCDF {
 // ---------- TEST ----------
 
 contract DisputeFeeTest is Test {
+    /// ⚠️ WHAT THE TREASURY'S POT HOLDS ON THIS RIG BEFORE ANY ARBITRATION, since
+    /// 12 November 2026: the one non-refundable dollar of seat price the rig's
+    /// seated arbiter paid at the entrance (the owner's decision of 20 October
+    /// 2026). The pot stopped having a single source that day, so every ABSOLUTE
+    /// reading of it in this file is "the arbitration's share PLUS this", and the
+    /// claim the readings defend — that the treasury takes nothing out of
+    /// arbitration — is now carried by the arithmetic instead of by a bare
+    /// nought. A literal fixed by a person; deltas elsewhere in the file are
+    /// unaffected and were left alone.
+    uint256 constant SEAT_PRICE_ON_THIS_RIG = 1_000_000;
+
     DiamondProxy diamond;
     MockUSDCDF   usdc;
 
@@ -380,7 +391,7 @@ contract DisputeFeeTest is Test {
         // (`ARBITER_SHARE_BPS` = 10 000, the owner: the treasury takes nothing
         // out of arbitration). It read 5_400_000 / 600_000 -- 90% and 10%.
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 6_000_000, "arbiter takes the whole fee");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),                    0, "treasury takes nothing");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),  SEAT_PRICE_ON_THIS_RIG, "treasury takes nothing out of arbitration, beyond the seat price its arbiter paid");
     }
 
     /// The treasury's share is computed by SUBTRACTION, so no unit is lost on a
@@ -407,7 +418,11 @@ contract DisputeFeeTest is Test {
         vm.stopPrank();
 
         uint256 toArb = ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb);
-        uint256 toTre = ArbiterVaultFacet(address(diamond)).getTreasurySlice();
+        // ⚠️ THE POT'S SEAT PRICE IS TAKEN OFF BEFORE THE SUM, since 12 November
+        // 2026: what this scene is about is that the FEE loses no base unit, and
+        // the entrance's dollar is not part of the fee. Subtracting it keeps the
+        // reading about the division rather than about the rig.
+        uint256 toTre = ArbiterVaultFacet(address(diamond)).getTreasurySlice() - SEAT_PRICE_ON_THIS_RIG;
         assertEq(toArb, 1_000_003, "the arbiter's share is the whole odd amount");
         assertEq(toArb + toTre, 1_000_003, "parts must sum to the whole");
     }
@@ -444,7 +459,7 @@ contract DisputeFeeTest is Test {
         // green. A nought that is asserted still catches a `=` that writes
         // something; a deleted line catches nothing.
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 6_000_000 + 1_000_003, "arbiter reward must accumulate");
-        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),                                 0, "treasury slice must stay at nought");
+        assertEq(ArbiterVaultFacet(address(diamond)).getTreasurySlice(),            SEAT_PRICE_ON_THIS_RIG, "treasury slice must stay at the seat price and take nothing from arbitration");
     }
 
     // ⚠️ `testCreditDisputeFeeOverturnedSendsTheForfeitedShareToTheBankNotTheTreasury` IS GONE (9 October 2026).
@@ -515,7 +530,7 @@ contract DisputeFeeTest is Test {
         // matters, and it is asserted rather than left implied.
         assertEq(usdc.balanceOf(arb) - before, 6_000_000, "reward must actually reach the arbiter's wallet -- the whole fee is his");
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0,
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), SEAT_PRICE_ON_THIS_RIG,
             "the treasury took a cut of an arbitration fee on the legacy door"
         );
         assertEq(ArbiterAccountabilityFacet(address(diamond)).getArbiterReward(arb), 0, "counter must be cleared");
@@ -563,15 +578,22 @@ contract DisputeFeeTest is Test {
             "control: the fee was not credited, so this scene measures an empty rig"
         );
         assertEq(
-            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), 0,
+            ArbiterVaultFacet(address(diamond)).getTreasurySlice(), SEAT_PRICE_ON_THIS_RIG,
             "the treasury kept a share of an arbitration -- the decision of 20 October is undone"
         );
 
         // ── AND THE DOOR IS OPEN TO A STRANGER: it refuses him for the BALANCE
         //    and not for his address. ──
+        // ⚠️ AND THE DOOR OPENS SINCE 12 NOVEMBER 2026, which does not weaken the
+        // claim above: it refuses nobody for his ADDRESS, and what it pushes is
+        // exactly the entrance's dollar and not a base unit of the fee.
+        uint256 recipientBefore = usdc.balanceOf(feeRecipient);
         vm.prank(address(0xBEEF));
-        vm.expectRevert(ArbiterRegistryFacet.NothingToPush.selector);
         ArbiterVaultFacet(address(diamond)).withdrawTreasurySlice();
+        assertEq(
+            usdc.balanceOf(feeRecipient) - recipientBefore, SEAT_PRICE_ON_THIS_RIG,
+            "the stranger's push moved more than the seat price the pot holds"
+        );
     }
 
     /// Nothing to push — a revert rather than a transfer of zero.

@@ -622,9 +622,18 @@ contract ReentrancyTest is Test {
         // with -- so it is named as its own term rather than rolled into a
         // bigger literal, and a second refund getting through still reds by
         // exactly the refund.
+        //
+        // ⚠️ AND `+ SEAT_PRICE` SINCE 12 NOVEMBER 2026, a SECOND TERM and not a
+        // bigger literal, for exactly the reason the first one is a term. The
+        // entrance stopped being a pure deposit: the seat costs eleven dollars
+        // of which one never comes back, and that dollar sits on the diamond as
+        // treasury money from the moment it is paid. Two named addends keep the
+        // scene's own claim sharp -- a second refund getting through still reds
+        // by exactly the refund, and a dollar going astray reds by exactly a
+        // dollar.
         assertEq(
-            malUSDC.balanceOf(address(diamond)), ENTRY_BOND,
-            "diamond drained exactly once, beyond the entrance bond of its seat"
+            malUSDC.balanceOf(address(diamond)), ENTRY_BOND + SEAT_PRICE,
+            "diamond drained exactly once, beyond the bond and the seat price of its seat"
         );
     }
 
@@ -646,8 +655,8 @@ contract ReentrancyTest is Test {
         // Refund = amount + fee above the floor; the floor itself is forfeited.
         assertEq(malUSDC.balanceOf(client), clientBefore + SVC_AMOUNT + (SVC_FEE - JOB_FLOOR), "single refund only");
         assertEq(
-            malUSDC.balanceOf(address(diamond)), ENTRY_BOND,
-            "diamond drained exactly once, beyond the entrance bond of its seat"
+            malUSDC.balanceOf(address(diamond)), ENTRY_BOND + SEAT_PRICE,
+            "diamond drained exactly once, beyond the bond and the seat price of its seat"
         );
     }
 
@@ -669,8 +678,8 @@ contract ReentrancyTest is Test {
         // Refund = amount + fee above the floor; the floor itself is forfeited.
         assertEq(malUSDC.balanceOf(client), clientBefore + SVC_AMOUNT + (SVC_FEE - JOB_FLOOR), "single refund only");
         assertEq(
-            malUSDC.balanceOf(address(diamond)), ENTRY_BOND,
-            "diamond drained exactly once, beyond the entrance bond of its seat"
+            malUSDC.balanceOf(address(diamond)), ENTRY_BOND + SEAT_PRICE,
+            "diamond drained exactly once, beyond the bond and the seat price of its seat"
         );
     }
 
@@ -686,6 +695,24 @@ contract ReentrancyTest is Test {
     /// contract what its own price is stays green at fifty dollars, at one cent
     /// and at nought.
     uint256 internal constant ENTRY_BOND = 10_000_000;
+
+    /// ⚠️ THE DOLLAR THAT DOES NOT COME BACK (12 November 2026), the owner's
+    /// decision of 20 October arriving in full. `inviteAndSeatArbiter` pulls
+    /// eleven dollars in one `transferFrom` -- ten of refundable bond and ONE of
+    /// seat price -- and the price is credited to the treasury on the spot, so
+    /// it sits on the diamond for the life of this rig exactly as the bond does.
+    ///
+    /// ⚠️ ITS OWN CONSTANT AND ITS OWN ADDEND, never folded into `ENTRY_BOND`
+    /// and never written as 11_000_000. The three scenes below are about the
+    /// REFUND leaving once; a single eleven-dollar literal would stay green if
+    /// the bond and the price traded a dollar between them, and these two
+    /// numbers go to different places -- one back to the man, one to the
+    /// treasury for good.
+    ///
+    /// ⚠️ A LITERAL FIXED BY A PERSON, like its neighbour above, and for the
+    /// same reason: an expectation that asks the contract what its own price is
+    /// stays green at a dollar, at a hundred and at nought.
+    uint256 internal constant SEAT_PRICE = 1_000_000;
 
     /// The bond behind a hand-given seat (8 September 2026).
     ///

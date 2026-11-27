@@ -115,7 +115,55 @@ fetched from upstream rather than copied in here.
 
 ## No package manager, nothing vendored
 
-This repository is Foundry only. There is no `package.json` and no lockfile, so nothing is
-installed from npm and there is no `node_modules/` tree carrying licences of its own. No
-third-party file is checked in anywhere: `lib/` is submodule pointers, and every other
-tracked path is `src/`, `test/`, `script/`, the four documents and the build configuration.
+## Vendored: nine font families under `frontend/src/app/fonts/`
+
+Added 16 November 2026, and the only third-party **files** this repository checks in.
+
+Fourteen `.woff2` files carrying nine families, each with its own licence text beside it as
+`OFL-<Family>.txt`. Every one is **OFL — SIL Open Font License, Version 1.1**, which is the
+`license:` field of the family's own metadata in `google/fonts` and the text of its own
+`OFL.txt`, not an assumption: the per-family copyright holder differs and each text names
+its own, so the nine are not interchangeable.
+
+| Family | Files | Licence | Upstream |
+|---|---|---|---|
+| Space Grotesk | 1 (variable) | OFL-1.1 | `github.com/floriankarsten/space-grotesk` |
+| Manrope | 1 (variable) | OFL-1.1 | `github.com/googlefonts/manrope` |
+| Space Mono | 2 (static) | OFL-1.1 | `github.com/googlefonts/spacemono` |
+| Syne | 1 (variable) | OFL-1.1 | `gitlab.com/bonjour-monde/fonderie/syne-typeface` |
+| Noto Sans Thai | 1 (variable) | OFL-1.1 | `github.com/notofonts/thai` |
+| Chonburi | 1 (static) | OFL-1.1 | `github.com/cadsondemak/chonburi` |
+| Kanit | 5 (static) | OFL-1.1 | `github.com/cadsondemak/kanit` |
+| Unbounded | 1 (variable) | OFL-1.1 | `github.com/googlefonts/unbounded` |
+| JetBrains Mono | 1 (variable) | OFL-1.1 | `github.com/JetBrains/JetBrainsMono` |
+
+The files are subset and converted rather than copied byte for byte, so they are modified
+copies — which OFL-1.1 permits, the reserved-font-name clause being the one constraint and
+no family here declaring a reserved name. The exact transformation, the upstream commit each
+family came from, and the recipe to reproduce or update it live in that directory's own
+`README.md`. The licence texts travel with the files, which is what OFL-1.1 requires.
+
+They are checked in rather than fetched because the build of the frontend image used to
+download them from a third-party server **while it ran**, and that server answered the build
+machine differently from how it answers a workstation — twice in one morning with a response
+the font loader could not parse, which took the whole image down. The reasoning is recorded
+in the project's decision journal as decision 303.
+
+## Node packages: declared, not vendored
+
+Three `package.json` files and three `package-lock.json` files are tracked —
+`frontend/`, `relayer/` and `subgraph/`. They **name** dependencies and pin them by
+integrity hash; they contain none of that code. **Zero** files under any `node_modules/` are
+tracked, so no npm package's source or licence text is distributed from here; `npm ci`
+fetches them onto the reader's own machine, exactly as `git submodule update` does for
+`lib/`.
+
+> ⚠️ Until 16 November 2026 this section read "This repository is Foundry only. There is no
+> `package.json` and no lockfile." That was already untrue when it was written — the three
+> lockfiles predate it — and it is corrected here rather than quietly deleted, because a
+> licence register that has been wrong once is worth knowing about. What was never untrue is
+> the part that matters: nothing from `node_modules/` is checked in.
+
+Apart from the fonts above, no third-party file is checked in anywhere: `lib/` is submodule
+pointers, the node trees are pointers too, and every other tracked path is `src/`, `test/`,
+`script/`, `frontend/`, `relayer/`, `subgraph/`, the documents and the build configuration.

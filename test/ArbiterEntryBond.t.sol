@@ -217,6 +217,23 @@ contract ArbiterEntryBondTest is Test {
     /// one cent and at nought.
     uint256 constant ENTRY_BOND = 10_000_000;
 
+    /// ⚠️ THE SEAT PRICE AND THE WHOLE COST, ADDED 12 NOVEMBER 2026 — the second
+    /// half of the owner's decision of 20 October 2026, which the cut of
+    /// 10 November did not carry. One dollar on top of the bond, and it does NOT
+    /// come home. Literals, like the ten above, and `SEAT_TOTAL` is TYPED rather
+    /// than `ENTRY_BOND + SEAT_PRICE`: a sum computed here would move with
+    /// either part and could never contradict the contract, which derives it the
+    /// same way.
+    ///
+    /// ⚠️ THIS FILE IS ABOUT THE REFUNDABLE TEN AND STAYS ABOUT IT. What the
+    /// dollar does — that it is credited to the treasury, that it does not come
+    /// back, and what ten round trips cost a farm — is measured next door in
+    /// test/ArbiterSeatPrice.t.sol. What changed HERE is only that every door
+    /// now pulls eleven, so every scene that reads a pulled amount reads the
+    /// total.
+    uint256 constant SEAT_PRICE =  1_000_000;
+    uint256 constant SEAT_TOTAL = 11_000_000;
+
     /// Seven days, as a literal, for the same reason. The invitation's window is
     /// deliberately the one `APPLICATION_TTL` already owns (the owner's
     /// instruction: no new number about the world), and a scene that read that
@@ -425,7 +442,7 @@ contract ArbiterEntryBondTest is Test {
 
         ( , uint256 bond, ) = apps.getBondState(invited);
         assertEq(bond, ENTRY_BOND, "the refused press touched his bond record");
-        assertEq(usdc.balanceOf(address(diamond)), ENTRY_BOND, "the refused press moved money");
+        assertEq(usdc.balanceOf(address(diamond)), SEAT_TOTAL, "the refused press moved money");
     }
 
     /// THE SEAM THE SPLIT CREATED. `addArbiter` has always died at the
@@ -469,8 +486,11 @@ contract ArbiterEntryBondTest is Test {
         apps.acceptArbiterInvitation();
 
         assertTrue(vault.isRegisteredArbiter(invited), "the answer did not seat him");
-        assertEq(usdc.balanceOf(address(diamond)), ENTRY_BOND, "the diamond did not take the bond");
-        assertEq(before - usdc.balanceOf(invited), ENTRY_BOND, "the bond did not leave HIS wallet");
+        // ⚠️ ELEVEN AND NOT TEN SINCE 12 NOVEMBER 2026: the door pulls the bond
+        // AND the seat price in one `transferFrom`. The bond record two lines
+        // below still reads ten, and that difference is the whole of the change.
+        assertEq(usdc.balanceOf(address(diamond)), SEAT_TOTAL, "the diamond did not take the whole cost");
+        assertEq(before - usdc.balanceOf(invited), SEAT_TOTAL, "the cost did not leave HIS wallet");
 
         ( , uint256 bond, ) = apps.getBondState(invited);
         assertEq(bond, ENTRY_BOND, "the seat carries no record of the money");
@@ -495,17 +515,21 @@ contract ArbiterEntryBondTest is Test {
         // No allowance at all.
         vm.prank(broke);
         vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.BondNotApproved.selector, 0, ENTRY_BOND
+            ArbiterApplicationsFacet.BondNotApproved.selector, 0, SEAT_TOTAL
         ));
         apps.acceptArbiterInvitation();
         assertFalse(vault.isRegisteredArbiter(broke), "he sat down without approving anything");
 
-        // An allowance, and an empty wallet behind it.
+        // An allowance for the WHOLE COST, and an empty wallet behind it.
+        // ⚠️ THE ALLOWANCE HAD TO GROW WITH THE PRICE OR THIS ARM WOULD MEASURE
+        // THE WRONG REFUSAL: approving ten against a cost of eleven is caught by
+        // `BondNotApproved` first, and the "you have spent your USDC" sentence
+        // would never be reached.
         vm.prank(broke);
-        usdc.approve(address(diamond), ENTRY_BOND);
+        usdc.approve(address(diamond), SEAT_TOTAL);
         vm.prank(broke);
         vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.BondBalanceTooLow.selector, 0, ENTRY_BOND
+            ArbiterApplicationsFacet.BondBalanceTooLow.selector, 0, SEAT_TOTAL
         ));
         apps.acceptArbiterInvitation();
         assertFalse(vault.isRegisteredArbiter(broke), "he sat down with an empty wallet");
@@ -527,8 +551,10 @@ contract ArbiterEntryBondTest is Test {
         reg.applyAsArbiter();
 
         assertTrue(vault.isRegisteredArbiter(candidate), "the earned door did not seat him");
-        assertEq(usdc.balanceOf(address(diamond)), ENTRY_BOND, "the diamond did not take the bond");
-        assertEq(before - usdc.balanceOf(candidate), ENTRY_BOND, "the bond did not leave HIS wallet");
+        // ⚠️ ELEVEN AND NOT TEN SINCE 12 NOVEMBER 2026 — see the twin scene at
+        // the invitation door above.
+        assertEq(usdc.balanceOf(address(diamond)), SEAT_TOTAL, "the diamond did not take the whole cost");
+        assertEq(before - usdc.balanceOf(candidate), SEAT_TOTAL, "the cost did not leave HIS wallet");
 
         ( , uint256 bond, ) = apps.getBondState(candidate);
         assertEq(bond, ENTRY_BOND, "the seat carries no record of the money");
@@ -545,7 +571,7 @@ contract ArbiterEntryBondTest is Test {
 
         vm.prank(candidate);
         vm.expectRevert(abi.encodeWithSelector(
-            ArbiterApplicationsFacet.BondNotApproved.selector, 0, ENTRY_BOND
+            ArbiterApplicationsFacet.BondNotApproved.selector, 0, SEAT_TOTAL
         ));
         reg.applyAsArbiter();
 
@@ -557,6 +583,12 @@ contract ArbiterEntryBondTest is Test {
     /// Measured against each other rather than against the constant, so a
     /// change that moved one price and not the other goes red here even if both
     /// scenes above were edited to agree with it.
+    /// ⚠️ ELEVEN SINCE 12 NOVEMBER 2026, AND THE NAME IS KEPT ON PURPOSE. The
+    /// property under test is "ONE price at both entrances", which is the
+    /// owner's rule and has not changed; the number in the name was the number
+    /// when it was written, and renaming a lock makes every reference to it by
+    /// name — in src/ docstrings, in commit messages, in the working record — a
+    /// dead pointer. What a seat costs today is said in the assertions.
     function test_BothDoorsChargeTheSameTenDollars() public {
         address byHand = address(0x0A1);
         address earned = address(0x0A2);
@@ -573,8 +605,8 @@ contract ArbiterEntryBondTest is Test {
         reg.applyAsArbiter();
         uint256 takenBySelfEnrolment = usdc.balanceOf(address(diamond)) - takenByInvitation;
 
-        assertEq(takenByInvitation,   ENTRY_BOND, "the invitation door charges something else");
-        assertEq(takenBySelfEnrolment, ENTRY_BOND, "the earned door charges something else");
+        assertEq(takenByInvitation,   SEAT_TOTAL, "the invitation door charges something else");
+        assertEq(takenBySelfEnrolment, SEAT_TOTAL, "the earned door charges something else");
         assertEq(takenByInvitation, takenBySelfEnrolment, "the two doors charge different prices");
     }
 
@@ -602,7 +634,12 @@ contract ArbiterEntryBondTest is Test {
 
         assertFalse(vault.isRegisteredArbiter(seated), "he is still in the corps");
         assertEq(usdc.balanceOf(seated) - beforeResign, ENTRY_BOND, "the bond did not come home");
-        assertEq(usdc.balanceOf(address(diamond)), 0, "the diamond kept the bond");
+        // ⚠️ AND THE DIAMOND IS LEFT HOLDING THE SEAT PRICE, which is the point
+        // of the price rather than a leak: this read was a hard nought until
+        // 12 November 2026, when a dollar of every entrance stopped being
+        // refundable. That it is the TREASURY's dollar and not an unclaimed
+        // balance is measured in test/ArbiterSeatPrice.t.sol.
+        assertEq(usdc.balanceOf(address(diamond)), SEAT_PRICE, "the diamond kept more than the seat price");
 
         ( , uint256 bond, ) = apps.getBondState(seated);
         assertEq(bond, 0, "the record still says he has money on the table");
@@ -806,7 +843,7 @@ contract ArbiterEntryBondTest is Test {
         uint256 pk = 0xA11CE;
         address invited = vm.addr(pk);
 
-        usdc.mint(invited, ENTRY_BOND);
+        usdc.mint(invited, SEAT_TOTAL);
         reg.addArbiter(invited);
 
         vm.deal(invited, 0);
@@ -814,7 +851,12 @@ contract ArbiterEntryBondTest is Test {
         assertEq(usdc.allowance(invited, address(diamond)), 0, "setup: he has already approved the diamond");
 
         uint256 deadline = vm.getBlockTimestamp() + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) = _signPermit(pk, address(diamond), ENTRY_BOND, deadline);
+        // ⚠️ THE PAPER IS SIGNED FOR THE WHOLE COST SINCE 12 NOVEMBER 2026. The
+        // amount is part of the signed digest, so a paper for the old ten does
+        // not merely fall short — it does not VERIFY, and USDC rejects it with a
+        // bare string before any line of ours runs. That asymmetry is pinned by
+        // name in test/ArbiterSeatPrice.t.sol.
+        (uint8 v, bytes32 r, bytes32 s) = _signPermit(pk, address(diamond), SEAT_TOTAL, deadline);
 
         _forwardFrom(pk, abi.encodeWithSelector(
             ArbiterApplicationsFacet.acceptArbiterInvitationWithPermit.selector, deadline, v, r, s
@@ -825,10 +867,10 @@ contract ArbiterEntryBondTest is Test {
             vault.isRegisteredArbiter(address(forwarder)),
             "the FORWARDER got the seat: _msgSender() is reading msg.sender"
         );
-        assertEq(usdc.balanceOf(address(diamond)), ENTRY_BOND, "the bond was not taken");
-        assertEq(usdc.balanceOf(invited), 0, "the bond did not leave HIS wallet");
-        // Nothing is left standing: the paper granted exactly the bond and the
-        // door spent exactly the bond.
+        assertEq(usdc.balanceOf(address(diamond)), SEAT_TOTAL, "the whole cost was not taken");
+        assertEq(usdc.balanceOf(invited), 0, "the cost did not leave HIS wallet");
+        // Nothing is left standing: the paper granted exactly the sum and the
+        // door spent exactly the sum.
         assertEq(usdc.allowance(invited, address(diamond)), 0, "the diamond kept a claim on his wallet");
         assertEq(acc.getSeatedBy(invited), owner, "the relayed seat reads as self-seated");
     }
@@ -839,20 +881,20 @@ contract ArbiterEntryBondTest is Test {
         address candidate = vm.addr(pk);
 
         _grantTheStreak(candidate);
-        usdc.mint(candidate, ENTRY_BOND);
+        usdc.mint(candidate, SEAT_TOTAL);
 
         vm.deal(candidate, 0);
         assertEq(candidate.balance, 0, "setup: he can afford his own gas");
 
         uint256 deadline = vm.getBlockTimestamp() + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) = _signPermit(pk, address(diamond), ENTRY_BOND, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = _signPermit(pk, address(diamond), SEAT_TOTAL, deadline);
 
         _forwardFrom(pk, abi.encodeWithSelector(
             ArbiterApplicationsFacet.applyAsArbiterWithPermit.selector, deadline, v, r, s
         ));
 
         assertTrue(vault.isRegisteredArbiter(candidate), "the relayed call did not seat him");
-        assertEq(usdc.balanceOf(address(diamond)), ENTRY_BOND, "the bond was not taken");
+        assertEq(usdc.balanceOf(address(diamond)), SEAT_TOTAL, "the whole cost was not taken");
         assertEq(acc.getSeatedBy(candidate), address(0), "a self-enrolled man reads as vouched-for");
     }
 
@@ -862,11 +904,11 @@ contract ArbiterEntryBondTest is Test {
         uint256 pk = 0xA11CE;
         address invited = vm.addr(pk);
 
-        usdc.mint(invited, ENTRY_BOND);
+        usdc.mint(invited, SEAT_TOTAL);
         reg.addArbiter(invited);
 
         uint256 deadline = vm.getBlockTimestamp() - 1;
-        (uint8 v, bytes32 r, bytes32 s) = _signPermit(pk, address(diamond), ENTRY_BOND, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = _signPermit(pk, address(diamond), SEAT_TOTAL, deadline);
 
         vm.prank(invited);
         vm.expectRevert(abi.encodeWithSelector(
@@ -947,7 +989,7 @@ contract ArbiterEntryBondTest is Test {
 
     /// Money and an allowance, on the main rig.
     function _fund(address who) internal {
-        usdc.mint(who, ENTRY_BOND * 10);
+        usdc.mint(who, SEAT_TOTAL * 10);
         vm.prank(who);
         usdc.approve(address(diamond), type(uint256).max);
     }

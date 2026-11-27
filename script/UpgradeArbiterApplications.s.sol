@@ -94,11 +94,17 @@ contract UpgradeArbiterApplications is Script {
         "out/ArbiterApplicationsFacet.sol/ArbiterApplicationsFacet.json";
 
     // ════════════════════════════════════════════════════════════════════
-    //  THE FIVE DOORS THE FACET GAINED AFTER THIS ADD LIST WAS SIGNED
+    //  THE DOORS THE FACET GAINED AFTER THIS ADD LIST WAS SIGNED
+    //
+    //  ⚠️ THE COUNT LEFT THIS HEADING ON 12 NOVEMBER 2026. It read "THE FIVE
+    //  DOORS" while the growth was the entry bond's five; `getSeatCost()` made
+    //  it six, and a heading carrying a stale count is exactly the defect the
+    //  twice-spelling below exists to catch. The size is asserted in one place
+    //  only, the array at `assertAddListCoversTheWholeFacet`.
     //
     //  Not doors this cut mounts -- those come from the type, in
     //  `addSelectors()`, so a renamed signature is caught by the compiler.
-    //  These five are the growth ALLOWANCE used by
+    //  These are the growth ALLOWANCE used by
     //  `assertAddListCoversTheWholeFacet`: the compiled facet implements them,
     //  this landed cut's Add list does not, and the Add list is the record of
     //  what went on chain and is not rewritten. Why each one is here is
@@ -137,6 +143,13 @@ contract UpgradeArbiterApplications is Script {
     bytes4 internal constant GAINED_SINCE_SIGNED_REVOKE_INVITATION = 0x2693a9d5;
     string internal constant GAINED_SINCE_SIGNED_REVOKE_INVITATION_TEXT =
         "revokeArbiterInvitation(address)";
+
+    // ⚠️ THE SIXTH, 12 NOVEMBER 2026. Taken from `cast sig "getSeatCost()"` on
+    // that day and read back against the declaration in
+    // src/facets/ArbiterApplicationsFacet.sol.
+    bytes4 internal constant GAINED_SINCE_SIGNED_SEAT_COST = 0x3b7603be;
+    string internal constant GAINED_SINCE_SIGNED_SEAT_COST_TEXT =
+        "getSeatCost()";
 
     /// Named by the census fixture, and compared against by the offline stand
     /// rather than against a literal there. The trap worth catching is not "the
@@ -354,6 +367,10 @@ contract UpgradeArbiterApplications is Script {
             bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_REVOKE_INVITATION_TEXT))) == GAINED_SINCE_SIGNED_REVOKE_INVITATION,
             "upgrade: GAINED_SINCE_SIGNED_REVOKE_INVITATION is not the keccak of its text"
         );
+        require(
+            bytes4(keccak256(bytes(GAINED_SINCE_SIGNED_SEAT_COST_TEXT))) == GAINED_SINCE_SIGNED_SEAT_COST,
+            "upgrade: GAINED_SINCE_SIGNED_SEAT_COST is not the keccak of its text"
+        );
     }
 
     /// The hand-written Add list against solc's `methodIdentifiers`. Set
@@ -378,9 +395,10 @@ contract UpgradeArbiterApplications is Script {
             bytes4(0x8e7e21be)  // rejectArbiterApplication(address,string)
         ];
 
-        // ⚠️ AND THE MIRROR OF THAT EXCEPTION SINCE 8 NOVEMBER 2026: FIVE
-        // DOORS THE FACET HAS GAINED. Three of them come from the owner's
-        // entry-bond decision that morning.
+        // ⚠️ AND THE MIRROR OF THAT EXCEPTION SINCE 8 NOVEMBER 2026: THE DOORS
+        // THE FACET HAS GAINED -- five that day and a sixth on 12 November
+        // 2026. Three of the five come from the owner's entry-bond decision
+        // that morning.
         // `addArbiter` stopped seating anybody, so the seat is taken by the man
         // who was invited, through his own call:
         //
@@ -408,10 +426,11 @@ contract UpgradeArbiterApplications is Script {
         // the Add list this script signed, exactly like the three above.
         //
         // `script/DeployFull.s.sol` fills `sels[13..17]` with the five, and the
-        // compiled facet reads eighteen methodIdentifiers against the thirteen
-        // of 22 September. This script is the RECORD of a cut that went on
-        // chain and its Add list is not rewritten; what moved is the compiled
-        // facet, so the difference is carried here.
+        // compiled facet read eighteen methodIdentifiers against the thirteen
+        // of 22 September -- NINETEEN since the sixth door below arrived. This
+        // script is the RECORD of a cut that went on chain and its Add list is
+        // not rewritten; what moved is the compiled facet, so the difference is
+        // carried here.
         //
         // ⚠️ BY THEIR BYTES AND NOT BY `.selector`, although all five exist in
         // this checkout. A `.selector` follows a rename and would keep this
@@ -434,7 +453,7 @@ contract UpgradeArbiterApplications is Script {
         // reasoned: with the allowance removed, this file's two pre-flight
         // tests red and theirs do not.
         //
-        // ⚠️ AND EACH OF THE FIVE IS SPELT TWICE, at the top of this file: the
+        // ⚠️ AND EACH OF THEM IS SPELT TWICE, at the top of this file: the
         // four bytes, and the signature text they must be the keccak of. Until
         // 10 November 2026 they were anonymous array slots whose only signature
         // was a trailing comment -- and two trailing comments in THIS file are
@@ -444,12 +463,27 @@ contract UpgradeArbiterApplications is Script {
         // before this allowance is believed, and over the text of this file by
         // script/check-cut-selector-literals.sh, which needs no compiler and so
         // can run before a rehearsal rather than during one.
-        bytes4[5] memory sinceAdded = [
+        //
+        // ⚠️ AND A SIXTH ON 12 NOVEMBER 2026, WHICH IS A NEW DOOR AND NOT A
+        // MOVE. `getSeatCost()` says what a seat costs: the second half of the
+        // owner's decision of 20 October 2026 made the entrance charge a
+        // NON-REFUNDABLE dollar of seat price on top of the refundable bond, and
+        // `getApplicationRequirements()` states the refundable half alone -- a
+        // wallet that approves ten is refused `BondNotApproved(10e6, 11e6)`.
+        // A NEW selector rather than a fifth field on that tuple, because a
+        // selector comes from the signature and a return type does not: widening
+        // the old answer would leave 0xfc0b7216 meaning the same four bytes and
+        // an old screen decoding four words out of five in silence.
+        // `script/DeployFull.s.sol` fills `sels[18]` for it, so the compiled
+        // facet reads NINETEEN methodIdentifiers against the thirteen of
+        // 22 September. Spelt twice at the top of this file like the other five.
+        bytes4[6] memory sinceAdded = [
             GAINED_SINCE_SIGNED_ACCEPT,
             GAINED_SINCE_SIGNED_ACCEPT_PERMIT,
             GAINED_SINCE_SIGNED_READ_INVITATION,
-            GAINED_SINCE_SIGNED_APPLY_PERMIT,      // moved from the registry 8 Nov 2026
-            GAINED_SINCE_SIGNED_REVOKE_INVITATION  // moved from the registry 8 Nov 2026
+            GAINED_SINCE_SIGNED_APPLY_PERMIT,       // moved from the registry 8 Nov 2026
+            GAINED_SINCE_SIGNED_REVOKE_INVITATION,  // moved from the registry 8 Nov 2026
+            GAINED_SINCE_SIGNED_SEAT_COST           // a new door, 12 Nov 2026
         ];
 
         require(
